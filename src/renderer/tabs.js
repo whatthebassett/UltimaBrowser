@@ -1,0 +1,769 @@
+// Tab model, <webview> lifecycle and the vertical tab sidebar.
+const B = {
+  tabs: [],
+  activeId: null,
+  settings: {},
+  closed: [],
+  nextId: 1,
+  dragId: null,
+};
+
+const NEWTAB = 'ultima://newtab';
+const isInternal = (url) => typeof url === 'string' && url.startsWith('ultima://');
+const activeTab = () => B.tabs.find((t) => t.id === B.activeId) || null;
+const tabById = (id) => B.tabs.find((t) => t.id === id) || null;
+const ready = (tab) => tab?.webview && tab.ready;
+// what a tab is called in Ultima: the name you gave it, else its page's title
+const tabLabel = (tab) => tab?.name || tab?.title || '';
+
+// Sidebar zones, top to bottom. Essentials are shared by every space; pinned and normal tabs belong to one space.
+// Essentials and pinned tabs stay in the sidebar: closing them only unloads the page.
+const ZONES = ['essential', 'pinned', 'normal'];
+const isKept = (tab) => tab.zone !== 'normal';
+// A pinned tab or Essential belongs to its pinned link (homeUrl, with homeTitle/homeFavicon to show while unloaded).
+// It can wander off, but closing it (which unloads it), unloading it or restarting Ultima puts it back there.
+const awayFromHome = (tab) => isKept(tab) && Boolean(tab.homeUrl) && tab.url !== tab.homeUrl;
+const siteOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };
+// on another site than its pinned link (landing elsewhere on the same site, like after a redirect, doesn't count)
+const offSite = (tab) => awayFromHome(tab) && siteOf(tab.url) !== siteOf(tab.homeUrl);
+const isUnloaded = (tab) => !tab.webview && !isInternal(tab.url);
+const sortZones = () => { B.tabs = ZONES.flatMap((z) => B.tabs.filter((t) => t.zone === z)); };
+
+const INTERNAL_TITLES = {
+  newtab: 'New Tab', settings: 'Settings', history: 'History', bookmarks: 'Bookmarks',
+  import: 'Import browser data', passwords: 'Passwords', downloads: 'Downloads', shortcuts: 'Keyboard shortcuts',
+};
+const internalName = (url) => url.replace('ultima://', '').split(/[/?#]/)[0];
+
+function createTab({
+  url = NEWTAB, title, name, favicon = '', zone, pinned = false, homeUrl, homeTitle, homeFavicon, activate = true, lazy = false, index, opener, spaceId, folderId, splitId,
+} = {}) {
+  // `pinned` is the pre-Essentials session format, where pinned tabs were the icon grid
+  const z = ZONES.includes(zone) ? zone : pinned ? 'essential' : 'normal';
+  const tab = {
+    id: B.nextId++,
+    spaceId: spaceById(spaceId) ? spaceId : opener?.spaceId || B.activeSpaceId,
+    url,
+    title: title || (isInternal(url) ? INTERNAL_TITLES[internalName(url)] || 'Ultima' : url),
+    name: typeof name === 'string' && name.trim() ? name.trim() : undefined,
+    favicon,
+    zone: z,
+    homeUrl: z === 'normal' ? undefined : homeUrl || url,
+    loading: false,
+    webview: null,
+    ready: false,
+    zoom: 0,
+    audible: false,
+    muted: false,
+    error: null,
+  };
+  if (z !== 'normal') {
+    tab.homeTitle = homeTitle || (tab.url === tab.homeUrl ? tab.title : hostname(tab.homeUrl) || tab.homeUrl);
+    tab.homeFavicon = homeFavicon ?? (tab.url === tab.homeUrl ? favicon : '');
+  }
+  // a tab opened from a tab in a folder joins that folder, as in Chrome
+  if (z === 'normal') tab.folderId = folderById(folderId) ? folderId : opener?.zone === 'normal' ? opener.folderId : undefined;
+  if (z === 'normal' && splitById(splitId)) tab.splitId = splitId; // restoring a session
+  let at = index ?? B.tabs.length;
+  if (index === undefined && opener) {
+    // open next to the tab that spawned it, after its other children
+    const oi = B.tabs.indexOf(opener);
+    at = oi + 1;
+    while (B.tabs[at] && B.tabs[at].openerId === opener.id) at += 1;
+    tab.openerId = opener.id;
+  }
+  B.tabs.splice(at, 0, tab);
+  sortZones();
+  if (!lazy && !isInternal(url)) ensureWebview(tab);
+  if (activate) activateTab(tab.id);
+  else renderTabs();
+  saveSession();
+  return tab;
+}
+
+function ensureWebview(tab) {
+  if (tab.webview) return tab.webview;
+  const wv = document.createElement('webview');
+  wv.setAttribute('partition', tabPartition(tab));
+  wv.setAttribute('allowpopups', '');
+  wv.className = 'hidden';
+  wv.src = isInternal(tab.url) ? 'about:blank' : tab.url;
+  tab.webview = wv;
+  tab.ready = false;
+
+  const isActive = () => B.activeId === tab.id;
+  const changed = () => { renderTabs(); if (isActive()) updateChrome(); saveSession(); };
+
+  wv.addEventListener('dom-ready', () => {
+    const first = !tab.ready;
+    tab.ready = true;
+    if (first && tab.zoom) wv.setZoomLevel(tab.zoom);
+    if (first && tab.muted) wv.setAudioMuted(true);
+    if (first && isActive()) notifyActiveTab(tab); // the page is attached now, so it has an id to report
+    if (isActive()) updateChrome();
+  });
+  wv.addEventListener('did-start-loading', () => { tab.loading = true; tab.error = null; renderError(); changed(); });
+  wv.addEventListener('did-stop-loading', () => { tab.loading = false; changed(); });
+  // (a kept tab on its pinned site remembers how it looks there, for when it goes back unloaded)
+  wv.addEventListener('page-title-updated', (e) => {
+    tab.title = e.title || tab.url;
+    if (isKept(tab) && !offSite(tab)) tab.homeTitle = tab.title;
+    window.ultima.addHistory({ url: tab.url, title: tab.title, visit: false });
+    changed();
+  });
+  wv.addEventListener('page-favicon-updated', (e) => {
+    tab.favicon = e.favicons?.[0] || '';
+    if (isKept(tab) && !offSite(tab)) tab.homeFavicon = tab.favicon;
+    changed();
+  });
+  wv.addEventListener('did-navigate', (e) => {
+    if (hostname(e.url) !== hostname(tab.url)) tab.favicon = '';
+    tab.url = e.url;
+    if (isActive()) showContent(tab);
+    window.ultima.addHistory({ url: e.url, visit: true });
+    changed();
+  });
+  wv.addEventListener('did-navigate-in-page', (e) => {
+    if (!e.isMainFrame) return;
+    tab.url = e.url;
+    window.ultima.addHistory({ url: e.url, title: tab.title, visit: true });
+    changed();
+  });
+  wv.addEventListener('did-fail-load', (e) => {
+    if (!e.isMainFrame || e.errorCode === -3) return; // -3 = aborted (e.g. user navigated away)
+    tab.error = { code: e.errorCode, desc: e.errorDescription, url: e.validatedURL };
+    tab.loading = false;
+    if (isActive()) renderError();
+    changed();
+  });
+  wv.addEventListener('render-process-gone', () => {
+    tab.error = { code: 'crashed', desc: 'The page crashed', url: tab.url };
+    if (isActive()) renderError();
+  });
+  wv.addEventListener('media-started-playing', () => { tab.audible = true; renderTabs(); });
+  wv.addEventListener('media-paused', () => { tab.audible = false; renderTabs(); });
+  wv.addEventListener('update-target-url', (e) => {
+    if (!isActive()) return;
+    const s = $('#status');
+    s.textContent = e.url;
+    s.hidden = !e.url;
+  });
+  wv.addEventListener('found-in-page', (e) => {
+    if (isActive()) $('#find-count').textContent = e.result.matches ? `${e.result.activeMatchOrdinal}/${e.result.matches}` : '0/0';
+  });
+  wv.addEventListener('enter-html-full-screen', () => document.body.classList.add('fullscreen'));
+  wv.addEventListener('leave-html-full-screen', () => document.body.classList.remove('fullscreen'));
+  // clicks inside a page never reach this document, so a page taking focus is what closes open menus and popups
+  wv.addEventListener('ipc-message', (e) => { if (e.channel === 'ultima:pane-top') setPaneHover(tab, Boolean(e.args[0])); });
+  wv.addEventListener('focus', () => {
+    focusPane(tab); // in split view, the pane you click into becomes the active tab
+    if (!$('#palette-backdrop').hidden) closePalette();
+    closeMenu(null);
+    closeUrlMenu();
+    closeTabHistory();
+    closeExtensionPopup({ fromPage: true });
+  });
+
+  $('#viewport').prepend(wv);
+  return wv;
+}
+
+// Drops the page (freeing its memory) but keeps the tab; it loads again when activated.
+function dropWebview(tab) {
+  tab.webview?.remove();
+  tab.webview = null;
+  tab.ready = false;
+  tab.loading = false;
+  tab.audible = false;
+  tab.error = null;
+}
+
+function activateTab(id) {
+  const tab = tabById(id);
+  if (!tab) return;
+  B.activeId = id;
+  tab.lastActive = Date.now();
+  // essentials are shared, so opening one never changes the space you are in
+  if (tab.zone !== 'essential' && tab.spaceId !== B.activeSpaceId) {
+    B.activeSpaceId = tab.spaceId;
+    applySpaceTheme();
+    renderSpaces();
+  }
+  if (!isInternal(tab.url)) ensureWebview(tab);
+  showContent(tab);
+  notifyActiveTab(tab);
+  closeFind();
+  $('#status').hidden = true;
+  renderTabs();
+  updateChrome();
+  saveSession();
+  requestAnimationFrame(() => {
+    const el = $(`[data-tab="${id}"]`);
+    el?.scrollIntoView({ block: 'nearest' });
+  });
+}
+
+// Tells main which page is showing (extensions get chrome.tabs.onActivated). Tab ids are the pages' webContents ids.
+function notifyActiveTab(tab) {
+  if (!tab?.webview || isInternal(tab.url)) { window.ultima.setActiveTab(null); return; }
+  try { window.ultima.setActiveTab(tab.webview.getWebContentsId()); } catch { /* not attached yet: dom-ready reports it */ }
+}
+
+// Shows either the tab's webview (with the other panes of its split view) or its internal page.
+function showContent(tab) {
+  const panes = tab.splitId && !isInternal(tab.url) ? splitTabs(tab.splitId) : [tab];
+  for (const t of B.tabs) t.webview?.classList.toggle('hidden', !(panes.includes(t) && !isInternal(t.url)));
+  layoutPanes(isInternal(tab.url) ? null : tab);
+  const internal = $('#internal');
+  window.ultima.setKeyRecording(false); // leaving the shortcut recorder, however it happens, re-arms shortcuts
+  if (isInternal(tab.url)) {
+    // keystrokes must not keep going to a page that is now hidden
+    if (document.activeElement?.tagName === 'WEBVIEW') document.activeElement.blur();
+    internal.hidden = false;
+    renderInternal(tab);
+  } else {
+    internal.hidden = true;
+    internal.innerHTML = '';
+    // (not while a tab's name is being typed: a double-click opens the tab with its first click)
+    if ($('#palette-backdrop').hidden) setTimeout(() => { if (!B.renaming) tab.webview?.focus(); }, 0);
+  }
+  renderError();
+}
+
+function renderError() {
+  $('#viewport .error-page')?.remove();
+  const tab = activeTab();
+  if (!tab?.error || isInternal(tab.url)) return;
+  const e = tab.error;
+  const friendly = {
+    '-105': 'The server’s address couldn’t be found.', '-106': 'You appear to be offline.',
+    '-102': 'The site refused to connect.', '-118': 'The site took too long to respond.',
+    '-501': 'Insecure response.', '-200': 'The site’s security certificate isn’t valid.',
+  }[e.code] || e.desc || 'Something went wrong.';
+  const page = h(`<div class="error-page">${icon('globe', 40)}<h2>Can’t reach this page</h2>
+    <p>${esc(hostname(e.url) || e.url)} — ${esc(friendly)}</p><code>${esc(e.desc || e.code)}</code>
+    <div style="margin-top:10px"><button class="btn primary">${icon('reload')} Try again</button></div></div>`);
+  page.querySelector('button').onclick = () => { tab.error = null; renderError(); tab.webview?.loadURL(e.url); };
+  $('#viewport').append(page);
+}
+
+function navigate(tab, url) {
+  if (!tab || !url) return;
+  tab.error = null;
+  if (isInternal(url)) {
+    tab.url = url;
+    tab.title = INTERNAL_TITLES[internalName(url)] || 'Ultima';
+    tab.favicon = '';
+  } else if (!tab.webview) {
+    tab.url = url;
+    ensureWebview(tab);
+  } else {
+    tab.url = url;
+    tab.webview.loadURL(url).catch(() => {});
+  }
+  if (tab.id === B.activeId) showContent(tab);
+  renderTabs();
+  updateChrome();
+  saveSession();
+}
+
+// Where to go when `tab` stops being the active one: stay in the current space and prefer the opener,
+// then the neighbor in the sidebar, then the most recently used tab.
+function pickNextTab(tab) {
+  const visible = spaceTabs().filter((t) => t !== tab);
+  if (!visible.length) return null;
+  const all = spaceTabs();
+  const i = all.indexOf(tab);
+  const opener = visible.find((t) => t.id === tab.openerId);
+  const neighbor = (i >= 0 && (all[i + 1] || all[i - 1])) || null;
+  const recent = [...visible].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
+  return opener || (neighbor !== tab ? neighbor : null) || recent;
+}
+
+// Closing a tab: its row slides up and fades away while the rows below glide up into its place. The list is redrawn
+// at once (the next tab is open straight away), so the row that leaves is a copy laid over the sidebar, and the
+// rows that move are animated from where they were (FLIP). Call before the tab goes; run what it returns after.
+function animateTabClose(id) {
+  const row = $(`#sidebar [data-tab="${id}"]`);
+  if (!row || !row.getClientRects().length || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+  if (sidebarHidden() && !sidebarPeeking()) return null; // nothing to see
+  const keyOf = (el) => (el.dataset.tab ? `t${el.dataset.tab}` : el.dataset.folderHead ? `f${el.dataset.folderHead}` : el);
+  const movers = () => $$('#sidebar [data-tab], #sidebar [data-folder-head], #btn-newtab, #space-head, #sidebar .zone-sep');
+  const before = new Map(movers().map((el) => [keyOf(el), el.getBoundingClientRect()]));
+  const r = row.getBoundingClientRect();
+  const ghost = row.cloneNode(true);
+  ghost.classList.add('tab-ghost');
+  ghost.removeAttribute('data-tab');
+  Object.assign(ghost.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  return () => {
+    document.body.append(ghost);
+    ghost.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateY(-60%)', opacity: 0 }],
+      { duration: 180, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' }).onfinish = () => ghost.remove();
+    for (const el of movers()) {
+      const a = before.get(keyOf(el));
+      if (!a) continue;
+      const b = el.getBoundingClientRect();
+      const dx = a.left - b.left;
+      const dy = a.top - b.top;
+      if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) continue;
+      el.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }],
+        { duration: 220, delay: 50, easing: 'cubic-bezier(0.2, 0, 0, 1)', fill: 'backwards' });
+    }
+  };
+}
+
+// Essentials and pinned tabs: close = unload. Pass { remove: true } to take them out of the sidebar.
+function closeTab(id, { remove = false } = {}) {
+  const tab = tabById(id);
+  if (!tab) return;
+  if (isKept(tab) && !remove) { unloadTab(tab); return; }
+  const animate = TD.drag ? null : animateTabClose(id);
+  const idx = B.tabs.indexOf(tab);
+  B.closed.push({ url: tab.url, title: tab.title, name: tab.name, favicon: tab.favicon, zone: tab.zone, homeUrl: tab.homeUrl, homeTitle: tab.homeTitle, homeFavicon: tab.homeFavicon, index: idx, spaceId: tab.spaceId, folderId: tab.folderId });
+  if (B.closed.length > 25) B.closed.shift();
+  if (B.activeId === id) {
+    const next = pickNextTab(tab);
+    if (next) activateTab(next.id);
+    else { B.activeId = null; createTab(); }
+  }
+  dropWebview(tab);
+  B.tabs = B.tabs.filter((t) => t !== tab);
+  renderTabs();
+  animate?.();
+  saveSession();
+}
+
+function unloadTab(tab) {
+  if (!tab) return;
+  if (B.activeId === tab.id) {
+    const next = pickNextTab(tab);
+    if (next) activateTab(next.id);
+    else createTab();
+  }
+  dropWebview(tab);
+  sendHome(tab);
+  renderTabs();
+  saveSession();
+}
+
+// Puts a kept tab back on its pinned link without loading it (it loads there when opened).
+function sendHome(tab) {
+  if (!awayFromHome(tab)) return;
+  tab.url = tab.homeUrl;
+  tab.title = tab.homeTitle || hostname(tab.homeUrl) || tab.homeUrl;
+  tab.favicon = tab.homeFavicon || '';
+}
+
+function reopenClosedTab() {
+  const c = B.closed.pop();
+  if (!c) return toast('No recently closed tabs');
+  createTab({ url: c.url, title: c.title, name: c.name, favicon: c.favicon, zone: c.zone, homeUrl: c.homeUrl, homeTitle: c.homeTitle, homeFavicon: c.homeFavicon, index: c.index, spaceId: c.spaceId, folderId: c.folderId });
+}
+
+// Moves a tab into a zone. Essentials use the shared sign-ins, so crossing that line may reload the page.
+function applyZone(tab, zone) {
+  if (tab.zone === zone) return;
+  const before = tabPartition(tab);
+  if (tab.zone === 'essential') tab.spaceId = B.activeSpaceId; // an essential leaving lands in the space you are in
+  if (tab.zone === 'normal') Object.assign(tab, { homeUrl: tab.url, homeTitle: tab.title, homeFavicon: tab.favicon }); // pinned where it is
+  if (zone === 'normal') Object.assign(tab, { homeUrl: undefined, homeTitle: undefined, homeFavicon: undefined });
+  else { tab.folderId = undefined; tab.splitId = undefined; } // folders and split views hold regular tabs only
+  tab.zone = zone;
+  if (tab.webview && tabPartition(tab) !== before) {
+    dropWebview(tab);
+    if (tab.id === B.activeId) { ensureWebview(tab); showContent(tab); }
+  }
+}
+
+function moveTab(id, toIndex, zone) {
+  const tab = tabById(id);
+  if (!tab) return;
+  const from = B.tabs.indexOf(tab);
+  B.tabs.splice(from, 1);
+  if (from < toIndex) toIndex -= 1;
+  applyZone(tab, zone);
+  B.tabs.splice(Math.max(0, Math.min(toIndex, B.tabs.length)), 0, tab);
+  sortZones();
+  renderTabs();
+  saveSession();
+}
+
+const setZone = (tab, zone) => { if (tab && tab.zone !== zone) moveTab(tab.id, B.tabs.length, zone); };
+const togglePin = (tab) => setZone(tab, tab?.zone === 'pinned' ? 'normal' : 'pinned');
+const toggleEssential = (tab) => setZone(tab, tab?.zone === 'essential' ? 'normal' : 'essential');
+
+function resetToPinnedPage(tab) {
+  if (!tab?.homeUrl || tab.url === tab.homeUrl) return;
+  navigate(tab, tab.homeUrl);
+}
+
+function setPinnedPage(tab) {
+  if (!tab || !isKept(tab)) return;
+  Object.assign(tab, { homeUrl: tab.url, homeTitle: tab.title, homeFavicon: tab.favicon });
+  renderTabs();
+  saveSession();
+  toast(`Pinned link replaced with ${hostname(tab.url) || 'this page'}`);
+}
+
+// Changes where a pinned tab or Essential belongs, at any time. A loaded tab goes there now; an unloaded one opens there.
+async function editPinnedLink(tab) {
+  if (!tab || !isKept(tab)) return;
+  const v = await editDialog({
+    title: tab.zone === 'essential' ? 'Edit Essential link' : 'Edit pinned link',
+    fields: [{ id: 'url', label: 'The tab goes back to this link when you close it', value: tab.homeUrl || tab.url }],
+    ok: 'Save',
+  });
+  const text = v?.url.trim();
+  if (!text) return;
+  const url = isInternal(text) || looksLikeUrl(text) ? resolveInput(text, B.settings.searchEngine) : null;
+  if (!url) { toast('That isn’t a web address'); return; }
+  if (url === tab.homeUrl) return;
+  Object.assign(tab, { homeUrl: url, homeTitle: hostname(url) || url, homeFavicon: '' });
+  if (tab.webview || tab.id === B.activeId) navigate(tab, url);
+  else { sendHome(tab); renderTabs(); saveSession(); }
+}
+
+function duplicateTab(tab) {
+  if (tab) createTab({ url: tab.url, title: tab.title, favicon: tab.favicon, opener: tab.zone === 'normal' ? tab : undefined });
+}
+
+function toggleMute(tab) {
+  if (!tab) return;
+  tab.muted = !tab.muted;
+  if (ready(tab)) tab.webview.setAudioMuted(tab.muted);
+  renderTabs();
+}
+
+function cycleTab(dir) {
+  const tabs = spaceTabs();
+  if (!tabs.length) return;
+  const i = tabs.findIndex((t) => t.id === B.activeId);
+  activateTab(tabs[(i + dir + tabs.length) % tabs.length].id);
+}
+
+const saveSession = debounce(() => {
+  const tabs = B.tabs.map((t) => ({
+    url: t.url, title: t.title, name: t.name, favicon: t.favicon, zone: t.zone, homeUrl: t.homeUrl, homeTitle: t.homeTitle, homeFavicon: t.homeFavicon, spaceId: t.spaceId, folderId: t.folderId, splitId: t.splitId,
+  }));
+  window.ultima.saveSession({
+    spaces: B.spaces,
+    folders: B.folders,
+    splits: B.splits,
+    activeSpaceId: B.activeSpaceId,
+    tabs,
+    activeIndex: Math.max(0, B.tabs.findIndex((t) => t.id === B.activeId)),
+  });
+}, 300);
+
+// ---------- sidebar rendering ----------
+function tabIcon(tab) {
+  if (tab.loading) return '<span class="spinner"></span>';
+  if (isInternal(tab.url)) {
+    const map = { newtab: 'sparkle', settings: 'settings', history: 'history', bookmarks: 'bookmark', import: 'import', passwords: 'key', downloads: 'download', shortcuts: 'command' };
+    return `<span class="fav" style="color:var(--accent)">${icon(map[internalName(tab.url)] || 'sparkle')}</span>`;
+  }
+  return favHtml(tab.favicon, tab.url, tab.title);
+}
+
+function tabRow(t) {
+  const kept = isKept(t);
+  // a kept tab's × unloads it, so only offer it while there is something to unload
+  const close = !kept || t.webview || t.id === B.activeId
+    ? `<button class="tab-close" data-act="close" title="${esc(withKey(kept ? 'Unload tab' : 'Close tab', 'close-tab'))}">${icon(kept ? 'unload' : 'close', 14)}</button>`
+    : '';
+  const renaming = B.renaming?.id === t.id;
+  const home = offSite(t) ? `<button class="tab-home" data-act="home" title="${esc(`Back to the pinned link\n${t.homeUrl}`)}">${icon('home', 14)}</button>` : '';
+  return `<div class="tab ${kept ? 'pinned-row' : ''} ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false" ${renaming ? '' : `title="${esc(tabTip(t))}"`}>
+      ${tabIcon(t)}
+      ${renaming ? `<input class="tab-rename" maxlength="80" spellcheck="false" aria-label="Tab name" placeholder="${esc(t.title)}">` : `<span class="title">${esc(tabLabel(t))}</span>`}
+      ${t.audible || t.muted ? `<button class="tab-audio" data-act="mute" title="${t.muted ? 'Unmute' : 'Mute'} tab">${icon(t.muted ? 'mute' : 'volume', 14)}</button>` : ''}
+      ${home}${close}
+    </div>`;
+}
+
+// a renamed tab's tooltip still says what the page is
+const tabTip = (t) => `${tabLabel(t)}${t.name ? `\n${t.title}` : ''}\n${t.url}${isUnloaded(t) ? '\n(unloaded — click to load)' : ''}`;
+
+// Essentials fill the sidebar's width in balanced rows, as in Zen: up to 4 share one row (a lone one is full width),
+// then 5–6 go 3 a row, 7–8 go 4, 9 is 3×3 and more go 4 a row. A narrow sidebar fits fewer a row (styles.css).
+// Counts what is showing, so a tab being dragged in or out re-flows the grid as it goes.
+function layoutEssentials() {
+  const box = $('#essentials');
+  const n = $$(':scope > :not(.drag-source)', box).length;
+  box.style.setProperty('--ess-cols', n <= 4 ? Math.max(n, 1) : n <= 6 || n === 9 ? 3 : 4);
+}
+
+function renderTabs() {
+  if (TD.drag) { TD.dirty = true; return; } // not mid-drag (it would pull the gap away); redrawn when the card lands
+  normalizeSplits();
+  normalizeTabFolders();
+  const visible = spaceTabs();
+  $('#essentials').innerHTML = visible.filter((t) => t.zone === 'essential').map((t) => `
+    <div class="pin ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false"
+      title="${esc(tabTip(t))}" ${pinRingStyle(t)}>${tabIcon(t)}</div>`).join('');
+  layoutEssentials();
+  $('#pinned-list').innerHTML = visible.filter((t) => t.zone === 'pinned').map(tabRow).join('');
+  $('#tabs').innerHTML = normalTabsHtml(visible.filter((t) => t.zone === 'normal'));
+  document.title = `${tabLabel(activeTab()) || 'Ultima'} — Ultima Browser`;
+  restoreTabRename();
+  syncPanes();
+}
+
+// ---------- renaming tabs ----------
+// Rows rename in place; the sidebar redraws often (pages load, titles change), so the name being typed and the
+// caret are kept in B.renaming and put back after each redraw. Essentials (icons only) and the compact sidebar,
+// which show no names, use a dialog.
+function startRenameTab(tab) {
+  if (!tab) return;
+  if (tab.zone === 'essential' || document.body.classList.contains('collapsed') || tab.spaceId !== B.activeSpaceId) {
+    renameTabDialog(tab);
+    return;
+  }
+  const draft = tabLabel(tab);
+  B.renaming = { id: tab.id, draft, start: 0, end: draft.length };
+  renderTabs();
+  $(`.tab[data-tab="${tab.id}"]`)?.scrollIntoView({ block: 'nearest' });
+}
+
+function restoreTabRename() {
+  const r = B.renaming;
+  if (!r) return;
+  const input = $(`.tab[data-tab="${r.id}"] .tab-rename`);
+  if (!input) { B.renaming = null; return; } // the tab went away
+  input.value = r.draft;
+  input.focus();
+  input.setSelectionRange(r.start, r.end);
+}
+
+// An empty name gives the tab back its page's title.
+function finishRenameTab(save) {
+  const r = B.renaming;
+  if (!r) return;
+  B.renaming = null;
+  const tab = tabById(r.id);
+  if (tab && save) tab.name = r.draft.trim() && r.draft.trim() !== tab.title ? r.draft.trim() : undefined;
+  renderTabs();
+  if (tab?.id === B.activeId) updateChrome();
+  saveSession();
+}
+
+async function renameTabDialog(tab) {
+  const v = await editDialog({ title: 'Rename tab', fields: [{ id: 'name', label: `Name (leave empty for “${tab.title}”)`, value: tabLabel(tab) }], ok: 'Rename' });
+  if (!v) return;
+  tab.name = v.name.trim() && v.name.trim() !== tab.title ? v.name.trim() : undefined;
+  renderTabs();
+  saveSession();
+}
+
+function resetTabName(tab) {
+  if (!tab?.name) return;
+  tab.name = undefined;
+  renderTabs();
+  saveSession();
+}
+
+function initTabRename() {
+  const side = $('#sidebar');
+  side.addEventListener('input', (e) => {
+    if (!e.target.classList.contains('tab-rename') || !B.renaming) return;
+    Object.assign(B.renaming, { draft: e.target.value, start: e.target.selectionStart, end: e.target.selectionEnd });
+  });
+  // the caret moves without typing too (arrows, clicks)
+  for (const type of ['keyup', 'mouseup', 'select']) {
+    side.addEventListener(type, (e) => {
+      if (e.target.classList?.contains('tab-rename') && B.renaming) Object.assign(B.renaming, { start: e.target.selectionStart, end: e.target.selectionEnd });
+    });
+  }
+  side.addEventListener('keydown', (e) => {
+    if (!e.target.classList.contains('tab-rename')) return;
+    if (matchesKey(e, 'field.submit')) { e.preventDefault(); finishRenameTab(true); }
+    else if (matchesKey(e, 'field.cancel')) { e.preventDefault(); finishRenameTab(false); }
+    e.stopPropagation(); // typing a name never triggers the sidebar's own keys
+  });
+  // clicking elsewhere keeps the name (a redraw re-focuses the box straight away, so only a real move away counts)
+  side.addEventListener('focusout', (e) => {
+    if (!e.target.classList.contains('tab-rename')) return;
+    setTimeout(() => { if (B.renaming && !document.activeElement?.classList.contains('tab-rename')) finishRenameTab(true); });
+  });
+  // Double-click renames. Not a 'dblclick' listener: the first click redraws the sidebar (it opens the tab), and
+  // Chromium only sends dblclick when both clicks hit the same element, so the second click (detail 2) is used.
+  side.addEventListener('click', (e) => {
+    if (e.detail !== 2 || e.button !== 0) return;
+    const el = e.target.closest('.tab[data-tab], .pin[data-tab]');
+    if (el && !e.target.closest('[data-act], .tab-rename')) startRenameTab(tabById(Number(el.dataset.tab)));
+  });
+}
+
+async function tabContextMenu(tab) {
+  const kept = isKept(tab);
+  const drifted = awayFromHome(tab);
+  const choice = await showMenu([
+    { id: 'reload', icon: 'reload', label: isUnloaded(tab) ? 'Load' : 'Reload', shortcut: 'reload' },
+    { id: 'unload', icon: 'unload', label: 'Unload tab', enabled: Boolean(tab.webview), shortcut: 'unload-tab' },
+    { id: 'duplicate', icon: 'duplicate', label: 'Duplicate', shortcut: 'duplicate-tab' },
+    { id: 'rename', icon: 'edit', label: 'Rename tab…', shortcut: 'rename-tab' },
+    ...(tab.name ? [{ id: 'rename-reset', label: `Use the page’s title (“${tab.title.length > 30 ? `${tab.title.slice(0, 30)}…` : tab.title}”)` }] : []),
+    { type: 'separator' },
+    { id: 'essential', icon: 'star', label: tab.zone === 'essential' ? 'Remove from Essentials' : 'Add to Essentials', shortcut: 'essential-tab' },
+    { id: 'pin', icon: 'pin', label: tab.zone === 'pinned' ? 'Unpin tab' : 'Pin tab', shortcut: 'pin-tab' },
+    ...tabFolderMenuItems(tab),
+    ...tabSplitMenuItems(tab),
+    ...(kept ? [{
+      label: tab.zone === 'essential' ? 'Essential link' : 'Pinned link',
+      icon: 'link',
+      submenu: [
+        { id: 'edit-home', icon: 'edit', label: 'Edit link…', shortcut: 'edit-pinned-link' },
+        // only once it has gone somewhere else: on its pinned link already, there's nothing to replace it with
+        { id: 'set-home', icon: 'pin', label: 'Replace with current link', enabled: drifted, shortcut: 'replace-pinned-link' },
+      ],
+    }] : []),
+    ...(drifted ? [{ id: 'reset', icon: 'home', label: 'Back to pinned link', shortcut: 'reset-tab' }] : []),
+    { type: 'separator' },
+    { id: 'mute', icon: tab.muted ? 'volume' : 'mute', label: tab.muted ? 'Unmute tab' : 'Mute tab', shortcut: 'mute-tab' },
+    { id: 'copy', icon: 'link', label: 'Copy link', shortcut: 'copy-url' },
+    ...(tab.zone === 'essential' ? [] : [{
+      label: 'Move to space',
+      icon: 'layers',
+      submenu: [
+        ...B.spaces.map((s) => ({ id: `space:${s.id}`, label: `${s.icon}  ${s.name}`, enabled: s.id !== tab.spaceId })),
+        { type: 'separator' },
+        { id: 'space-new', label: 'New space' },
+      ],
+    }]),
+    { type: 'separator' },
+    kept
+      ? { id: 'remove', icon: 'trash', danger: true, label: tab.zone === 'essential' ? 'Remove from sidebar' : 'Unpin and close' }
+      : { id: 'close', icon: 'close', label: 'Close tab', shortcut: 'close-tab' },
+    { id: 'close-others', label: 'Close other tabs', shortcut: 'close-others' },
+    ...(kept ? [] : [{ id: 'close-below', label: 'Close tabs below' }]),
+  ]);
+  const regular = spaceTabs().filter((t) => t.zone === 'normal');
+  if (runTabFolderChoice(tab, choice) || runTabSplitChoice(tab, choice)) return undefined;
+  if (choice?.startsWith('space:')) return moveTabToSpace(tab, choice.slice(6));
+  if (choice === 'space-new') {
+    const s = createSpace(false);
+    moveTabToSpace(tab, s.id);
+    switchSpace(s.id, tab);
+    return startRenameSpace();
+  }
+  switch (choice) {
+    case 'reload': if (ready(tab)) tab.webview.reload(); else activateTab(tab.id); break;
+    case 'unload': unloadTab(tab); break;
+    case 'duplicate': duplicateTab(tab); break;
+    case 'rename': startRenameTab(tab); break;
+    case 'rename-reset': resetTabName(tab); break;
+    case 'essential': toggleEssential(tab); break;
+    case 'pin': togglePin(tab); break;
+    case 'reset': resetToPinnedPage(tab); break;
+    case 'set-home': setPinnedPage(tab); break;
+    case 'edit-home': editPinnedLink(tab); break;
+    case 'mute': toggleMute(tab); break;
+    case 'copy': navigator.clipboard.writeText(tab.url); toast('Link copied'); break;
+    case 'close': closeTab(tab.id); break;
+    case 'remove': closeTab(tab.id, { remove: true }); break;
+    case 'close-others': regular.filter((t) => t !== tab).forEach((t) => closeTab(t.id)); break;
+    case 'close-below': regular.slice(regular.indexOf(tab) + 1).forEach((t) => closeTab(t.id)); break;
+    default: break;
+  }
+  return undefined;
+}
+
+function endTabDrag() {
+  B.dragId = null;
+  document.body.classList.remove('tab-dragging');
+  $$('.drop-before, .drop-after, .drop-target, .drop-into').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-target', 'drop-into'));
+  $$('.dragging').forEach((x) => x.classList.remove('dragging'));
+}
+
+function initTabStrip() {
+  const zoneOf = { essentials: 'essential', 'pinned-list': 'pinned', tabs: 'normal' };
+  const clearDropMarks = () => $$('.drop-before, .drop-after, .drop-target, .drop-into').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-target', 'drop-into'));
+  for (const container of [$('#essentials'), $('#pinned-list'), $('#tabs')]) {
+    const zone = zoneOf[container.id];
+    container.addEventListener('mousedown', (e) => {
+      const el = e.target.closest('[data-tab]');
+      if (el && e.button === 1) { e.preventDefault(); closeTab(Number(el.dataset.tab)); }
+    });
+    container.addEventListener('click', (e) => {
+      const el = e.target.closest('[data-tab]');
+      if (!el) return;
+      const tab = tabById(Number(el.dataset.tab));
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'close') closeTab(tab.id);
+      else if (act === 'mute') toggleMute(tab);
+      else if (act === 'home') { activateTab(tab.id); resetToPinnedPage(tab); }
+      else activateTab(tab.id);
+    });
+    container.addEventListener('contextmenu', (e) => {
+      if (e.target.closest('.tab-rename')) return; // the text box gets the usual cut/copy/paste menu
+      const el = e.target.closest('[data-tab]');
+      if (el) { e.preventDefault(); tabContextMenu(tabById(Number(el.dataset.tab))); }
+    });
+    container.addEventListener('dragstart', (e) => {
+      const el = e.target.closest('[data-tab]');
+      if (!el) return;
+      B.dragId = Number(el.dataset.tab);
+      el.classList.add('dragging');
+      document.body.classList.add('tab-dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/uri-list', tabById(B.dragId).url);
+    });
+    container.addEventListener('dragend', endTabDrag);
+    container.addEventListener('dragover', (e) => {
+      if (B.dragId === null) return;
+      e.preventDefault();
+      clearDropMarks();
+      const head = zone === 'normal' && e.target.closest('[data-folder-head]'); // onto a folder: into it
+      if (head) { head.classList.add('drop-into'); return; }
+      const el = e.target.closest('[data-tab]');
+      if (zone === 'essential' || !el) { (el || container).classList.add('drop-target'); return; }
+      const r = el.getBoundingClientRect();
+      el.classList.add(e.clientY < r.top + r.height / 2 ? 'drop-before' : 'drop-after');
+    });
+    container.addEventListener('drop', (e) => {
+      if (B.dragId === null) return;
+      e.preventDefault();
+      const dragId = B.dragId;
+      // the drop redraws the sidebar, taking the dragged row (and its dragend) with it, so finish the drag here
+      endTabDrag();
+      B.dragId = dragId;
+      const head = zone === 'normal' && e.target.closest('[data-folder-head]');
+      if (head) { addTabToFolder(tabById(B.dragId), head.dataset.folderHead); B.dragId = null; return; }
+      const el = e.target.closest('[data-tab]');
+      const target = el && tabById(Number(el.dataset.tab));
+      let index = B.tabs.length; // end of the zone (sortZones keeps zones grouped)
+      if (target) index = B.tabs.indexOf(target) + (zone !== 'essential' && el.classList.contains('drop-after') ? 1 : 0);
+      const dragged = tabById(B.dragId);
+      // among a folder's tabs it joins that folder; anywhere else it is on its own
+      if (dragged && zone === 'normal') dragged.folderId = target?.folderId;
+      moveTab(B.dragId, index, zone);
+      B.dragId = null;
+    });
+  }
+}
+
+// ---------- sidebar width ----------
+function initResizer() {
+  const r = $('#sb-resizer');
+  r.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    document.body.style.cursor = 'ew-resize';
+    document.body.classList.add('sb-resizing'); // follows the pointer exactly, without the width animation
+    $$('webview').forEach((w) => { w.style.pointerEvents = 'none'; });
+    const move = (ev) => {
+      const w = Math.min(480, Math.max(200, ev.clientX));
+      document.documentElement.style.setProperty('--sidebar-w', `${w}px`);
+      B.settings.sidebarWidth = w;
+    };
+    const up = () => {
+      document.body.style.cursor = '';
+      document.body.classList.remove('sb-resizing');
+      $$('webview').forEach((w) => { w.style.pointerEvents = ''; });
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      window.ultima.setSettings({ sidebarWidth: B.settings.sidebarWidth });
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}

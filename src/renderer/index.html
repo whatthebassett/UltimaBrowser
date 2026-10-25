@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>Ultima Browser</title>
+  <link rel="stylesheet" href="fonts/inter.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="sb-head drag">
+        <div class="brand" id="brand"></div>
+        <div class="nav no-drag">
+          <button class="icon-btn" id="btn-back" data-cmd="back" data-label="Back"></button>
+          <button class="icon-btn" id="btn-forward" data-cmd="forward" data-label="Forward"></button>
+          <button class="icon-btn" id="btn-reload" data-cmd="reload" data-label="Reload"></button>
+        </div>
+      </div>
+      <div id="urlbar" class="urlbar" role="button" tabindex="0" data-cmd="edit-url" data-label="Search or enter address">
+        <span class="url-loader" aria-hidden="true"></span>
+        <span class="url-icon"></span><span class="url-text"></span>
+        <button class="url-menu-btn" id="btn-url-menu" data-cmd="url-menu" data-label="History, downloads and extensions"></button>
+      </div>
+      <div id="essentials" class="essentials" data-drop-label="Drop here to add to Essentials"></div>
+      <div id="space-head" class="space-head"></div>
+      <div id="pinned-list" class="pinned-list" data-drop-label="Drop here to pin to this space"></div>
+      <div class="zone-sep"></div>
+      <button id="btn-newtab" class="newtab-row"><span class="nt-icon"></span><span class="label">New Tab</span><span class="kbds" data-kbd="new-tab"></span></button>
+      <div id="tabs" class="tabs"></div>
+      <div id="space-bar" class="space-bar"></div>
+      <div class="sb-foot">
+        <button class="icon-btn" id="btn-palette" data-cmd="palette" data-label="Control Palette"></button>
+        <button class="icon-btn" id="btn-bookmarks" data-cmd="open-bookmarks" data-label="Bookmarks"></button>
+        <button class="icon-btn" id="btn-history" data-cmd="open-history" data-label="History"></button>
+        <button class="icon-btn" id="btn-downloads" data-cmd="open-downloads" data-label="Downloads"><span class="dl-badge" hidden></span></button>
+        <button class="icon-btn" id="btn-import" data-cmd="open-import" data-label="Import browser data"></button>
+        <button class="icon-btn" id="btn-settings" data-cmd="open-settings" data-label="Settings"></button>
+        <span class="spacer"></span>
+        <button class="icon-btn" id="btn-collapse" data-cmd="toggle-sidebar" data-label="Toggle sidebar"></button>
+      </div>
+      <div id="sb-resizer"></div>
+      <div id="sb-pool" hidden></div><!-- sidebar buttons not in use (Settings → Sidebar) -->
+    </aside>
+
+    <main id="content">
+      <header id="topbar" class="drag">
+        <div class="page-title" id="page-title"></div>
+        <div class="top-actions no-drag">
+          <button class="pill cws-pill" id="btn-cws" hidden></button>
+          <div id="ext-actions" class="ext-actions"></div>
+          <button class="pill" id="zoom-pill" hidden></button>
+          <button class="icon-btn" id="btn-key" data-cmd="fill-login" data-label="Fill saved login" hidden></button>
+          <button class="icon-btn" id="btn-star" data-cmd="bookmark" data-label="Bookmark this page"></button>
+          <button class="icon-btn" id="btn-find" data-cmd="find" data-label="Find in page"></button>
+        </div>
+      </header>
+      <nav id="bookmark-bar" class="bookmark-bar instant" aria-label="Bookmarks bar"></nav>
+      <div id="viewport">
+        <div id="internal" class="internal" hidden></div>
+        <div id="findbar" class="findbar" hidden>
+          <input id="find-input" placeholder="Find in page" spellcheck="false">
+          <span id="find-count"></span>
+          <button class="icon-btn" id="find-prev" data-cmd="find.prev" data-label="Previous match"></button>
+          <button class="icon-btn" id="find-next" data-cmd="find.next" data-label="Next match"></button>
+          <button class="icon-btn" id="find-close" data-cmd="find.close" data-label="Close"></button>
+        </div>
+        <div id="status" class="status" hidden></div>
+      </div>
+    </main>
+  </div>
+  <div id="sb-hotzone"></div><!-- the left edge, where a hidden sidebar slides in -->
+
+  <div id="palette-backdrop" hidden>
+    <div id="palette" role="dialog" aria-label="Control Palette">
+      <div class="palette-input">
+        <span class="pi-icon"></span>
+        <input id="palette-input" placeholder="Search tabs, bookmarks, history, commands — or type a URL" spellcheck="false" autocomplete="off">
+        <span class="pi-mode" id="palette-mode"></span>
+      </div>
+      <div id="palette-results" class="palette-results"></div>
+      <div class="palette-foot" id="palette-foot"></div>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+
+  <script src="keymap.js"></script>
+  <script src="icons.js"></script>
+  <script src="util.js"></script>
+  <script src="overlays.js"></script>
+  <script src="tabs.js"></script>
+  <script src="tabcolors.js"></script>
+  <script src="tabfolders.js"></script>
+  <script src="split.js"></script>
+  <script src="tabdrag.js"></script>
+  <script src="spaces.js"></script>
+  <script src="theme.js"></script>
+  <script src="extensions.js"></script>
+  <script src="palette.js"></script>
+  <script src="pages.js"></script>
+  <script src="shortcuts.js"></script>
+  <script src="sidebarbuttons.js"></script>
+  <script src="sidebarhide.js"></script>
+  <script src="tabhistory.js"></script>
+  <script src="bookmarkbar.js"></script>
+  <script src="bookmarkmanager.js"></script>
+  <script src="settings.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
