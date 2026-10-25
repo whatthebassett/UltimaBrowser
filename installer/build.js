@@ -74,17 +74,20 @@ fs.mkdirSync(path.dirname(out), { recursive: true });
 // assembled beside the old one, then swapped in: Defender or Explorer (reading its icon) often holds a fresh exe for a
 // moment, so the swap waits that out
 const tmp = `${out}.part`;
-fs.copyFileSync(setupExe, tmp);
-fs.appendFileSync(tmp, fs.readFileSync(zip));
-fs.appendFileSync(tmp, manifest);
-fs.appendFileSync(tmp, trailer);
-for (let i = 0; ; i++) {
-  try { fs.renameSync(tmp, out); break; } catch (e) {
-    if (!['EBUSY', 'EPERM', 'EACCES'].includes(e.code)) throw e;
-    if (i === 40) throw new Error(`${path.relative(root, out)} stayed in use (is it running?). The new installer is in ${path.relative(root, tmp)}.`);
-    execFileSync(process.execPath, ['-e', 'setTimeout(() => {}, 250)']);
+const pause = () => execFileSync(process.execPath, ['-e', 'setTimeout(() => {}, 250)']);
+const retry = (what, fn) => {
+  for (let i = 0; ; i++) {
+    try { return fn(); } catch (e) {
+      if (!['EBUSY', 'EPERM', 'EACCES'].includes(e.code) || i === 40) throw new Error(`${what} stayed in use (is it running?): ${e.message}`);
+      pause();
+    }
   }
-}
+};
+retry(path.relative(root, tmp), () => fs.rmSync(tmp, { force: true }));
+// written through one handle, start to finish: reopening it to append gives a scanner a moment to grab it
+const fd = fs.openSync(tmp, 'w');
+try { for (const part of [fs.readFileSync(setupExe), fs.readFileSync(zip), manifest, trailer]) fs.writeSync(fd, part); } finally { fs.closeSync(fd); }
+retry(path.relative(root, out), () => fs.renameSync(tmp, out));
 console.log(`\n✓ ${path.relative(root, out)}  (${mb(fs.statSync(out).size)})`);
 
 function walk(dir) {
