@@ -36,6 +36,29 @@ function defaultBrowserRow() {
         : `<button class="btn primary" data-run="make-default-browser">Make default</button>`);
 }
 
+// ---------- light / dark mode ----------
+// A space's own Light or Dark (its theme editor) wins over this setting, which would otherwise look like a dead control.
+const MODE_NAMES = { light: 'Light', dark: 'Dark' };
+const modeOverride = () => { const sp = activeSpace(); return MODE_NAMES[sp?.theme?.mode] ? sp : null; };
+
+function modeRow() {
+  const sp = modeOverride();
+  return sRow('Mode', sp
+    ? `<span class="s-warn">${esc(sp.icon)} ${esc(sp.name)} uses its own ${MODE_NAMES[sp.theme.mode]} mode, so this doesn’t change it.</span> Spaces set to Auto in their theme follow this.`
+    : 'Each space can override this with its own light or dark mode in its theme.',
+  `${sp ? `<button class="btn" data-space-follow="${esc(sp.id)}">Follow this setting</button>` : ''}${sSeg('theme', [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System']])}`);
+}
+
+// the space goes back to Auto, so it follows the app's mode again
+function followAppMode(sp) {
+  spaceTheme(sp).mode = 'auto';
+  applyTheme();
+  renderSpaces();
+  saveSession();
+  toast(`${sp.name} now follows the app’s mode`);
+  rerenderIfShowing('settings');
+}
+
 // ---------- downloads ----------
 // B.downloadDir: { dir, isDefault, missing? } from the main process, which owns the folder (it saves the choice)
 async function refreshDownloadDir() {
@@ -92,7 +115,7 @@ const SETTINGS_TABS = [
       const s = B.settings;
       return [
         sGroup('Theme', [
-          sRow('Mode', 'Each space can override this with its own light or dark mode in its theme.', sSeg('theme', [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System']])),
+          modeRow(),
           sRow('Accent color', 'Buttons, highlights and selections.', `<div class="swatches">${ACCENTS.map((c) => `<button class="swatch ${s.accent === c ? 'on' : ''}" data-accent="${c}" style="background:${c}" title="${c}"></button>`).join('')}</div>`),
         ]),
         B.backdrops ? sGroup('Window', [
@@ -196,7 +219,8 @@ const SETTINGS_TABS = [
         sRow('Electron', '', `<span class="s-value">${esc(B.versions.electron)}</span>`),
         sRow('Node.js', '', `<span class="s-value">${esc(B.versions.node)}</span>`),
         sRow('Data folder', 'Settings, history, bookmarks and session.', '<span class="s-value">%APPDATA%\\Ultima Browser</span>'),
-      ])}`,
+      ])}
+      <section class="s-group"><h3 class="s-group-title">Patch notes</h3><div class="s-card pn">${patchNotesHtml(B.versions.app)}</div></section>`,
   },
 ];
 
@@ -271,7 +295,11 @@ function pageSettings(root, tab) {
       return;
     }
     if (d.switch) applySettings({ [d.switch]: !(B.settings[d.switch] !== false && B.settings[d.switch]) });
-    else if (d.v && t.parentElement.dataset.key) applySettings({ [t.parentElement.dataset.key]: d.v });
+    else if (d.v && t.parentElement.dataset.key) {
+      applySettings({ [t.parentElement.dataset.key]: d.v });
+      const sp = t.parentElement.dataset.key === 'theme' && modeOverride();
+      if (sp) toast(`${sp.name} keeps its own ${MODE_NAMES[sp.theme.mode]} mode`, { label: 'Follow this setting', run: () => followAppMode(sp) });
+    } else if (d.spaceFollow) { followAppMode(spaceById(d.spaceFollow)); return; }
     else if (d.accent) applySettings({ accent: d.accent });
     else if (d.loader) { applySettings({ loadingTheme: d.loader }); previewLoader(); }
     else if (t.hasAttribute('data-lc-add')) {
