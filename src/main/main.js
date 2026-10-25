@@ -12,7 +12,7 @@ const defaultBrowser = require('./defaultbrowser');
 const keymap = require('../renderer/keymap');
 
 app.setName('Ultima Browser');
-app.setAppUserModelId('com.ultimabass.ultimabrowser');
+app.setAppUserModelId(defaultBrowser.APP_ID);
 
 const PARTITION = 'persist:ultima';
 // System backdrops (Acrylic = live blur of what is behind the window, Mica = tinted wallpaper) need
@@ -48,6 +48,8 @@ const DEFAULT_SETTINGS = {
   centerBookmarksBar: false,
   searchEngine: 'google',
   restoreSession: true,
+  downloadDir: '', // '' = the system's Downloads folder
+  askWhereToSave: false, // a Save As dialog for every download
   sidebarWidth: 264,
   sidebarCollapsed: false,
   sidebarHidden: false,
@@ -671,15 +673,19 @@ function setupSession(ses) {
   });
 
   ses.on('will-download', (_e, item) => {
-    const dir = app.getPath('downloads');
+    const dir = downloadDir().dir;
     const parsed = path.parse(item.getFilename());
     let target = path.join(dir, parsed.base);
     for (let i = 1; fs.existsSync(target); i += 1) target = path.join(dir, `${parsed.name} (${i})${parsed.ext}`);
-    item.setSavePath(target);
+    // Asking: Electron shows the Save As dialog once this returns (cancelling it cancels the download)
+    if (settings.data.askWhereToSave) item.setSaveDialogOptions({ title: 'Save download', defaultPath: target });
+    else item.setSavePath(target);
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const report = (state) => {
+      const saved = item.getSavePath();
+      if (!saved) return; // the Save As dialog is still open, or was cancelled: nothing to show yet
       const d = {
-        id, state, filename: path.basename(target), path: target, url: item.getURL(),
+        id, state, filename: path.basename(saved), path: saved, url: item.getURL(),
         received: item.getReceivedBytes(), total: item.getTotalBytes(), started: item.getStartTime() * 1000,
       };
       downloads.set(id, d);
@@ -691,12 +697,23 @@ function setupSession(ses) {
   });
 }
 
+// Where downloads go: the folder chosen in Settings → General, or the system's Downloads folder (also when the chosen
+// one has gone, e.g. a removed drive)
+function downloadDir() {
+  const chosen = settings.data.downloadDir;
+  try { if (chosen && fs.statSync(chosen).isDirectory()) return { dir: chosen, isDefault: false }; } catch { /* gone */ }
+  return { dir: app.getPath('downloads'), isDefault: true, missing: chosen || undefined };
+}
+
 // Mica/vibrancy take their light or dark tint from the native theme, so keep it in step with ours.
 function syncNativeTheme() {
   nativeTheme.themeSource = ['dark', 'light'].includes(settings.data.theme) ? settings.data.theme : 'system';
 }
 
 // ---- window ----
+// the window and taskbar icon (the .ico carries every size Windows asks for; build/make-icons.js makes both)
+const APP_ICON = path.join(__dirname, '..', '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
+
 function createWindow() {
   const bounds = settings.data.window;
   win = new BrowserWindow({
@@ -707,7 +724,7 @@ function createWindow() {
     minWidth: 720,
     minHeight: 480,
     title: 'Ultima Browser',
-    icon: path.join(__dirname, '..', '..', 'assets', 'icon.png'),
+    icon: APP_ICON,
     backgroundColor: GLASS ? CLEAR : '#111114',
     backgroundMaterial: BACKDROPS ? settings.data.windowMaterial : undefined,
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
@@ -782,7 +799,7 @@ app.on('web-contents-created', (_e, wc) => {
     if (disposition === 'new-window') {
       return {
         action: 'allow',
-        overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, backgroundColor: '#ffffff' },
+        overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, backgroundColor: '#ffffff', icon: APP_ICON },
       };
     }
     send('open-url', { url, background: disposition === 'background-tab' });
@@ -853,6 +870,17 @@ function registerIpc() {
     const wc = tabContents(id);
     if (wc && Number.isInteger(index) && wc.navigationHistory.canGoToOffset(index - wc.navigationHistory.getActiveIndex())) wc.navigationHistory.goToIndex(index);
   });
+  handle('downloads:dir', () => downloadDir());
+  handle('downloads:choose-dir', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+      title: 'Choose where downloads go', buttonLabel: 'Use this folder', defaultPath: downloadDir().dir, properties: ['openDirectory', 'createDirectory'],
+    });
+    if (canceled || !filePaths[0]) return null;
+    settings.data.downloadDir = filePaths[0];
+    settings.save();
+    return downloadDir();
+  });
+  handle('downloads:reset-dir', () => { settings.data.downloadDir = ''; settings.save(); return downloadDir(); });
   handle('default-browser:get', () => defaultBrowser.status());
   handle('default-browser:set', () => defaultBrowser.makeDefault());
   handle('keys:recording', (on) => { recordingKeys = Boolean(on); });

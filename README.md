@@ -5,8 +5,20 @@ A Chromium-based desktop browser (castLabs Electron for Content Security 44 / Ch
 ```bash
 npm install
 npm start          # run in development
-npm run dist       # build a Windows installer into dist/
+npm run dist       # build the Windows installer into dist/ (needs the .NET SDK)
 ```
+
+### The installer
+
+`npm run dist` builds **`dist/Ultima Browser Setup <version>.exe`**, Ultima's own installer: a small native window (`installer/`, .NET Framework 4.8 — built into Windows 10/11 — with WebView2) that plays the install as a short film while it really installs. A logo reveal, a scored title card, feature shots over a warp-speed starfield with the real progress below, then a finale with **Launch Ultima**. The score is synthesized live (`installer/ui/audio.js`), with a mute button; Windows' reduce-motion setting gets a calm version.
+
+- Installs per user (no admin rights) to `%LOCALAPPDATA%\Programs\Ultima Browser`, with Start menu and desktop shortcuts carrying Ultima's AppUserModelID, and an entry in Settings → Apps. Updating keeps your data; the uninstaller (same film, shorter) keeps it too unless you tick the box.
+- Command line: `--silent`, `--dir "<folder>"`, `--no-desktop-shortcut`, `--launch`; the uninstaller takes `--uninstall [--silent] [--delete-data]`.
+- The app inside is the VMP-signed one from electron-builder, so Netflix keeps working. `node installer/build.js --reuse` skips repackaging it.
+- Design the scenes in a browser: open `installer/ui/index.html` through any local server (it plays a pretend install; `?mode=uninstall`, `?installed=0.0.9`, `?running=1`, `?fail=1`, `?seconds=10`).
+- `npm run dist:nsis` still builds electron-builder's classic NSIS installer.
+
+The exe, window and taskbar icon is made from `logos/1_purple_gradient_badge_transparent.png`; the logo in the sidebar and settings and the installer's emblem from `logos/ultima_browser_emblem_transparent.png`. After changing either, run `npm run icons`.
 
 ### Netflix and other protected video (Widevine)
 
@@ -73,6 +85,8 @@ src/main/extensions.js Chrome extensions: Web Store download, CRX unpacking, reg
 src/extension-compat.js fills gaps in Electron's extension APIs inside extension workers and pages
 src/preload.js        the window.ultima bridge
 src/renderer/         UI: tabs.js (sidebar + webviews), palette.js, pages.js (ultima:// pages), app.js
+installer/            the cinematic installer: src/ (C# host: install, uninstall, shortcuts), ui/ (the film), build.js
+build/make-icons.js   every icon, from the artwork in logos/
 ```
 
 User data lives in `%APPDATA%\Ultima Browser`.

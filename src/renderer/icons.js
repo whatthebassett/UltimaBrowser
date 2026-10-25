@@ -63,4 +63,4 @@ function icon(name, size = 16) {
   return `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ICONS.globe}</svg>`;
 }
 
-const LOGO = `<svg viewBox="0 0 64 64" class="logo"><defs><linearGradient id="ug" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#a78bfa"/><stop offset=".55" stop-color="#7c3aed"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs><rect width="64" height="64" rx="16" fill="url(#ug)"/><path d="M20 16v18a12 12 0 0 0 24 0V16" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round"/><circle cx="44" cy="48" r="4" fill="#fff" opacity=".9"/></svg>`;
+const LOGO = `<img class="logo" src="logo.png" alt="" draggable="false">`; // build/make-icons.js

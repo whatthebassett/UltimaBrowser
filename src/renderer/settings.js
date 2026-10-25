@@ -36,15 +36,50 @@ function defaultBrowserRow() {
         : `<button class="btn primary" data-run="make-default-browser">Make default</button>`);
 }
 
+// ---------- downloads ----------
+// B.downloadDir: { dir, isDefault, missing? } from the main process, which owns the folder (it saves the choice)
+async function refreshDownloadDir() {
+  B.downloadDir = await window.ultima.downloadDir();
+  rerenderIfShowing('settings');
+}
+
+async function chooseDownloadDir() {
+  const r = await window.ultima.chooseDownloadDir(); // the system folder picker
+  if (!r) return;
+  B.downloadDir = r;
+  toast('Downloads will go to the new folder');
+  rerenderIfShowing('settings');
+}
+
+async function resetDownloadDir() {
+  B.downloadDir = await window.ultima.resetDownloadDir();
+  toast('Downloads will go to your Downloads folder');
+  rerenderIfShowing('settings');
+}
+
+function downloadRows() {
+  if (!B.downloadDir) refreshDownloadDir();
+  const d = B.downloadDir;
+  const where = !d ? 'Checking…'
+    : d.missing ? `“${esc(d.missing)}” isn’t available, so downloads go to ${esc(d.dir)} for now.`
+      : esc(d.dir);
+  return [
+    sRow('Location', `<span class="s-path" title="${esc(d?.dir || '')}">${where}</span>`,
+      `${d && (!d.isDefault || d.missing) ? '<button class="btn" data-dl-reset>Use Downloads folder</button>' : ''}<button class="btn" data-dl-choose>${icon('folder', 14)} Change…</button>`),
+    sRow('Ask where to save each file', 'Pick the folder and file name every time you download something.', sSwitch('askWhereToSave')),
+  ];
+}
+
 // ---------- tabs ----------
 const SETTINGS_TABS = [
   {
-    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup and search.',
+    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, downloads and search.',
     render: () => [
       sGroup('Default browser', [defaultBrowserRow()]),
       sGroup('Startup', [
         sRow('Restore tabs from last time', 'Tabs come back unloaded and load when you open them.', sSwitch('restoreSession')),
       ]),
+      sGroup('Downloads', downloadRows()),
       sGroup('Search', [
         sRow('Search engine', 'Used by the Control Palette and the new tab page.',
           `<select class="field" data-setting="searchEngine">${Object.entries(SEARCH_ENGINES).map(([k, e]) => `<option value="${k}" ${B.settings.searchEngine === k ? 'selected' : ''}>${e.name}</option>`).join('')}</select>`),
@@ -273,6 +308,8 @@ function pageSettings(root, tab) {
       } catch (err) { toast(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
       return;
     } else if (t.hasAttribute('data-run-perm')) { await window.ultima.resetPermissions(); toast('Site permissions reset'); return; }
+    else if (t.hasAttribute('data-dl-choose')) { chooseDownloadDir(); return; }
+    else if (t.hasAttribute('data-dl-reset')) { resetDownloadDir(); return; }
     else if (d.clear) {
       if (d.clear === 'cookies' && !await confirmDialog('You will be signed out of websites in every space.', { title: 'Delete all cookies and site data?', ok: 'Delete', danger: true })) return;
       await window.ultima.clearData({ [d.clear]: true, partitions: B.spaces.filter((sp) => sp.separate).map((sp) => partitionFor(sp.id)) });

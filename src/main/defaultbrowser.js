@@ -13,6 +13,10 @@ const APP_NAME = 'Ultima Browser'; // its name in Windows Settings (RegisteredAp
 const PROG_ID = 'UltimaHTML';
 const CLIENT_KEY = 'Software\\Clients\\StartMenuInternet\\UltimaBrowser';
 const FILE_TYPES = ['.htm', '.html', '.shtml', '.xht', '.xhtml'];
+// Windows' AppUserModelID: the taskbar groups windows and finds their icon by it. Run from source, Ultima has its own,
+// so it never shares a taskbar button with an installed Ultima, or inherits what Windows remembers about one (an
+// uninstalled copy's shortcut leaves the taskbar showing a blank page for its ID until Explorer restarts).
+const APP_ID = process.defaultApp ? 'com.ultimabass.ultimabrowser.dev' : 'com.ultimabass.ultimabrowser';
 
 const reg = (args) => new Promise((resolve) => {
   execFile('reg', args, { windowsHide: true }, (err, stdout) => resolve(err ? null : stdout));
@@ -32,7 +36,7 @@ function registryFile() {
   const key = (name, values) => `[HKEY_CURRENT_USER\\${name}]\r\n${Object.entries(values).map(([k, v]) => `${k === '@' ? '@' : s(k)}=${s(v)}`).join('\r\n')}\r\n`;
   return ['Windows Registry Editor Version 5.00\r\n',
     key(`Software\\Classes\\${PROG_ID}`, { '@': 'Ultima HTML Document', 'URL Protocol': '' }),
-    key(`Software\\Classes\\${PROG_ID}\\Application`, { ApplicationName: APP_NAME, ApplicationIcon: icon, ApplicationCompany: 'UltimaBass', AppUserModelId: 'com.ultimabass.ultimabrowser' }),
+    key(`Software\\Classes\\${PROG_ID}\\Application`, { ApplicationName: APP_NAME, ApplicationIcon: icon, ApplicationCompany: 'UltimaBass', AppUserModelId: APP_ID }),
     key(`Software\\Classes\\${PROG_ID}\\DefaultIcon`, { '@': icon }),
     key(`Software\\Classes\\${PROG_ID}\\shell\\open\\command`, { '@': open }),
     key(CLIENT_KEY, { '@': APP_NAME }),
@@ -99,4 +103,4 @@ function launchTarget(argv) {
   return null;
 }
 
-module.exports = { status, makeDefault, refreshRegistration, launchTarget, registryFile };
+module.exports = { APP_ID, status, makeDefault, refreshRegistration, launchTarget, registryFile };

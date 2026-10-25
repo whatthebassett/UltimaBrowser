@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ultima Browser Setup</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="fonts/inter.css">
+<link rel="stylesheet" href="setup.css">
+</head>
+<body class="phase-black">
+  <!-- the world: stars, aurora, grain, vignette, and the black it fades in from and out to -->
+  <canvas id="stars" aria-hidden="true"></canvas>
+  <div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+  <div class="bloom" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+  <div class="vignette" aria-hidden="true"></div>
+  <div class="veil" aria-hidden="true"></div>
+  <div class="streak" aria-hidden="true"></div>
+
+  <!-- window chrome: drag to move; sound, minimize, close -->
+  <header class="chrome" id="chrome">
+    <span class="chrome-title"><span id="chrome-product">Ultima</span> <span class="dim" id="chrome-mode">Setup</span></span>
+    <span class="chrome-buttons">
+      <button class="cbtn" id="btn-sound" title="Sound on" aria-label="Turn sound off"><svg viewBox="0 0 24 24"><path d="M11 5 6 9H3v6h3l5 4z"/><path class="wave" d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/><path class="cross" d="M22 9l-6 6M16 9l6 6"/></svg></button>
+      <button class="cbtn" id="btn-min" title="Minimize" aria-label="Minimize"><svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg></button>
+      <button class="cbtn close" id="btn-close" title="Close" aria-label="Close"><svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    </span>
+  </header>
+
+  <!-- the title card: the logo drawing itself, the wordmark, the tagline -->
+  <section class="title-card" id="title-card">
+    <!-- the emblem: its outline traced in light, the emblem wiped in along the swoosh, a glint, a spark at the tip -->
+    <div class="logo" aria-hidden="true">
+      <div class="logo-halo"></div>
+      <img class="logo-art" src="emblem.png" alt="" draggable="false">
+      <div class="logo-glint"></div>
+      <svg class="logo-trace" viewBox="0 0 640 640">
+        <defs>
+          <linearGradient id="ls" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#e9d5ff"/><stop offset=".55" stop-color="#a78bfa"/><stop offset="1" stop-color="#67e8f9"/></linearGradient>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+        </defs>
+        <g fill="none" stroke="url(#ls)" stroke-width="5" stroke-linejoin="round" filter="url(#glow)">
+          <path pathLength="100" style="--i: 0" d="M 604.9 77.8 C 601.8 80.4, 594.6 86.6, 588.9 91.6 C 573.2 105.2, 488.2 178.1, 474.0 190.0 C 400.2 252.1, 344.2 297.2, 274.5 350.9 C 197.6 410.2, 137.5 450.7, 122.5 453.6 C 107.5 456.4, 111.1 442.3, 134.4 406.5 C 137.5 401.7, 139.9 397.6, 139.7 397.4 C 139.1 396.8, 115.7 423.7, 107.3 434.6 C 85.1 463.7, 75.1 488.4, 82.8 495.3 C 95.2 506.5, 146.5 479.3, 228 418.0 C 251.0 400.8, 276.0 381.1, 295.5 365.1 C 313.7 350.0, 314.6 349.4, 307.5 356.9 C 251.3 415.9, 134.4 510.1, 72.5 546.4 C 67 549.6, 60.0 553.7, 57 555.5 C 54.0 557.3, 47.9 560.6, 43.5 562.8 C 39.1 565.0, 34.6 567.5, 33.5 568.4 L 31.5 570.0 33.5 569.3 C 37.9 567.9, 64.7 554.8, 76.2 548.4 C 101.0 534.9, 121.6 521.9, 150 502.1 C 280.1 411.4, 429.4 273.0, 606.9 78.8 C 613.3 71.8, 612.5 71.4, 604.9 77.8"/>
+          <path pathLength="100" style="--i: 1" d="M 111.0 112.8 C 111.0 113.2, 114.0 115.5, 117.6 117.9 C 135.0 129.6, 145.5 143.4, 151.2 162.2 L 153.4 169.5 154.0 281.5 C 154.7 397.7, 155.2 412, 159.2 412 C 161.4 412, 194.5 389.0, 221 369.0 C 227.3 364.2, 236.0 357.8, 240.3 354.7 L 248 349.0 248 230.5 L 248 112 179.5 112 C 141.8 112, 111.0 112.3, 111.0 112.8"/>
+          <path pathLength="100" style="--i: 2" d="M 387 166.1 L 387 220.1 382.2 225.3 C 377.8 230.0, 360.3 249.9, 342.6 270.3 C 338.9 274.6, 336.0 278.3, 336.2 278.5 C 336.4 278.7, 342.6 274.1, 350.0 268.3 C 357.4 262.5, 366.9 255.3, 371 252.2 C 393.8 235.2, 474.9 167.3, 479.8 161.2 C 480.7 160.0, 481.0 153.9, 480.8 136.0 L 480.5 112.5 433.8 112.2 L 387 112.0 387 166.1"/>
+          <path pathLength="100" style="--i: 3" d="M 539.5 179.2 C 538.0 181.0, 516.1 203.7, 491.0 229.5 C 448.6 272.9, 427.2 294.1, 398.2 320.9 L 387 331.2 387.0 356.9 C 387.0 371.0, 386.5 385.4, 386.0 389 C 378.1 438.9, 332.2 464.9, 289.3 443.9 C 280.2 439.5, 279.8 438.9, 283.8 434.4 C 329.4 382.5, 332.6 378.7, 326.9 383.6 C 325.6 384.7, 319.9 389.5, 314.3 394.3 C 308.6 399.1, 299.4 406.9, 293.9 411.8 C 288.3 416.6, 280.5 423.2, 276.5 426.5 C 272.5 429.8, 264.2 436.8, 257.9 442.1 C 243.7 453.9, 156.4 523.9, 145.7 531.9 C 142.5 534.3, 140.2 536.5, 140.4 536.8 C 140.9 537.3, 144.1 535.6, 180.4 515.5 C 196.7 506.6, 205.8 502.1, 206.6 502.6 C 207.2 503.1, 210.9 506.3, 214.8 509.7 C 246.8 537.7, 293.9 552.2, 336.0 546.9 C 405.3 538.3, 463.0 484.3, 476.9 415.2 C 480.4 398.0, 481.0 384.1, 481.0 322.0 L 481 261.5 484.3 256.8 C 486.0 254.2, 500.0 235.2, 515.4 214.5 C 530.7 193.8, 543.0 176.7, 542.7 176.4 C 542.5 176.1, 541.0 177.4, 539.5 179.2"/>
+        </g>
+      </svg>
+      <div class="logo-spark"></div>
+    </div>
+    <h1 class="wordmark" id="wordmark" aria-label="Ultima"></h1>
+    <p class="tagline" id="tagline">The browser that moves at your speed.</p>
+  </section>
+
+  <!-- ready: install (or update, or uninstall) -->
+  <section class="panel" id="panel-ready" hidden>
+    <h2 id="ready-title">Ready when you are.</h2>
+    <p class="sub" id="ready-sub">Ultima installs just for you — no administrator rights, nothing else to set up.</p>
+    <div class="actions">
+      <button class="primary" id="btn-go"><span id="btn-go-label">Install Ultima</span><i class="sheen"></i></button>
+      <button class="ghost" id="btn-keep" hidden>Keep Ultima</button>
+    </div>
+    <label class="toggle" id="opt-desktop"><input type="checkbox" id="chk-desktop" checked><span class="switch"></span>Add a desktop shortcut</label>
+    <label class="toggle" id="opt-data" hidden><input type="checkbox" id="chk-data"><span class="switch"></span>Also delete my browsing data (bookmarks, history, passwords)</label>
+    <p class="fine" id="ready-fine"></p>
+  </section>
+
+  <!-- the install: feature shots on the stage, real progress below -->
+  <section class="stage" id="stage" hidden aria-live="polite">
+    <div class="shot" data-shot="tabs">
+      <div class="art art-tabs"><i></i><i></i><i></i><i></i><i></i></div>
+      <h3>Your tabs, standing tall.</h3>
+      <p>Vertical tabs, pinned tabs and Essentials — always one glance away.</p>
+    </div>
+    <div class="shot" data-shot="spaces">
+      <div class="art art-spaces"><i></i><i></i><i></i></div>
+      <h3>A space for everything.</h3>
+      <p>Work, play and everything between — each with its own theme and sign-ins.</p>
+    </div>
+    <div class="shot" data-shot="palette">
+      <div class="art art-palette"><div class="pal-box"><span class="pal-k">⌘</span><span class="pal-text"></span><span class="pal-caret"></span></div><div class="pal-row"><i></i><b>Netflix</b><em>Open tab</em></div></div>
+      <h3>Everything, one keystroke away.</h3>
+      <p>The Control Palette finds tabs, history, bookmarks and every command.</p>
+    </div>
+    <div class="shot" data-shot="split">
+      <div class="art art-split"><i></i><b></b><i></i></div>
+      <h3>Side by side.</h3>
+      <p>Split view puts two pages next to each other, no juggling windows.</p>
+    </div>
+    <div class="shot" data-shot="movies">
+      <div class="art art-movies"><div class="screen"><span class="play"></span></div></div>
+      <h3>Movie night, sorted.</h3>
+      <p>Netflix, Disney+ and more play right in Ultima.</p>
+    </div>
+    <div class="shot" data-shot="private">
+      <div class="art art-private"><span class="ring"></span><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg></div>
+      <h3>Private by design.</h3>
+      <p>Your passwords stay encrypted on this PC. Nothing leaves without you.</p>
+    </div>
+    <div class="shot" data-shot="goodbye">
+      <div class="art art-goodbye"></div>
+      <h3>Packing up.</h3>
+      <p>Removing Ultima from this PC.</p>
+    </div>
+  </section>
+
+  <footer class="progress" id="progress" hidden>
+    <div class="track"><div class="fill" id="progress-fill"><i class="head"></i></div></div>
+    <div class="progress-text"><span id="progress-label">Preparing</span><span class="pct" id="progress-pct">0%</span></div>
+  </footer>
+
+  <!-- the finale -->
+  <section class="panel finale" id="panel-done" hidden>
+    <h2 id="done-title">Welcome to Ultima.</h2>
+    <p class="sub" id="done-sub">Installed in a few seconds.</p>
+    <div class="actions">
+      <button class="primary" id="btn-launch"><span>Launch Ultima</span><i class="sheen"></i></button>
+      <button class="ghost" id="btn-done-close">Close</button>
+    </div>
+  </section>
+
+  <!-- interruptions -->
+  <div class="modal" id="modal" hidden>
+    <div class="card">
+      <h4 id="modal-title"></h4>
+      <p id="modal-text"></p>
+      <div class="actions"><button class="primary small" id="modal-yes"></button><button class="ghost small" id="modal-no"></button></div>
+    </div>
+  </div>
+
+  <script src="audio.js"></script>
+  <script src="stars.js"></script>
+  <script src="setup.js"></script>
+</body>
+</html>

@@ -90,6 +90,9 @@ kbd {
 body.mac .sb-head { padding-left: 76px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; }
 .brand .logo { width: 20px; height: 20px; flex: none; }
+/* the emblem is a deep purple: a faint lavender halo keeps it legible on dark glass */
+.logo { filter: drop-shadow(0 0 2px rgba(196, 170, 255, 0.55)); user-select: none; }
+:root[data-theme="light"] .logo:not(.s-about-logo) { filter: none; }
 .nav { display: flex; gap: 2px; }
 
 .icon-btn {
@@ -689,6 +692,7 @@ body.collapsed .theme-editor { left: 72px; }
 .s-row[data-stack] .s-control { justify-content: flex-start; }
 .s-value { color: var(--text-2); font-variant-numeric: tabular-nums; user-select: text; }
 .s-value.s-ok { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
+.s-path { color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .s-space { font-size: 17px; }
 .s-badge { font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); }
 .s-theme-chip { width: 44px; height: 26px; border-radius: 8px; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18); }
@@ -813,7 +817,7 @@ body.collapsed .url-menu-btn { display: none; }
 .sbe-top { justify-content: space-between; }
 .sbe-bottom { padding-top: 8px; border-top: 1px solid var(--glass-edge); }
 .sbe-brand { display: flex; align-items: center; gap: 7px; font-weight: 650; font-size: 13.5px; color: var(--text); flex: none; }
-.sbe-brand svg { width: 22px; height: 22px; }
+.sbe-brand .logo { width: 22px; height: 22px; }
 .sbe-slots { display: flex; align-items: center; gap: 3px; min-height: 36px; min-width: 40px; padding: 2px; border-radius: 10px; transition: background 0.12s, box-shadow 0.12s; }
 .sbe-top .sbe-slots { justify-content: flex-end; }
 .sbe-bottom .sbe-slots { flex: 1; flex-wrap: wrap; }

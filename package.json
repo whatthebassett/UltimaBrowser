@@ -8,7 +8,9 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win",
+    "dist": "node installer/build.js",
+    "dist:nsis": "electron-builder --win",
+    "icons": "node build/make-icons.js",
     "evs:install": "python -m pip install --upgrade castlabs-evs",
     "evs:signup": "python -m castlabs_evs.account signup",
     "evs:login": "python -m castlabs_evs.account reauth",
@@ -27,9 +29,10 @@
     ],
     "win": {
       "target": "nsis",
-      "icon": "assets/icon.png"
+      "icon": "assets/icon.ico"
     },
     "nsis": {
+      "artifactName": "${productName} Setup ${version} (classic).${ext}",
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
     }

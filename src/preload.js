@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('ultima', {
   tabHistoryGo: invoke('tab:history-go'),
   defaultBrowserStatus: invoke('default-browser:get'),
   makeDefaultBrowser: invoke('default-browser:set'),
+  downloadDir: invoke('downloads:dir'),
+  chooseDownloadDir: invoke('downloads:choose-dir'),
+  resetDownloadDir: invoke('downloads:reset-dir'),
 
   addHistory: invoke('history:add'),
   listHistory: invoke('history:list'),
