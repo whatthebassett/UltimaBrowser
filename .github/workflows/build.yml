@@ -1,0 +1,75 @@
+# Builds Ultima for Windows and macOS on GitHub's machines (a Mac app can only be built on macOS).
+#   Run it from Actions → Build → Run workflow, or push a version tag (v0.1.0) to also publish a GitHub Release.
+#   Windows: the cinematic installer (installer/build.js) → "Ultima Browser Setup <version>.exe"
+#   macOS:   Apple Silicon disk image and zip → "Ultima Browser-<version>-arm64.dmg"
+# Netflix and other Widevine sites need each build VMP-signed with castLabs EVS: add the repository secrets
+# EVS_ACCOUNT_NAME and EVS_PASSWD (Settings → Secrets and variables → Actions). Without them the builds still finish,
+# unsigned for VMP (protected video then only plays on test servers).
+# The Mac app is ad-hoc signed, not with an Apple Developer ID: on first launch macOS asks people to allow it in
+# System Settings → Privacy & Security → Open Anyway.
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+env:
+  EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+  EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
+  EVS_NO_ASK: '1'
+  ULTIMA_SKIP_VMP: ${{ secrets.EVS_ACCOUNT_NAME == '' && '1' || '' }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      # package-lock pins castLabs' Electron over SSH, which these machines have no key for
+      - run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python -m pip install --upgrade castlabs-evs
+      - run: npm ci
+      - run: npm run dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultima-windows
+          path: dist/Ultima Browser Setup *.exe
+          if-no-files-found: error
+
+  mac:
+    runs-on: macos-latest # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: python3 -m pip install --upgrade castlabs-evs
+      - run: npm ci
+      - run: npm run dist:mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ultima-mac
+          path: |
+            dist/*.dmg
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: out, merge-multiple: true }
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true

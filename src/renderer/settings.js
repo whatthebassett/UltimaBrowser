@@ -218,7 +218,7 @@ const SETTINGS_TABS = [
         sRow('Chromium', '', `<span class="s-value">${esc(B.versions.chrome)}</span>`),
         sRow('Electron', '', `<span class="s-value">${esc(B.versions.electron)}</span>`),
         sRow('Node.js', '', `<span class="s-value">${esc(B.versions.node)}</span>`),
-        sRow('Data folder', 'Settings, history, bookmarks and session.', '<span class="s-value">%APPDATA%\\Ultima Browser</span>'),
+        sRow('Data folder', 'Settings, history, bookmarks and session.', `<span class="s-value">${esc(B.dataFolder || '')}</span>`),
       ])}
       <section class="s-group"><h3 class="s-group-title">Patch notes</h3><div class="s-card pn">${patchNotesHtml(B.versions.app)}</div></section>`,
   },

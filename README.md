@@ -18,6 +18,14 @@ npm run dist       # build the Windows installer into dist/ (needs the .NET SDK)
 - Design the scenes in a browser: open `installer/ui/index.html` through any local server (it plays a pretend install; `?mode=uninstall`, `?installed=0.0.9`, `?running=1`, `?fail=1`, `?seconds=10`).
 - `npm run dist:nsis` still builds electron-builder's classic NSIS installer.
 
+### macOS
+
+The Mac version (Apple Silicon) is built on GitHub's Mac machines, since a Mac app can only be built on macOS: **Actions → Build → Run workflow** (`.github/workflows/build.yml`) builds Windows and Mac together and keeps both installers as downloads; pushing a version tag (`git tag v0.1.0 && git push --tags`) also publishes them as a GitHub Release. On a Mac, `npm run dist:mac` does the same locally.
+
+- You get `Ultima Browser-<version>-arm64.dmg` (a drag-to-Applications window, its background from `build/dmg/`, re-rendered with `npm run dmg-background`) and a `.zip`.
+- The app is ad-hoc signed, not with an Apple Developer ID, so on first launch macOS asks people to allow it in System Settings → Privacy & Security → **Open Anyway**. Signing and notarizing with a Developer ID can be added later.
+- For Netflix, add your EVS login as the repository secrets `EVS_ACCOUNT_NAME` and `EVS_PASSWD`; without them the builds still run, without the VMP signature. On macOS it's applied before code signing (`build/vmp-sign-mac.js`), the order castLabs requires there.
+
 The exe, window and taskbar icon is made from `logos/1_purple_gradient_badge_transparent.png`; the logo in the sidebar and settings and the installer's emblem from `logos/ultima_browser_emblem_transparent.png`. After changing either, run `npm run icons`.
 
 ### Netflix and other protected video (Widevine)
@@ -58,7 +66,7 @@ After that, `npm run dist` signs each build automatically (`build/vmp-sign.js`; 
 
 ## Keyboard
 
-Every shortcut is editable in **Settings → Keyboard shortcuts** (or `Ctrl+/`). That covers global shortcuts, the keys inside the Control Palette, find bar and text boxes, and commands that have no shortcut by default. Click + to record one and × to remove one; a combo already in use moves to the new command, with Undo. Single keys (like `K` or `Shift+K`) are allowed: they fire only when you are not typing in a text box, in a page or in Ultima. These are the defaults:
+Every shortcut is editable in **Settings → Keyboard shortcuts** (or `Ctrl+/`). That covers global shortcuts, the keys inside the Control Palette, find bar and text boxes, and commands that have no shortcut by default. Click + to record one and × to remove one; a combo already in use moves to the new command, with Undo. Single keys (like `K` or `Shift+K`) are allowed: they fire only when you are not typing in a text box, in a page or in Ultima. These are the defaults (on a Mac, Ctrl is ⌘, except switching tabs, which stays Ctrl+Tab since ⌘Tab switches apps, and History, which is ⌘Y since ⌘H hides the app):
 
 | Keys | Action |
 |---|---|
@@ -86,7 +94,8 @@ src/extension-compat.js fills gaps in Electron's extension APIs inside extension
 src/preload.js        the window.ultima bridge
 src/renderer/         UI: tabs.js (sidebar + webviews), palette.js, pages.js (ultima:// pages), app.js
 installer/            the cinematic installer: src/ (C# host: install, uninstall, shortcuts), ui/ (the film), build.js
-build/make-icons.js   every icon, from the artwork in logos/
+build/make-icons.js   every icon, from the artwork in logos/ (Windows .ico, the Mac icon, the in-app logo)
+.github/workflows/    the Windows + Mac build on GitHub Actions
 ```
 
 User data lives in `%APPDATA%\Ultima Browser`.

@@ -395,6 +395,7 @@ async function boot() {
   const state = await window.ultima.getState();
   B.settings = state.settings;
   B.versions = state.versions;
+  B.dataFolder = state.dataFolder;
   B.systemDark = state.systemDark;
   B.backdrops = state.backdrops;
   loadKeys(B.settings.keybindings, state.platform);

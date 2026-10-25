@@ -2,14 +2,15 @@
 // Loaded by the main process (require) and by the UI (<script>), so both always agree.
 (function keymapModule(root) {
   // scope: 'global' works everywhere (intercepted before pages see the key); other scopes only
-  // apply while that part of the UI has focus. "Mod" is Ctrl on Windows/Linux and Cmd on macOS.
+  // apply while that part of the UI has focus. "Mod" is Ctrl on Windows/Linux and Cmd on macOS. macKeys replaces keys on
+  // macOS where the system owns the combo (Cmd+Tab switches apps, Cmd+H hides the app), following Chrome on the Mac.
   const COMMANDS = [
     // Tabs
     { id: 'new-tab', title: 'New tab', group: 'Tabs', keys: ['Mod+T', 'Mod+N'] },
     { id: 'close-tab', title: 'Close tab (unloads pinned tabs and Essentials)', group: 'Tabs', keys: ['Mod+W', 'Mod+F4'] },
     { id: 'reopen-tab', title: 'Reopen closed tab', group: 'Tabs', keys: ['Mod+Shift+T'] },
-    { id: 'next-tab', title: 'Next tab', group: 'Tabs', keys: ['Mod+Tab', 'Mod+PageDown'] },
-    { id: 'prev-tab', title: 'Previous tab', group: 'Tabs', keys: ['Mod+Shift+Tab', 'Mod+PageUp'] },
+    { id: 'next-tab', title: 'Next tab', group: 'Tabs', keys: ['Mod+Tab', 'Mod+PageDown'], macKeys: ['Ctrl+Tab'] },
+    { id: 'prev-tab', title: 'Previous tab', group: 'Tabs', keys: ['Mod+Shift+Tab', 'Mod+PageUp'], macKeys: ['Ctrl+Shift+Tab'] },
     ...[1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ id: `tab-${n}`, title: `Go to tab ${n}`, group: 'Tabs', keys: [`Mod+${n}`] })),
     { id: 'tab-9', title: 'Go to last tab', group: 'Tabs', keys: ['Mod+9'] },
     { id: 'duplicate-tab', title: 'Duplicate tab', group: 'Tabs', keys: [] },
@@ -66,7 +67,7 @@
     { id: 'toggle-bookmarks-bar', title: 'Show / hide the bookmarks bar', group: 'Ultima', keys: [] },
     { id: 'import-bookmarks-bar', title: 'Import a bookmarks bar from Chrome, Edge, Brave or Vivaldi', group: 'Ultima', keys: [] },
     { id: 'toggle-loading-animation', title: 'Turn the address bar loading animation on or off', group: 'Ultima', keys: [] },
-    { id: 'open-history', title: 'Open history', group: 'Ultima', keys: ['Mod+H'] },
+    { id: 'open-history', title: 'Open history', group: 'Ultima', keys: ['Mod+H'], macKeys: ['Mod+Y'] },
     { id: 'tab-history', title: 'Tab History (every open tab’s pages)', group: 'Ultima', keys: ['Mod+Shift+H'] },
     { id: 'open-bookmarks', title: 'Open bookmarks', group: 'Ultima', keys: ['Mod+Shift+O'] },
     { id: 'open-downloads', title: 'Open downloads', group: 'Ultima', keys: ['Mod+J'] },
@@ -152,11 +153,13 @@
     return [...['Ctrl', 'Alt', 'Shift', 'Meta'].filter((m) => mods.has(m)), key].join('+');
   }
 
+  const defaultKeys = (c, platform) => (platform === 'darwin' && c.macKeys ? c.macKeys : c.keys);
+
   // Defaults with the user's overrides applied: { commandId: [combo, …] }.
   function resolve(overrides, platform) {
     const out = {};
     for (const c of COMMANDS) {
-      const list = overrides && Array.isArray(overrides[c.id]) ? overrides[c.id] : c.keys;
+      const list = overrides && Array.isArray(overrides[c.id]) ? overrides[c.id] : defaultKeys(c, platform);
       out[c.id] = list.map((k) => normalize(k, platform));
     }
     return out;
@@ -164,7 +167,7 @@
 
   function defaultsFor(id, platform) {
     const c = COMMANDS.find((x) => x.id === id);
-    return c ? c.keys.map((k) => normalize(k, platform)) : [];
+    return c ? defaultKeys(c, platform).map((k) => normalize(k, platform)) : [];
   }
 
   const overlaps = (a, b) => a === 'global' || b === 'global' || a === b;

@@ -710,6 +710,28 @@ function syncNativeTheme() {
   nativeTheme.themeSource = ['dark', 'light'].includes(settings.data.theme) ? settings.data.theme : 'system';
 }
 
+// Ultima draws its own menus and handles its own shortcuts, so Windows and Linux get no menu bar. macOS keeps a small
+// one: there the menu bar is what makes Quit, Hide and copy/paste in text boxes work. Its items are system roles only,
+// so they never compete with Ultima's shortcuts (whose Mac defaults leave Cmd+H and Cmd+Q to the system).
+function setAppMenu() {
+  if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { role: 'appMenu' },
+    { role: 'editMenu' },
+    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] },
+  ]));
+  // run from source the Dock shows Electron's icon; the built app has its own .icns
+  if (!app.isPackaged) app.dock?.setIcon(path.join(__dirname, '..', '..', 'assets', 'icon-mac.png'));
+}
+
+// Where settings, history and the rest live, shortened for display: %APPDATA%\Ultima Browser, ~/Library/…
+function dataFolderLabel() {
+  const dir = app.getPath('userData');
+  if (process.platform === 'win32') return process.env.APPDATA && dir.startsWith(process.env.APPDATA) ? `%APPDATA%${dir.slice(process.env.APPDATA.length)}` : dir;
+  const home = os.homedir();
+  return dir.startsWith(home) ? `~${dir.slice(home.length)}` : dir;
+}
+
 // ---- window ----
 // the window and taskbar icon (the .ico carries every size Windows asks for; build/make-icons.js makes both)
 const APP_ICON = path.join(__dirname, '..', '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
@@ -819,6 +841,7 @@ function registerIpc() {
       session: sessionStore.data,
       platform: process.platform,
       versions: { app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
+      dataFolder: dataFolderLabel(),
       downloads: [...downloads.values()],
       systemDark: nativeTheme.shouldUseDarkColors,
       glass: GLASS,
@@ -1065,7 +1088,7 @@ app.whenReady().then(async () => {
   extensions = new ExtensionManager(dir);
   extLogFile = path.join(dir, 'logs', 'extensions.log');
   fs.mkdirSync(path.dirname(extLogFile), { recursive: true });
-  Menu.setApplicationMenu(null);
+  setAppMenu();
   partitionSession(PARTITION);
   registerIpc();
   await widevineReady();

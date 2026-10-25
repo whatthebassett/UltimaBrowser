@@ -5,6 +5,7 @@
 //                                                   taskbar where the bare purple emblem disappeared
 //     assets/icon.ico            exe, window and taskbar icon (16…256)
 //     assets/icon.png            256 px, for electron-builder and anything that wants a PNG
+//     assets/icon-mac.png        1024 px on Apple's icon grid (the badge at ~80%, as macOS icons sit), for the .icns
 //   logos/ultima_browser_emblem_transparent.png    the bare emblem
 //     src/renderer/logo.png      the logo in the sidebar and settings
 //     installer/ui/emblem.png    the installer's title card
@@ -19,11 +20,12 @@ const pictures = {
   emblem: { file: path.join(root, 'logos', 'ultima_browser_emblem_transparent.png'), margin: 1.08 },
 };
 const icoSizes = [16, 20, 24, 32, 40, 48, 64, 96, 128, 256];
-const pngs = { [path.join(root, 'assets', 'icon.png')]: [256, 'badge'], [path.join(root, 'src', 'renderer', 'logo.png')]: [128, 'emblem'], [path.join(root, 'installer', 'ui', 'emblem.png')]: [640, 'emblem'] };
+// [size, picture, share of the canvas the picture fills (1 = edge to edge)]
+const pngs = { [path.join(root, 'assets', 'icon.png')]: [256, 'badge'], [path.join(root, 'assets', 'icon-mac.png')]: [1024, 'badge', 0.805], [path.join(root, 'src', 'renderer', 'logo.png')]: [128, 'emblem'], [path.join(root, 'installer', 'ui', 'emblem.png')]: [640, 'emblem'] };
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ultima-icons-'));
 
-// [size, file, picture]
-const jobs = [...icoSizes.map((s) => [s, path.join(tmp, `${s}.png`), 'badge']), ...Object.entries(pngs).map(([out, [s, pic]]) => [s, out, pic])];
+// [size, file, picture, fill]
+const jobs = [...icoSizes.map((s) => [s, path.join(tmp, `${s}.png`), 'badge', 1]), ...Object.entries(pngs).map(([out, [s, pic, fill = 1]]) => [s, out, pic, fill])];
 const ps = `Add-Type -AssemblyName System.Drawing
   # a picture and the square round its visible pixels, with room to spare (margin: the square's size over theirs)
   function Load($file, $margin) {
@@ -37,12 +39,12 @@ const ps = `Add-Type -AssemblyName System.Drawing
     return @{ Bitmap = $b; Crop = (New-Object System.Drawing.Rectangle ([int](($minX + $maxX - $side) / 2)), ([int](($minY + $maxY - $side) / 2)), $side, $side) }
   }
   $pictures = @{ ${Object.entries(pictures).map(([k, p]) => `'${k}' = (Load '${p.file}' ${p.margin})`).join('; ')} }
-  foreach ($job in @(${jobs.map(([s, out, pic]) => `@(${s}, '${out}', '${pic}')`).join(', ')})) {
-    $s = $job[0]; $pic = $pictures[$job[2]]
+  foreach ($job in @(${jobs.map(([s, out, pic, fill]) => `@(${s}, '${out}', '${pic}', ${fill})`).join(', ')})) {
+    $s = $job[0]; $pic = $pictures[$job[2]]; $w = [int]($s * $job[3]); $o = [int](($s - $w) / 2)
     $d = New-Object System.Drawing.Bitmap $s, $s, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
     $g = [System.Drawing.Graphics]::FromImage($d)
     $g.InterpolationMode = 'HighQualityBicubic'; $g.PixelOffsetMode = 'HighQuality'; $g.CompositingQuality = 'HighQuality'
-    $g.DrawImage($pic.Bitmap, (New-Object System.Drawing.Rectangle 0, 0, $s, $s), $pic.Crop, [System.Drawing.GraphicsUnit]::Pixel)
+    $g.DrawImage($pic.Bitmap, (New-Object System.Drawing.Rectangle $o, $o, $w, $w), $pic.Crop, [System.Drawing.GraphicsUnit]::Pixel)
     $d.Save($job[1], [System.Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $d.Dispose() }
   foreach ($p in $pictures.Values) { $p.Bitmap.Dispose() }`;
 execFileSync('powershell', ['-NoProfile', '-Command', ps], { stdio: 'inherit' });

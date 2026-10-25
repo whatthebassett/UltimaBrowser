@@ -10,6 +10,8 @@
     "start": "electron .",
     "dist": "node installer/build.js",
     "dist:nsis": "electron-builder --win",
+    "dist:mac": "electron-builder --mac --arm64 --publish never",
+    "dmg-background": "electron build/dmg/render.js",
     "icons": "node build/make-icons.js",
     "evs:install": "python -m pip install --upgrade castlabs-evs",
     "evs:signup": "python -m castlabs_evs.account signup",
@@ -20,6 +22,7 @@
     "appId": "com.ultimabass.ultimabrowser",
     "productName": "Ultima Browser",
     "electronDist": "node_modules/electron/dist",
+    "afterPack": "build/vmp-sign-mac.js",
     "afterSign": "build/vmp-sign.js",
     "files": [
       "src/**/*",
@@ -30,6 +33,54 @@
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "icon": "assets/icon-mac.png",
+      "category": "public.app-category.productivity",
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "darkModeSupport": true,
+      "extendInfo": {
+        "NSCameraUsageDescription": "Websites you allow can use your camera.",
+        "NSMicrophoneUsageDescription": "Websites you allow can use your microphone.",
+        "NSLocationUsageDescription": "Websites you allow can use your location."
+      }
+    },
+    "dmg": {
+      "title": "${productName} ${version}",
+      "iconSize": 96,
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 205,
+          "type": "file"
+        },
+        {
+          "x": 400,
+          "y": 205,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
     },
     "nsis": {
       "artifactName": "${productName} Setup ${version} (classic).${ext}",
