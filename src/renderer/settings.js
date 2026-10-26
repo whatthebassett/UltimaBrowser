@@ -205,10 +205,11 @@ const SETTINGS_TABS = [
         sRow('Cookies and site data', 'Signs you out of websites in every space.', '<button class="btn danger" data-clear="cookies">Delete</button>'),
       ]),
       sGroup('Site permissions', [
-        sRow('Remembered decisions', 'Forget every Allow/Block choice for camera, location, notifications and more.', '<button class="btn" data-run-perm>Reset permissions</button>'),
+        sRow('Site settings', 'What each site may do: location, camera, microphone, notifications, pop-ups, sound and more.', '<button class="btn" data-tab="sites">Open site settings</button>'),
       ]),
     ].join(''),
   },
+  { id: 'sites', title: 'Site settings', icon: 'globe', desc: 'What sites may do. Change one site from the address bar menu, or every site here.', embed: (el) => pageSiteSettings(el) },
   { id: 'import', title: 'Import', icon: 'import', desc: 'Bring bookmarks, history, tabs and passwords from other browsers.', embed: (el) => pageImport(el) },
   {
     id: 'about', title: 'About', icon: 'sparkle', desc: '',

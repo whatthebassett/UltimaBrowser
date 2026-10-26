@@ -161,11 +161,13 @@ async function openExtension(ext, anchor, popout = null) {
 function closeUrlMenu() {
   EXT.menu?.remove();
   EXT.menu = null;
+  closeSitePanel();
 }
 
 function openUrlMenu() {
   if (EXT.menu) return closeUrlMenu();
   closeExtensionPopup();
+  closeSitePanel(); // always opens on the menu itself
   const el = h('<div class="url-menu" role="dialog" aria-label="Address bar menu" tabindex="-1"></div>');
   document.body.append(el);
   EXT.menu = el;
@@ -179,16 +181,21 @@ function openUrlMenu() {
     if (matchesKey(e, 'popover.close')) { e.preventDefault(); e.stopPropagation(); closeUrlMenu(); }
   });
   el.addEventListener('click', onUrlMenuClick);
+  el.addEventListener('change', (e) => { if (e.target.dataset.siteKey) onSitePanelChange(e.target); });
   return undefined;
 }
 
 function renderUrlMenu() {
   const el = EXT.menu;
+  if (!el) return;
+  el.classList.toggle('site-view', Boolean(SITE.panel));
+  if (SITE.panel) { el.innerHTML = sitePanelHtml(); return; } // the current site's settings (sitesettings.js)
   const downloading = [...B.downloads.values()].filter((d) => d.state === 'progressing').length;
   const tile = (act, ic, label, cmd, extra = '') => `<button class="um-tile" data-act="${act}" title="${esc(withKey(label, cmd))}">${icon(ic, 20)}<span>${label}</span>${extra}</button>`;
   const storeId = storeIdOf(activeTab()?.url);
   const exts = EXT.list.filter((e) => e.enabled);
   el.innerHTML = `
+    ${urlMenuSiteRow()}
     <div class="um-tiles">
       ${tile('history', 'history', 'History', 'open-history')}
       ${tile('downloads', 'download', 'Downloads', 'open-downloads', downloading ? `<span class="um-badge">${downloading}</span>` : '')}
@@ -214,6 +221,8 @@ async function onUrlMenuClick(e) {
   if (row) { openExtension(EXT.list.find((x) => x.id === row.dataset.ext), $('#urlbar')); return; }
   const act = e.target.closest('[data-act]')?.dataset.act;
   if (!act) return;
+  if (act === 'site') { openSitePanel(); return; }
+  if (act.startsWith('site-')) { onSitePanelAction(act); return; }
   closeUrlMenu();
   if (act === 'history') runCommand('open-history');
   else if (act === 'downloads') runCommand('open-downloads');
@@ -244,7 +253,7 @@ function initExtensionsUi() {
   $('#btn-cws').addEventListener('click', () => installFromStore(activeTab().url));
   // clicks anywhere else close the menu and popup
   document.addEventListener('mousedown', (e) => {
-    if (EXT.menu && !EXT.menu.contains(e.target) && !e.target.closest('#btn-url-menu, .ctx-layer')) closeUrlMenu();
+    if (EXT.menu && !EXT.menu.contains(e.target) && !e.target.closest('#btn-url-menu, .ctx-layer, .dlg-backdrop')) closeUrlMenu();
     if (EXT.popup && !EXT.popup.contains(e.target) && !e.target.closest('.ext-btn, .um-ext')) closeExtensionPopup();
   }, true);
   window.ultima.on('extensions-changed', refreshExtensions);

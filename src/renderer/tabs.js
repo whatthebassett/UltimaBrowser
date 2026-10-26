@@ -99,6 +99,7 @@ function ensureWebview(tab) {
     tab.ready = true;
     if (first && tab.zoom) wv.setZoomLevel(tab.zoom);
     if (first && tab.muted) wv.setAudioMuted(true);
+    if (first) applySiteSound(tab); // a site whose sound is blocked (sitesettings.js)
     if (first && isActive()) notifyActiveTab(tab); // the page is attached now, so it has an id to report
     if (isActive()) updateChrome();
   });
@@ -118,7 +119,9 @@ function ensureWebview(tab) {
   });
   wv.addEventListener('did-navigate', (e) => {
     if (hostname(e.url) !== hostname(tab.url)) tab.favicon = '';
+    const otherSite = siteOrigin(e.url) !== siteOrigin(tab.url);
     tab.url = e.url;
+    if (otherSite) applySiteSound(tab);
     if (isActive()) showContent(tab);
     window.ultima.addHistory({ url: e.url, visit: true });
     changed();
@@ -430,7 +433,7 @@ function duplicateTab(tab) {
 function toggleMute(tab) {
   if (!tab) return;
   tab.muted = !tab.muted;
-  if (ready(tab)) tab.webview.setAudioMuted(tab.muted);
+  if (ready(tab)) tab.webview.setAudioMuted(Boolean(tab.muted || tab.siteMuted));
   renderTabs();
 }
 

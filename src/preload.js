@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld('ultima', {
   tabHistoryGo: invoke('tab:history-go'),
   defaultBrowserStatus: invoke('default-browser:get'),
   makeDefaultBrowser: invoke('default-browser:set'),
+  siteGet: invoke('site:get'),
+  siteList: invoke('site:list'),
+  siteSet: invoke('site:set'),
+  siteReset: invoke('site:reset'),
+  siteDefault: invoke('site:default'),
+  siteData: invoke('site:data'),
+  siteClearData: invoke('site:clear-data'),
   downloadDir: invoke('downloads:dir'),
   chooseDownloadDir: invoke('downloads:choose-dir'),
   resetDownloadDir: invoke('downloads:reset-dir'),
@@ -72,7 +79,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed'];
+    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

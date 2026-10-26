@@ -421,6 +421,7 @@ async function boot() {
   $('#urlbar').onclick = (e) => runCommand(e.target.closest('#btn-url-menu') ? 'url-menu' : 'edit-url');
   $('#btn-url-menu').innerHTML = icon('more', 16);
   initExtensionsUi();
+  initSiteSettings();
   initTabHistory();
   $('#zoom-pill').onclick = () => zoom(activeTab(), 0);
 

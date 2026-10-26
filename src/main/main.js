@@ -10,6 +10,7 @@ const importer = require('./importer');
 const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
 const keymap = require('../renderer/keymap');
+const SITE_PERMS = require('../renderer/sitepermissions');
 
 app.setName('Ultima Browser');
 app.setAppUserModelId(defaultBrowser.APP_ID);
@@ -56,7 +57,8 @@ const DEFAULT_SETTINGS = {
   essentialsHeight: 44,
   onboarded: false,
   keybindings: {},
-  permissions: {},
+  permissions: {}, // origin → { key: true/false } (see sitepermissions.js)
+  siteDefaults: {}, // key → true/false, for every site without its own choice
   window: { width: 1440, height: 900, maximized: false },
 };
 
@@ -241,6 +243,36 @@ const PERMISSION_LABELS = {
 };
 
 function originOf(url) { try { return new URL(url).origin; } catch { return url || 'unknown'; } }
+
+// What a site may do (see sitepermissions.js): true = allow, false = block, undefined = ask.
+const siteAllows = (origin, key) => SITE_PERMS.effective(settings.data.permissions[origin], key, settings.data.siteDefaults);
+
+// Saves a site's choices ({ key: true/false/null }; null = back to the default). The camera-and-microphone choice
+// older versions kept as one ("media") becomes two the first time either is set.
+function setSitePermissions(origin, values) {
+  const record = { ...settings.data.permissions[origin] };
+  if (record.media !== undefined && ('camera' in values || 'microphone' in values)) {
+    record.camera ??= record.media;
+    record.microphone ??= record.media;
+    delete record.media;
+  }
+  for (const [k, v] of Object.entries(values)) { if (v === null) delete record[k]; else record[k] = v; }
+  if (Object.keys(record).length) settings.data.permissions[origin] = record;
+  else delete settings.data.permissions[origin];
+  settings.save();
+}
+
+// Blocked JavaScript or images: a Content-Security-Policy added to the site's pages (and frames from it)
+function siteContentPolicy(origin) {
+  return [siteAllows(origin, 'javascript') === false && "script-src 'none'", siteAllows(origin, 'images') === false && "img-src 'none'"].filter(Boolean).join('; ');
+}
+
+// Cookies a site set or may read (its own domain, its subdomains and the parent domains it shares cookies with)
+const cookieForHost = (cookie, host) => {
+  const d = (cookie.domain || '').replace(/^\./, '');
+  return d === host || host.endsWith(`.${d}`) || d.endsWith(`.${host}`);
+};
+const siteSessions = () => [...configuredSessions].map((name) => session.fromPartition(name));
 
 // Extensions open tabs through Ultima (Electron has no chrome.tabs.create). Web pages can't use this.
 const hookedWorkers = new Set(); // worker version ids
@@ -616,6 +648,17 @@ function setupSession(ses) {
   for (const type of ['service-worker', 'frame']) {
     ses.registerPreloadScript({ type, id: `ultima-extension-compat-${type}`, filePath: path.join(__dirname, '..', 'extension-compat.js') });
   }
+  ses.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== 'mainFrame' && details.resourceType !== 'subFrame') return callback({});
+    const policy = siteContentPolicy(originOf(details.url));
+    if (!policy) return callback({});
+    const headers = { ...details.responseHeaders };
+    const key = Object.keys(headers).find((k) => k.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
+    headers[key] = [...(headers[key] || []), policy];
+    callback({ responseHeaders: headers });
+  });
+  // Chrome's window.chrome in every web page, which Google's sign-in requires (see page-compat.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-compat', filePath: path.join(__dirname, '..', 'page-compat.js') });
   ses.serviceWorkers.on('console-message', (_e, d) => {
     const extId = extIdOf(d.sourceUrl || '');
     if (extId && d.level >= 2) extLog(extId, `background ${String(d.sourceUrl).split('/').pop()}:${d.lineNumber}`, d.level >= 3 ? 'error' : 'warning', d.message);
@@ -643,10 +686,14 @@ function setupSession(ses) {
     } catch { /* the worker stopped before it could be hooked; it is hooked when it runs again */ }
   });
 
-  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+  ses.setPermissionCheckHandler((_wc, permission, requestingOrigin, details) => {
     if (AUTO_ALLOW.has(permission)) return true;
-    const stored = settings.data.permissions[originOf(requestingOrigin)]?.[permission];
-    return stored === true;
+    const origin = originOf(requestingOrigin);
+    if (permission === 'media') {
+      const keys = details?.mediaType === 'video' ? ['camera'] : details?.mediaType === 'audio' ? ['microphone'] : ['camera', 'microphone'];
+      return keys.every((k) => siteAllows(origin, k) === true);
+    }
+    return siteAllows(origin, permission) === true;
   });
 
   ses.setPermissionRequestHandler(async (wc, requested, callback, details) => {
@@ -655,20 +702,19 @@ function setupSession(ses) {
     const permission = requested === 'media' && !details.mediaTypes?.length ? 'display-capture' : requested;
     if (AUTO_ALLOW.has(permission)) return callback(true);
     const origin = originOf(details.requestingUrl || wc.getURL());
-    const stored = settings.data.permissions[origin]?.[permission];
-    if (stored !== undefined) return callback(stored);
-    let what = PERMISSION_LABELS[permission] || `use “${permission}”`;
-    if (permission === 'media' && details.mediaTypes?.length) {
-      what = `use your ${details.mediaTypes.map((m) => (m === 'video' ? 'camera' : 'microphone')).join(' and ')}`;
-    }
+    // the camera and microphone are decided apart: a block on either refuses, and only undecided ones are asked
+    const keys = permission === 'media' ? [...new Set(details.mediaTypes.map((m) => (m === 'video' ? 'camera' : 'microphone')))] : [permission];
+    const states = keys.map((k) => siteAllows(origin, k));
+    if (states.includes(false)) return callback(false);
+    if (states.every((v) => v === true)) return callback(true);
+    const undecided = keys.filter((_k, i) => states[i] === undefined);
+    let what = permission === 'media' ? `use your ${undecided.join(' and ')}`
+      : SITE_PERMS.BY_KEY[permission]?.what || PERMISSION_LABELS[permission] || `use “${permission}”`;
     if (permission === 'openExternal' && details.externalURL) what = `open ${new URL(details.externalURL).protocol} links in another app`;
     // asked in Ultima's own dialog; no window to ask in means no
     const answer = await askUi('permission', { site: hostOf(origin) || origin, what });
     const allow = Boolean(answer?.allow);
-    if (answer?.remember) {
-      settings.data.permissions[origin] = { ...settings.data.permissions[origin], [permission]: allow };
-      settings.save();
-    }
+    if (answer?.remember) setSitePermissions(origin, Object.fromEntries(undecided.map((k) => [k, allow])));
     callback(allow);
   });
 
@@ -817,7 +863,13 @@ app.on('web-contents-created', (_e, wc) => {
   hookTabEvents(wc);
   wc.on('context-menu', (_ev, params) => pageContextMenu(wc, params));
   wc.setWindowOpenHandler(({ url, disposition }) => {
-    // Real popups (OAuth, payment flows) need window.opener, so give them a window of their own.
+    // Real popups (OAuth, payment flows) need window.opener, so give them a window of their own, unless the site's
+    // pop-ups are blocked (tabs the user opens from links aren't pop-ups).
+    if (disposition === 'new-window' && siteAllows(originOf(wc.getURL()), 'popups') === false) {
+      const origin = originOf(wc.getURL());
+      send('popup-blocked', { origin, site: hostOf(origin) || origin, url });
+      return { action: 'deny' };
+    }
     if (disposition === 'new-window') {
       return {
         action: 'allow',
@@ -910,6 +962,48 @@ function registerIpc() {
   handle('default-browser:set', () => defaultBrowser.makeDefault());
   handle('keys:recording', (on) => { recordingKeys = Boolean(on); });
   handle('permissions:reset', () => { settings.data.permissions = {}; settings.save(); });
+  // ---- site settings (see sitepermissions.js) ----
+  const webOrigin = (o) => { try { const u = new URL(o); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } };
+  handle('site:get', (o) => {
+    const origin = webOrigin(o);
+    return origin && { origin, record: { ...settings.data.permissions[origin] }, defaults: { ...settings.data.siteDefaults } };
+  });
+  handle('site:list', () => ({
+    sites: Object.entries(settings.data.permissions).filter(([o, r]) => webOrigin(o) && r && Object.keys(r).length).map(([origin, record]) => ({ origin, record })),
+    defaults: { ...settings.data.siteDefaults },
+  }));
+  handle('site:set', ({ origin: o, key, value }) => {
+    const origin = webOrigin(o);
+    if (!origin || !SITE_PERMS.BY_KEY[key] || !(value === true || value === false || value === null)) return;
+    setSitePermissions(origin, { [key]: value });
+  });
+  handle('site:reset', (o) => { const origin = webOrigin(o); if (origin) { delete settings.data.permissions[origin]; settings.save(); } });
+  handle('site:default', ({ key, value }) => {
+    if (!SITE_PERMS.BY_KEY[key] || !(value === true || value === false || value === null)) return;
+    // stored only when it differs from the built-in default (Ask for ask-kind, Allow for allow-kind): that's Block
+    if (value === false) settings.data.siteDefaults[key] = false;
+    else delete settings.data.siteDefaults[key];
+    settings.save();
+  });
+  // cookies the site has in this space, and clearing everything it stored, in every space
+  handle('site:data', async ({ origin: o, partition }) => {
+    const origin = webOrigin(o);
+    if (!origin) return null;
+    const host = new URL(origin).hostname;
+    const cookies = (await partitionSession(partition).cookies.get({})).filter((c) => cookieForHost(c, host));
+    return { cookies: cookies.length };
+  });
+  handle('site:clear-data', async (o) => {
+    const origin = webOrigin(o);
+    if (!origin) return;
+    const host = new URL(origin).hostname;
+    for (const ses of siteSessions()) {
+      for (const c of (await ses.cookies.get({})).filter((x) => cookieForHost(x, host))) {
+        await ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {});
+      }
+      await ses.clearStorageData({ origin, storages: ['filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }).catch(() => {});
+    }
+  });
   handle('overlay:set', ({ color, symbolColor }) => {
     if (win && process.platform !== 'darwin') win.setTitleBarOverlay({ color: GLASS ? CLEAR : color, symbolColor, height: 40 });
   });

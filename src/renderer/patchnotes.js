@@ -3,6 +3,19 @@
 // Each item is [what, a sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.1.2',
+    date: '2026-10-26',
+    new: [
+      ['Site settings', 'Choose what each site may do: location, camera, microphone, notifications, pop-ups, sound, images, JavaScript and more. Open the current site’s from the top of the address bar menu, or every site’s, with defaults for all of them, in Settings → Site settings. You can see and clear a site’s cookies and data there too.'],
+    ],
+    improved: [
+      ['Camera and microphone', 'Each is its own permission now, so a site can have one without the other. Choices you already made apply to both.'],
+    ],
+    fixed: [
+      ['Signing in to Google', 'Google no longer turns Ultima away with “This browser or app may not be secure.”'],
+    ],
+  },
+  {
     version: '0.1.1',
     date: '2026-10-25',
     fixed: [
