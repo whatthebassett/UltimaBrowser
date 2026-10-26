@@ -159,7 +159,7 @@ function showDialog({ title, message, buttons, checkbox, fields, icon: ic }) {
       <div class="dlg-title">${esc(title)}</div>
       ${message ? `<div class="dlg-msg">${esc(message)}</div>` : ''}
       ${checkbox ? `<label class="dlg-check"><input type="checkbox" ${checkbox.checked ? 'checked' : ''}> ${esc(checkbox.label)}</label>` : ''}
-      ${(fields || []).map((f) => `<label class="dlg-field"><span>${esc(f.label)}</span><input class="field" data-field="${esc(f.id)}" value="${esc(f.value ?? '')}" spellcheck="false"></label>`).join('')}
+      ${(fields || []).map((f) => `<label class="dlg-field"><span>${esc(f.label)}</span><input class="field" type="${f.type === 'password' ? 'password' : 'text'}" data-field="${esc(f.id)}" value="${esc(f.value ?? '')}" spellcheck="false" autocomplete="off"></label>`).join('')}
       <div class="dlg-buttons">${buttons.map((b) => `<button class="btn ${b.primary ? 'primary' : ''} ${b.danger ? 'danger-fill' : ''}" data-id="${esc(b.id)}">${esc(b.label)}</button>`).join('')}</div>
     </div></div>`);
     const restoreFocus = document.activeElement;

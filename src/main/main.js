@@ -1167,6 +1167,29 @@ app.on('second-instance', (_e, argv) => {
 });
 
 // macOS hands links over as an event, also before the window exists
+// A server or proxy asking for a username and password (Basic/Digest, or NTLM/Negotiate when Windows' own sign-in
+// isn't accepted), e.g. a filtering proxy on a school or office network. Electron cancels these unless asked, which
+// leaves pages waiting on requests that never finish; Chrome asks, and so does Ultima. Requests asking for the same
+// server at once (dozens, behind a proxy) share one dialog; Chromium then reuses the answer for that server.
+const pendingLogins = new Map(); // host|realm|proxy → Promise of the answer
+app.on('login', (event, _wc, details, authInfo, callback) => {
+  event.preventDefault();
+  const key = `${authInfo.host}:${authInfo.port}|${authInfo.realm}|${authInfo.isProxy}`;
+  let answer = pendingLogins.get(key);
+  if (!answer) {
+    const defaultPort = { http: 80, https: 443 }[authInfo.scheme] || (authInfo.isProxy ? 0 : 443);
+    answer = askUi('login', {
+      host: authInfo.port && authInfo.port !== defaultPort ? `${authInfo.host}:${authInfo.port}` : authInfo.host,
+      realm: authInfo.realm || '',
+      proxy: authInfo.isProxy,
+      retry: details.firstAuthAttempt === false,
+      insecure: !authInfo.isProxy && /^http:/i.test(details.url || ''),
+    }).finally(() => pendingLogins.delete(key));
+    pendingLogins.set(key, answer);
+  }
+  answer.then((a) => (a?.username ? callback(a.username, a.password || '') : callback()), () => callback());
+});
+
 app.on('open-url', (e, url) => {
   e.preventDefault();
   if (win && !win.isDestroyed()) send('open-url', { url, background: false });

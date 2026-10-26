@@ -3,6 +3,13 @@
 // Each item is [what, a sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.1.3',
+    date: '2026-10-26',
+    fixed: [
+      ['Signing in on school and office networks', 'When a network’s proxy or a website asks for a username and password, Ultima asks you, like other browsers do. Before, it quietly turned these requests down, which could leave a page stuck loading.'],
+    ],
+  },
+  {
     version: '0.1.2',
     date: '2026-10-26',
     new: [

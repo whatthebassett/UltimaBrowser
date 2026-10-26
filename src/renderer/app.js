@@ -262,6 +262,20 @@ async function onAsk({ id, kind, payload }) {
       checkbox: { label: 'Remember my decision for this site', checked: true },
     });
     answer = { allow: r.id === 'allow', remember: r.checked && r.id !== null };
+  } else if (kind === 'login') {
+    // a server or proxy asking for a username and password (see the app 'login' handler in main.js)
+    const r = await showDialog({
+      icon: 'key',
+      title: payload.proxy ? `The proxy ${payload.host} needs you to sign in` : `${payload.host} needs you to sign in`,
+      message: [
+        payload.retry && 'That username or password didn’t work. Try again.',
+        payload.realm && `It says: “${payload.realm}”`,
+        payload.insecure && 'Your sign-in will be sent over a connection that isn’t private.',
+      ].filter(Boolean).join(' '),
+      fields: [{ id: 'username', label: 'Username' }, { id: 'password', label: 'Password', type: 'password' }],
+      buttons: [{ id: 'cancel', label: 'Cancel' }, { id: 'signin', label: 'Sign in', primary: true }],
+    });
+    answer = r.id === 'signin' && r.values.username ? { username: r.values.username, password: r.values.password } : null;
   }
   window.ultima.answerAsk({ id, answer });
 }
