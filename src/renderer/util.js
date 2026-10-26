@@ -70,6 +70,11 @@ document.addEventListener('error', (e) => {
   if (img.tagName === 'IMG' && img.dataset.fallback) img.replaceWith(h(img.dataset.fallback));
 }, true);
 
+// Copies through the main process (see clipboard:write), then confirms with a toast, or says it didn't work.
+async function copyText(text, message = 'Copied') {
+  try { await window.ultima.copyText(String(text)); toast(message); } catch { toast('Couldn’t copy to the clipboard'); }
+}
+
 function toast(message, action) {
   const t = h(`<div class="toast"><span>${esc(message)}</span>${action ? `<button>${esc(action.label)}</button>` : ''}</div>`);
   if (action) t.querySelector('button').onclick = () => { action.run(); t.remove(); };

@@ -3,6 +3,14 @@
 // Each item is [what, a sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.1.1',
+    date: '2026-10-25',
+    fixed: [
+      ['Copying a page’s address', 'Copy page URL (Ctrl+Shift+C), Copy link on a tab, and Copy in the bookmark menus put the link on your clipboard, even while you’re on a page.'],
+      ['Netflix and protected video on Mac', 'The Mac version is signed for Widevine, so streaming services play.'],
+    ],
+  },
+  {
     version: '0.1.0',
     date: '2026-10-25',
     title: 'The first release of Ultima',

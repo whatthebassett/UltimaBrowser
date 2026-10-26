@@ -3,8 +3,9 @@
 #   Windows: the cinematic installer (installer/build.js) → "Ultima Browser Setup <version>.exe"
 #   macOS:   Apple Silicon disk image and zip → "Ultima Browser-<version>-arm64.dmg"
 # Netflix and other Widevine sites need each build VMP-signed with castLabs EVS: add the repository secrets
-# EVS_ACCOUNT_NAME and EVS_PASSWD (Settings → Secrets and variables → Actions). Without them the builds still finish,
-# unsigned for VMP (protected video then only plays on test servers).
+# EVS_ACCOUNT_NAME and EVS_PASSWD (Settings → Secrets and variables → Actions). Each build's signature is then
+# checked (verify-pkg). Without the secrets the builds still finish, with a warning, carrying only castLabs'
+# development signature (protected video plays only on test servers), and a version tag won't publish a release.
 # The Mac app is ad-hoc signed, not with an Apple Developer ID: on first launch macOS asks people to allow it in
 # System Settings → Privacy & Security → Open Anyway.
 name: Build
@@ -14,9 +15,8 @@ on:
   push:
     tags: ['v*']
 
+# The EVS login reaches only the build steps that sign (below), not the other steps or third-party actions.
 env:
-  EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
-  EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
   EVS_NO_ASK: '1'
   ULTIMA_SKIP_VMP: ${{ secrets.EVS_ACCOUNT_NAME == '' && '1' || '' }}
 
@@ -36,6 +36,15 @@ jobs:
       # castLabs' Electron (package.json's postinstall does this too; npm may skip install scripts)
       - run: node node_modules/electron/install.js
       - run: npm run dist
+        env:
+          EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+          EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
+      - name: Check the Widevine (VMP) signature
+        if: env.ULTIMA_SKIP_VMP != '1'
+        run: python -m castlabs_evs.vmp verify-pkg dist/win-unpacked
+      - name: Warn that this build can't play DRM
+        if: env.ULTIMA_SKIP_VMP == '1'
+        run: echo "::warning::No EVS secrets, so this build has only castLabs' development VMP signature. Netflix and other DRM sites won't play in it."
       - uses: actions/upload-artifact@v4
         with:
           name: ultima-windows
@@ -56,6 +65,15 @@ jobs:
       # castLabs' Electron (package.json's postinstall does this too; npm may skip install scripts)
       - run: node node_modules/electron/install.js
       - run: npm run dist:mac
+        env:
+          EVS_ACCOUNT_NAME: ${{ secrets.EVS_ACCOUNT_NAME }}
+          EVS_PASSWD: ${{ secrets.EVS_PASSWD }}
+      - name: Check the Widevine (VMP) signature
+        if: env.ULTIMA_SKIP_VMP != '1'
+        run: python3 -m castlabs_evs.vmp verify-pkg dist/mac-arm64
+      - name: Warn that this build can't play DRM
+        if: env.ULTIMA_SKIP_VMP == '1'
+        run: echo "::warning::No EVS secrets, so this build has only castLabs' development VMP signature. Netflix and other DRM sites won't play in it."
       - uses: actions/upload-artifact@v4
         with:
           name: ultima-mac
@@ -71,6 +89,12 @@ jobs:
     permissions:
       contents: write
     steps:
+      # a release people download must play DRM: never publish builds with only the development signature
+      - name: Require VMP-signed builds
+        if: env.ULTIMA_SKIP_VMP == '1'
+        run: |
+          echo "::error::Add the EVS_ACCOUNT_NAME and EVS_PASSWD secrets: without them the builds can't play Netflix or other DRM, so they aren't published."
+          exit 1
       - uses: actions/download-artifact@v4
         with: { path: out, merge-multiple: true }
       - uses: softprops/action-gh-release@v2

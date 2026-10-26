@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setOverlay: invoke('overlay:set'),
   setNativeTheme: invoke('theme:native'),
   faviconData: invoke('favicon:data'),
+  copyText: invoke('clipboard:write'),
   tabHistory: invoke('tab:history'),
   tabHistoryGo: invoke('tab:history-go'),
   defaultBrowserStatus: invoke('default-browser:get'),

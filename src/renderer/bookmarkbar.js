@@ -181,7 +181,7 @@ async function bookmarkBarMenu(e) {
     case 'open-bg': openBookmark(n, 'background'); break;
     case 'open-all': openAllBookmarks(n.id); break;
     case 'edit': editBookmark(n); break;
-    case 'copy': navigator.clipboard.writeText(n.url); toast('Link copied'); break;
+    case 'copy': copyText(n.url, 'Link copied'); break;
     case 'delete': deleteBookmark(n); break;
     case 'add-page': addBookmarkPage(parent, index); break;
     case 'add-folder': addBookmarkFolder(parent, index); break;

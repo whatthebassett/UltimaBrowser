@@ -196,7 +196,7 @@ async function bmpItemMenu(n, pos) {
     case 'show': bmpShowFolder(n.id); break;
     case 'reveal': bmpShowFolder(n.parent); break;
     case 'edit': editBookmark(n); break;
-    case 'copy': navigator.clipboard.writeText(n.url); toast('Link copied'); break;
+    case 'copy': copyText(n.url, 'Link copied'); break;
     case 'delete': deleteBookmark(n); break;
     case 'add-page': addBookmarkPage(n.id); break;
     case 'add-folder': addBookmarkFolder(n.id); break;

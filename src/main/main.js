@@ -863,6 +863,8 @@ function registerIpc() {
   });
   // A favicon as a data: URL, so the UI can read its colors (a canvas can't read a cross-site image). Fetched through
   // the UI's own session, so it usually comes straight from the cache the sidebar loaded it into. Images only, ≤ 1 MB.
+  // Copying from the UI. The web clipboard API refuses while a page (not the UI) has focus, which is most of the time.
+  handle('clipboard:write', (text) => { if (typeof text === 'string' && text.length <= 1e6) clipboard.writeText(text); });
   handle('favicon:data', async (url) => {
     if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || !win) return null;
     try {

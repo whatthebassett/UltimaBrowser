@@ -658,7 +658,7 @@ async function tabContextMenu(tab) {
     case 'set-home': setPinnedPage(tab); break;
     case 'edit-home': editPinnedLink(tab); break;
     case 'mute': toggleMute(tab); break;
-    case 'copy': navigator.clipboard.writeText(tab.url); toast('Link copied'); break;
+    case 'copy': copyText(tab.url, 'Link copied'); break;
     case 'close': closeTab(tab.id); break;
     case 'remove': closeTab(tab.id, { remove: true }); break;
     case 'close-others': regular.filter((t) => t !== tab).forEach((t) => closeTab(t.id)); break;

@@ -103,7 +103,7 @@ function runCommand(cmd) {
     case 'home': return tab && navigate(tab, NEWTAB);
     case 'bookmark': return toggleBookmark();
     case 'copy-url':
-      if (tab) { navigator.clipboard.writeText(tab.url); toast('URL copied'); }
+      if (tab) copyText(tab.url, 'URL copied');
       return undefined;
     case 'find': return openFind();
     case 'fill-login': return fillLogin(tab);
