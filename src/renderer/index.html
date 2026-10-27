@@ -5,6 +5,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>Ultima Browser</title>
   <link rel="stylesheet" href="fonts/inter.css">
+  <link rel="stylesheet" href="welcome.css">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -33,7 +34,7 @@
       <div id="space-bar" class="space-bar"></div>
       <div class="sb-foot">
         <button class="icon-btn" id="btn-palette" data-cmd="palette" data-label="Control Palette"></button>
-        <button class="icon-btn" id="btn-bookmarks" data-cmd="open-bookmarks" data-label="Bookmarks"></button>
+        <button class="icon-btn" id="btn-bookmarks" data-cmd="open-bookmarks" data-label="Waypoints"></button>
         <button class="icon-btn" id="btn-history" data-cmd="open-history" data-label="History"></button>
         <button class="icon-btn" id="btn-downloads" data-cmd="open-downloads" data-label="Downloads"><span class="dl-badge" hidden></span></button>
         <button class="icon-btn" id="btn-import" data-cmd="open-import" data-label="Import browser data"></button>
@@ -53,11 +54,11 @@
           <div id="ext-actions" class="ext-actions"></div>
           <button class="pill" id="zoom-pill" hidden></button>
           <button class="icon-btn" id="btn-key" data-cmd="fill-login" data-label="Fill saved login" hidden></button>
-          <button class="icon-btn" id="btn-star" data-cmd="bookmark" data-label="Bookmark this page"></button>
+          <button class="icon-btn" id="btn-star" data-cmd="bookmark" data-label="Add this page to Waypoints"></button>
           <button class="icon-btn" id="btn-find" data-cmd="find" data-label="Find in page"></button>
         </div>
       </header>
-      <nav id="bookmark-bar" class="bookmark-bar instant" aria-label="Bookmarks bar"></nav>
+      <nav id="bookmark-bar" class="bookmark-bar instant" aria-label="Waypoints bar"></nav>
       <div id="viewport">
         <div id="internal" class="internal" hidden></div>
         <div id="findbar" class="findbar" hidden>
@@ -77,7 +78,7 @@
     <div id="palette" role="dialog" aria-label="Control Palette">
       <div class="palette-input">
         <span class="pi-icon"></span>
-        <input id="palette-input" placeholder="Search tabs, bookmarks, history, commands — or type a URL" spellcheck="false" autocomplete="off">
+        <input id="palette-input" placeholder="Search tabs, Waypoints, history, commands — or type a URL" spellcheck="false" autocomplete="off">
         <span class="pi-mode" id="palette-mode"></span>
       </div>
       <div id="palette-results" class="palette-results"></div>
@@ -103,6 +104,10 @@
   <script src="tabdrag.js"></script>
   <script src="spaces.js"></script>
   <script src="theme.js"></script>
+  <script src="sidebarstyle.js"></script>
+  <script src="taskmanager.js"></script>
+  <script src="welcome-fx.js"></script>
+  <script src="welcome.js"></script>
   <script src="windows.js"></script>
   <script src="extensions.js"></script>
   <script src="sitesettings.js"></script>

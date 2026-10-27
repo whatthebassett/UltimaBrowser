@@ -18,6 +18,8 @@
   --topbar-h: 40px;
   /* Inter everywhere; emoji fall back to the system emoji font */
   --font: "Inter", "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
+  /* the sidebar's own font, text size and tab height (Settings → Appearance → Sidebar style; sidebarstyle.js) */
+  --sb-font: var(--font); --sb-text: 13px; --sb-row: 34px;
   /* glass tints layered over the system backdrop (Acrylic / Mica) */
   --chrome-solid: #111114;
   --space: var(--accent);
@@ -86,6 +88,8 @@ kbd {
   background-attachment: fixed;
   box-shadow: inset -1px 0 0 var(--glass-edge);
 }
+/* the sidebar style also goes with a tab dragged out of it, or fading away as it closes */
+#sidebar, .drag-card, .tab-ghost { font-family: var(--sb-font); font-size: var(--sb-text); }
 .sb-head { height: var(--topbar-h); display: flex; align-items: center; justify-content: space-between; padding-left: 6px; flex: none; }
 body.mac .sb-head { padding-left: 76px; }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; }
@@ -106,7 +110,7 @@ body.mac .sb-head { padding-left: 76px; }
 
 .urlbar {
   position: relative; overflow: hidden;
-  display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 10px;
+  display: flex; align-items: center; gap: 8px; height: calc(var(--sb-row) + 2px); padding: 0 12px; border-radius: 10px;
   background: var(--glass-chip); color: var(--text-2); text-align: left; flex: none;
   box-shadow: inset 0 0 0 1px var(--glass-edge), 0 1px 2px rgba(0, 0, 0, 0.08);
 }
@@ -184,7 +188,7 @@ body.card-dragging .pin::before { opacity: 0; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .newtab-row {
-  display: flex; align-items: center; gap: 10px; height: 34px; padding: 0 10px; border-radius: 8px; color: var(--text-2); flex: none;
+  display: flex; align-items: center; gap: 10px; height: var(--sb-row); padding: 0 10px; border-radius: 8px; color: var(--text-2); flex: none;
 }
 .newtab-row:hover { background: var(--glass-chip); color: var(--text); }
 .newtab-row .label { flex: 1; text-align: left; }
@@ -196,7 +200,7 @@ body.card-dragging .pin::before { opacity: 0; }
 .tabs::-webkit-scrollbar { width: 6px; }
 .tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 .tab {
-  display: flex; align-items: center; gap: 10px; height: 34px; min-height: 34px; padding: 0 6px 0 10px;
+  display: flex; align-items: center; gap: 10px; height: var(--sb-row); min-height: var(--sb-row); padding: 0 6px 0 10px;
   border-radius: 8px; color: var(--text-2); position: relative;
 }
 .tab:hover { background: var(--glass-chip); color: var(--text); }
@@ -411,6 +415,7 @@ select.field.dd-open { background-image: var(--dd-chevron-up), linear-gradient(1
 .dd-item.on.active { background: color-mix(in srgb, var(--accent) 26%, transparent); }
 .dd-item.on::before { content: ""; position: absolute; left: 4px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--accent); }
 .dd-item.disabled { opacity: 0.4; }
+.dd-item.dd-heading { opacity: 1; height: 28px; padding-top: 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
 .dd-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .dd-check { width: 14px; display: grid; place-items: center; color: var(--accent); flex: none; }
 
@@ -436,6 +441,46 @@ select.field.dd-open { background-image: var(--dd-chevron-up), linear-gradient(1
 .empty { color: var(--text-3); padding: 28px 10px; text-align: center; }
 /* bookmarks page: folder tree | open folder */
 .page.bm-page { max-width: 1120px; }
+
+/* ---------- task manager (taskmanager.js) ---------- */
+.page.tm-page { max-width: 1040px; }
+.tm-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.tm-card {
+  position: relative; overflow: hidden; padding: 14px 16px 44px; border-radius: 14px; background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.tm-card-label { font-size: 12px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.tm-card-value { margin-top: 4px; font-size: 24px; font-weight: 650; letter-spacing: -0.3px; font-variant-numeric: tabular-nums; }
+.tm-card-sub { margin-top: 2px; font-size: 12px; color: var(--text-2); }
+.tm-spark { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 40px; }
+.tm-spark-area { fill: color-mix(in srgb, var(--accent) 16%, transparent); }
+.tm-spark-line { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.tm-table { border-radius: 14px; background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); overflow: hidden; }
+.tm-head, .tm-row { display: grid; grid-template-columns: minmax(0, 1fr) 96px 72px 72px 96px 76px; align-items: center; gap: 8px; padding: 0 12px; }
+.tm-head { height: 38px; border-bottom: 1px solid var(--border); }
+.tm-col { display: flex; align-items: center; gap: 4px; height: 28px; padding: 0 6px; border-radius: 7px; font-size: 12px; font-weight: 600; color: var(--text-3); }
+.tm-col.num { justify-content: flex-end; }
+.tm-col:hover, .tm-col.on { color: var(--text); }
+.tm-col:hover { background: var(--hover); }
+.tm-arrow { display: grid; place-items: center; width: 12px; }
+.tm-row { min-height: 46px; border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.tm-row:last-child { border-bottom: 0; }
+.tm-row:hover { background: var(--hover); }
+.tm-row.tm-tab { cursor: pointer; }
+.tm-row .num { text-align: right; padding-right: 6px; font-variant-numeric: tabular-nums; color: var(--text-2); }
+.tm-row.tm-busy .tm-cpu { color: var(--warn, #f59e0b); font-weight: 600; }
+.tm-task { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.tm-icon { display: grid; place-items: center; width: 22px; flex: none; color: var(--text-2); }
+.tm-logo .logo { width: 20px; height: 20px; }
+.tm-names { display: flex; flex-direction: column; min-width: 0; }
+.tm-title, .tm-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tm-title { font-weight: 550; }
+.tm-sub { font-size: 11.5px; color: var(--text-3); }
+.tm-end-col { display: flex; justify-content: flex-end; }
+.tm-end { height: 28px; padding: 0 12px; opacity: 0; }
+.tm-row:hover .tm-end, .tm-end:focus-visible { opacity: 1; }
+.tm-end:hover { background: var(--danger); color: #fff; box-shadow: none; }
+.tm-body .empty { padding: 24px; }
 .bm-page .toolbar { flex-wrap: wrap; }
 .bm-page .toolbar .field { min-width: 200px; }
 .bm-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; }
@@ -614,6 +659,15 @@ button.bmc:hover { background: var(--hover); color: var(--text); }
 .ctx-keys { display: flex; gap: 3px; align-items: center; color: var(--text-3); margin-left: 16px; }
 .ctx-keys kbd { padding: 2px 5px; }
 .ctx-sep { height: 1px; margin: 5px 8px; background: var(--border); }
+/* the row of quick actions at the top of a page's menu (Copy, Paste, Waypoints, Reload) */
+.ctx-actions { display: flex; gap: 2px; padding: 1px 1px 5px; margin-bottom: 5px; border-bottom: 1px solid var(--border); }
+.ctx-act { flex: 1; height: 34px; border-radius: 8px; display: grid; place-items: center; color: var(--text-2); transition: background 0.12s, color 0.12s, transform 0.12s; }
+.ctx-act:hover:not(:disabled) { background: var(--hover); color: var(--text); }
+.ctx-act:active:not(:disabled) { transform: scale(0.94); }
+.ctx-act:disabled { opacity: 0.35; cursor: default; }
+.ctx-act.on { color: var(--accent); }
+.ctx-act.on .ic { fill: currentColor; }
+.ctx-act:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* ---------- dialogs ---------- */
 .dlg-backdrop {
@@ -740,6 +794,8 @@ body.collapsed .theme-editor { left: 72px; }
 .s-search:focus-within { box-shadow: inset 0 0 0 1.5px var(--accent); }
 .s-search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); }
 .s-tabs { display: flex; flex-direction: column; gap: 2px; }
+.s-tabs-head { padding: 14px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--text-3); }
+.s-tabs-head:first-child { padding-top: 0; }
 .s-tab {
   display: flex; align-items: center; gap: 11px; height: 36px; padding: 0 10px; border-radius: 9px; color: var(--text-2);
   text-align: left; font-weight: 500; transition: background 0.12s, color 0.12s;
@@ -817,6 +873,9 @@ details.pn-release > summary::-webkit-details-marker { display: none; }
   .s-nav-head span, .s-tab span, .s-search { display: none; }
   .s-nav-head { justify-content: center; padding: 0; }
   .s-tab { justify-content: center; padding: 0; }
+  /* icons only: a line between sections instead of their names */
+  .s-tabs-head { height: 1px; margin: 7px 10px; padding: 0; font-size: 0; background: var(--border); }
+  .s-tabs-head:first-child { display: none; }
   .s-main { padding: 32px 24px 64px; }
 }
 
@@ -986,7 +1045,9 @@ body.collapsed .url-shield { display: none; }
 .sbe-tile.dragging { opacity: 0.4; }
 .sbe-tile span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sbe-empty { grid-column: 1 / -1; text-align: center; color: var(--text-3); font-size: 12.5px; padding: 8px; }
-.sbe .s-actions { margin-top: 0; }
+/* inside Settings → Appearance: its groups spaced like the others there (.s-body) */
+.sbe { display: flex; flex-direction: column; gap: 26px; }
+.sbe .s-actions { margin-top: -14px; }
 
 /* ---------- bookmarks bar (like Chrome's) ---------- */
 /* Slides open and shut: the bar grows to its height while its buttons drop into place. Hidden, it keeps its
@@ -1038,8 +1099,8 @@ body.bm-bar-center .bmb-items { justify-content: safe center; } /* back to the l
 .tfolder { display: flex; flex-direction: column; gap: 2px; }
 .tfolder.dragging { opacity: 0.4; }
 .tfolder-head {
-  display: flex; align-items: center; gap: 8px; height: 30px; min-height: 30px; padding: 0 8px 0 6px; border-radius: 8px;
-  color: var(--text); font-weight: 600; font-size: 12.5px; cursor: default; position: relative;
+  display: flex; align-items: center; gap: 8px; height: calc(var(--sb-row) - 4px); min-height: calc(var(--sb-row) - 4px); padding: 0 8px 0 6px; border-radius: 8px;
+  color: var(--text); font-weight: 600; font-size: calc(var(--sb-text) - 0.5px); cursor: default; position: relative;
 }
 .tfolder-head:hover { background: var(--glass-chip); }
 .tfolder-chev { display: grid; place-items: center; width: 14px; color: var(--text-3); transform: rotate(90deg); transition: transform 0.15s; flex: none; }
@@ -1083,7 +1144,7 @@ body.collapsed .tfolder-tabs { margin-left: 0; padding-left: 0; border-left: 0; 
   flex: none; border-radius: 8px; background: color-mix(in srgb, var(--accent) 13%, transparent);
   box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--accent) 45%, transparent);
 }
-.drag-slot.tab-slot { height: 34px; min-height: 34px; }
+.drag-slot.tab-slot { height: var(--sb-row); min-height: var(--sb-row); }
 .drag-slot.pin-slot { height: var(--ess-h, 44px); border-radius: 10px; }
 body.card-dragging, body.card-dragging * { cursor: grabbing !important; user-select: none !important; }
 body.card-dragging .tab:hover, body.card-dragging .pin:hover { background: none; }
@@ -1130,14 +1191,15 @@ body.split-resizing, body.split-resizing * { cursor: col-resize !important; user
 }
 .tsplit.active { background: var(--glass-active); }
 .tsplit .tab.split-part.active { background: color-mix(in srgb, var(--surface) 55%, transparent); box-shadow: inset 0 0 0 1px var(--glass-edge); }
-.tsplit-div { width: 1px; height: 16px; background: var(--glass-edge); flex: none; }
-.tsplit .drag-slot { flex: 1 1 0; height: 30px; min-height: 30px; }
+/* the line between parts: in the text color, so it shows on any space theme, light or dark */
+.tsplit-div { width: 2px; height: 55%; margin: 0 2px; border-radius: 1px; background: color-mix(in srgb, var(--text) 30%, transparent); flex: none; }
+.tsplit .drag-slot { flex: 1 1 0; height: calc(var(--sb-row) - 4px); min-height: calc(var(--sb-row) - 4px); }
 .tsplit.pop { animation: split-pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1); }
 @keyframes split-pop { 0% { box-shadow: inset 0 0 0 1px var(--glass-edge), 0 0 0 0 color-mix(in srgb, var(--accent) 60%, transparent); }
   40% { box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 25%, transparent); }
   100% { box-shadow: inset 0 0 0 1px var(--glass-edge), 0 0 0 0 transparent; } }
 body.collapsed .tsplit { flex-direction: column; }
-body.collapsed .tsplit-div { width: 16px; height: 1px; }
+body.collapsed .tsplit-div { width: 55%; height: 2px; margin: 2px 0; }
 @media (prefers-reduced-motion: reduce) {
   .split-handle.flash::before, .tsplit.pop { animation: none; }
 }
@@ -1167,14 +1229,24 @@ body.pane-dragging, body.pane-dragging * { cursor: grabbing !important; user-sel
 /* while a tab card is dragged over a split row, its dividers make way for the gap */
 body.card-dragging .tsplit-div { display: none; }
 /* a split view's parts are just their icons, to save space (the name is in the tooltip); × appears on hover */
-.tsplit .tab.split-part { flex: 1 1 0; min-width: 0; height: 30px; min-height: 30px; padding: 0; gap: 0; justify-content: center; position: relative; }
+.tsplit .tab.split-part { flex: 1 1 0; min-width: 0; height: calc(var(--sb-row) - 4px); min-height: calc(var(--sb-row) - 4px); padding: 0; gap: 0; justify-content: center; position: relative; }
 .tsplit .tab.split-part .title { display: none; }
+/* The × sits inside the part, on its right, and eases in on hover (and on the part in front) while the icon slides
+   aside to make room for it, so the two never overlap however narrow the part is. */
+.tsplit .tab.split-part > :not(.tab-close) { transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.tsplit .tab.split-part:hover > :not(.tab-close), .tsplit .tab.split-part.active > :not(.tab-close) { transform: translateX(-9px); }
 .tsplit .tab.split-part .tab-close {
-  position: absolute; top: 1px; right: 2px; width: 16px; height: 16px; border-radius: 50%; display: none;
-  background: var(--surface); box-shadow: 0 0 0 1px var(--glass-edge);
+  position: absolute; top: 50%; right: 4px; width: 20px; height: 20px; border-radius: 6px; display: grid;
+  background: none; box-shadow: none; color: var(--text-3);
+  opacity: 0; transform: translateY(-50%) scale(0.7); pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.18s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.12s, color 0.12s;
 }
-.tsplit .tab.split-part .tab-close .ic { width: 10px; height: 10px; }
-.tsplit .tab.split-part:hover .tab-close { display: grid; opacity: 1; }
+.tsplit .tab.split-part .tab-close .ic { width: 11px; height: 11px; }
+.tsplit .tab.split-part:hover .tab-close, .tsplit .tab.split-part.active .tab-close { opacity: 1; transform: translateY(-50%); pointer-events: auto; }
+.tsplit .tab.split-part .tab-close:hover { background: var(--active); color: var(--text); }
+/* icons only in the compact sidebar: no × there, as on other tabs */
+body.collapsed .tsplit .tab.split-part .tab-close { display: none; }
+body.collapsed .tsplit .tab.split-part > :not(.tab-close) { transform: none; }
 
 /* ---------- private browsing (windows.js) ---------- */
 /* a private window: no spaces, pinned tabs, Essentials or extensions, and a badge by the logo */

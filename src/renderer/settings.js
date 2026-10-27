@@ -103,13 +103,40 @@ const MIN_FONT_SIZES = [[0, 'None'], ...[9, 10, 12, 14, 16, 18, 20, 24].map((n) 
 const COLOR_FILTERS = [['none', 'None'], ['grayscale', 'Grayscale'], ['invert', 'Inverted colors'],
   ['protanopia', 'Red-weak (protanopia)'], ['deuteranopia', 'Green-weak (deuteranopia)'], ['tritanopia', 'Blue-weak (tritanopia)']];
 
+// ---------- performance ----------
+// B.gpu: what the graphics card draws right now (app.getGPUFeatureStatus in main), fetched when the page shows.
+// B.hardwareAcceleration is what this run started with: a changed setting waits for a restart.
+async function refreshGpuStatus() {
+  B.gpu = await window.ultima.gpuStatus();
+  rerenderIfShowing('settings');
+}
+const GPU_FEATURES = [['gpu_compositing', 'pages'], ['video_decode', 'video'], ['2d_canvas', 'canvas drawing'], ['webgl', '3D graphics (WebGL)']];
+
+function performanceRows() {
+  if (!B.gpu) refreshGpuStatus();
+  const want = B.settings.hardwareAcceleration !== false;
+  const used = B.gpu ? GPU_FEATURES.filter(([k]) => String(B.gpu[k] || '').startsWith('enabled')).map(([, label]) => label) : [];
+  const now = !B.gpu ? 'Checking…'
+    : used.length ? `Your graphics card draws ${used.length > 1 ? `${used.slice(0, -1).join(', ')} and ${used[used.length - 1]}` : used[0]}.`
+      : B.hardwareAcceleration ? 'Your graphics card isn’t available (its driver may be blocked or have crashed), so the processor draws everything.'
+        : 'Hardware acceleration is off, so the processor draws everything.';
+  return [
+    sRow('Use hardware acceleration when available', 'Your graphics card draws pages, scrolling, video and 3D, which is smoother and leaves the processor free. Turn it off if pages flicker, go black or show garbled patches, or video stutters.', sSwitch('hardwareAcceleration')),
+    want !== B.hardwareAcceleration && sRow(`Restart to turn it ${want ? 'on' : 'off'}`, 'Ultima only picks this up as it starts. Your windows and tabs come back; private ones close.',
+      '<button class="btn primary" data-relaunch>Restart Ultima</button>'),
+    sRow('Right now', now, ''),
+    sRow('Task manager', `What each tab, extension and process uses: memory, processor and graphics card. End one to free it up.${keyText('task-manager') ? ` Open it any time with ${esc(keyText('task-manager'))}.` : ''}`,
+      `<button class="btn" data-run="task-manager">${icon('activity', 14)} Open task manager</button>`),
+  ];
+}
+
 // what opens a link in a glance (glance-preload.js asks main, which reads settings.glanceTrigger)
 const GLANCE_TRIGGERS = [['any', 'Alt+click, Shift+click or click and hold'], ['alt', 'Alt+click'], ['shift', 'Shift+click'], ['hold', 'Click and hold'], ['off', 'Off']];
 
 // ---------- tabs ----------
 const SETTINGS_TABS = [
   {
-    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads and search.',
+    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads, search and performance.',
     render: () => [
       sGroup('Default browser', [defaultBrowserRow()]),
       sGroup('Startup', [
@@ -124,12 +151,18 @@ const SETTINGS_TABS = [
         sRow('Search engine', 'Used by the Control Palette and the new tab page.',
           `<select class="field" data-setting="searchEngine">${Object.entries(SEARCH_ENGINES).map(([k, e]) => `<option value="${k}" ${B.settings.searchEngine === k ? 'selected' : ''}>${e.name}</option>`).join('')}</select>`),
       ]),
+      sGroup('Performance', performanceRows()),
     ].join(''),
   },
   {
-    id: 'appearance', title: 'Appearance', icon: 'sun', desc: 'How Ultima looks.',
+    id: 'appearance', title: 'Appearance', icon: 'sun', desc: 'How Ultima looks: theme, window, Waypoints bar and sidebar.',
+    // the sidebar buttons editor (sidebarbuttons.js) is mounted into its place after the rest is drawn
+    mount: (body) => { const m = $('.sbe-mount', body); if (m) pageSidebarButtons(m); },
+    jumps: [['Sidebar buttons', 'sidebar-buttons', 'customize add remove reorder toolbar top bottom']],
     render: () => {
       const s = B.settings;
+      const style = sidebarStyleRows(); // sidebarstyle.js
+      const resetStyle = style.pop();
       return [
         sGroup('Theme', [
           modeRow(),
@@ -140,18 +173,21 @@ const SETTINGS_TABS = [
           s.windowMaterial === 'acrylic' ? sRow('Glass tint', 'How smoky the see-through sidebar is. Raise it if bright windows behind Ultima glare through.',
             `<input type="range" data-setting="glassTint" data-number min="0" max="90" step="5" value="${s.glassTint ?? 45}">`) : '',
         ]) : '',
-        sGroup('Bookmarks bar', [
-          sRow('Show bookmarks bar', `Your bookmarks and folders under the toolbar, as in Chrome. The star adds pages to it.${keyText('toggle-bookmarks-bar') ? ` Toggle it with ${esc(keyText('toggle-bookmarks-bar'))}.` : ''}`, sSwitch('showBookmarksBar')),
-          sRow('Center bookmarks', 'Lines up the bar’s bookmarks in the middle instead of on the left.', sSwitch('centerBookmarksBar')),
-          sRow('Import a bookmarks bar', 'Copies the bookmarks and folders on the bar of Chrome, Edge, Brave or Vivaldi onto Ultima’s.',
+        sGroup('Waypoints bar', [
+          sRow('Show Waypoints bar', `Your Waypoints (Ultima’s bookmarks) and folders under the toolbar, like Chrome’s bookmarks bar. The star adds pages to it.${keyText('toggle-bookmarks-bar') ? ` Toggle it with ${esc(keyText('toggle-bookmarks-bar'))}.` : ''}`, sSwitch('showBookmarksBar')),
+          sRow('Center Waypoints', 'Lines up the bar’s Waypoints in the middle instead of on the left.', sSwitch('centerBookmarksBar')),
+          sRow('Import a bookmarks bar', 'Copies the bookmarks and folders on the bookmarks bar of Chrome, Edge, Brave or Vivaldi onto your Waypoints bar.',
             `<button class="btn" data-run="import-bookmarks-bar">${icon('import', 14)} Import…</button>`),
         ]),
         sGroup('Sidebar', [
+          ...style,
           sRow('Essentials size', 'How tall the Essentials tiles at the top of the sidebar are. They always share the sidebar’s width, up to 4 a row.',
             `<input type="range" data-setting="essentialsHeight" data-number min="36" max="72" step="4" value="${s.essentialsHeight ?? 44}">`),
           sRow('Compact sidebar', `Show only icons.${keyText('toggle-sidebar') ? ` Toggle any time with ${esc(keyText('toggle-sidebar'))}.` : ''}`, sSwitch('sidebarCollapsed')),
           sRow('Hide sidebar', `The page uses the whole window. Point at the left edge of the window to slide the sidebar in.${keyText('toggle-sidebar-hidden') ? ` Toggle any time with ${esc(keyText('toggle-sidebar-hidden'))}.` : ''}`, sSwitch('sidebarHidden')),
+          resetStyle,
         ]),
+        '<div class="sbe-mount" data-anchor="sidebar-buttons"></div>',
       ].join('');
     },
   },
@@ -232,7 +268,6 @@ const SETTINGS_TABS = [
       ]);
     },
   },
-  { id: 'sidebar', title: 'Sidebar', icon: 'sidebar', desc: 'Choose the buttons in your sidebar, and whether they sit at the top or the bottom.', embed: (el) => pageSidebarButtons(el) },
   {
     id: 'extensions', title: 'Extensions', icon: 'puzzle', desc: 'Chrome extensions, installed from the Chrome Web Store or a folder.',
     render: () => [
@@ -284,15 +319,37 @@ const SETTINGS_TABS = [
         sRow('Chromium', '', `<span class="s-value">${esc(B.versions.chrome)}</span>`),
         sRow('Electron', '', `<span class="s-value">${esc(B.versions.electron)}</span>`),
         sRow('Node.js', '', `<span class="s-value">${esc(B.versions.node)}</span>`),
-        sRow('Data folder', 'Settings, history, bookmarks and session.', `<span class="s-value">${esc(B.dataFolder || '')}</span>`),
+        sRow('Data folder', 'Settings, history, Waypoints and session.', `<span class="s-value">${esc(B.dataFolder || '')}</span>`),
+        sRow('Welcome', 'Watch the welcome again, and pick colors, your space and Essentials from popular sites.', `<button class="btn" data-run="welcome">${icon('sparkle', 14)} Replay welcome</button>`),
       ])}
       <section class="s-group"><h3 class="s-group-title">Patch notes</h3><div class="s-card pn">${patchNotesHtml(B.versions.app)}</div></section>`,
   },
 ];
 
+// The list on the left, in sections. A tab left out of them goes at the end of the last.
+const SETTINGS_SECTIONS = [
+  ['Basics', ['general', 'appearance', 'accessibility']],
+  ['Browsing', ['spaces', 'address-bar', 'productivity', 'shortcuts', 'extensions']],
+  ['Privacy and security', ['privacy', 'sites', 'passwords']],
+  ['Ultima', ['import', 'about']],
+];
+function settingsSections() {
+  const listed = new Set(SETTINGS_SECTIONS.flatMap(([, ids]) => ids));
+  const rest = SETTINGS_TABS.filter((t) => !listed.has(t.id)).map((t) => t.id);
+  return SETTINGS_SECTIONS.map(([title, ids], i) => [title, [...ids, ...(i === SETTINGS_SECTIONS.length - 1 ? rest : [])]
+    .map((id) => SETTINGS_TABS.find((t) => t.id === id)).filter(Boolean)]);
+}
+
+const SETTINGS_MOVED = { sidebar: 'appearance' }; // pages that became part of another (old links and tabs)
 const settingsTabId = (tab) => {
-  const id = (tab.url.split('#')[1] || '').toLowerCase();
+  const part = (tab.url.split('#')[1] || '').split('/')[0].toLowerCase();
+  const id = SETTINGS_MOVED[part] || part;
   return SETTINGS_TABS.some((t) => t.id === id) ? id : 'general';
+};
+// the place a link points to inside its tab (settings#appearance/sidebar-buttons), or what an old link's page became
+const settingsAnchor = (tab) => {
+  const [part, anchor] = (tab.url.split('#')[1] || '').toLowerCase().split('/');
+  return anchor || (part === 'sidebar' ? 'sidebar-buttons' : null);
 };
 
 // ---------- page ----------
@@ -302,7 +359,7 @@ function pageSettings(root, tab) {
     <nav class="s-nav">
       <div class="s-nav-head">${LOGO}<span>Settings</span></div>
       <label class="s-search">${icon('search', 14)}<input id="s-query" placeholder="Search settings" spellcheck="false"></label>
-      <div class="s-tabs">${SETTINGS_TABS.map((t) => `<button class="s-tab ${t.id === current ? 'on' : ''}" data-tab="${t.id}">${icon(t.icon, 16)}<span>${esc(t.title)}</span></button>`).join('')}</div>
+      <div class="s-tabs">${settingsSections().map(([title, tabs]) => `<div class="s-tabs-head">${esc(title)}</div>${tabs.map((t) => `<button class="s-tab ${t.id === current ? 'on' : ''}" data-tab="${t.id}">${icon(t.icon, 16)}<span>${esc(t.title)}</span></button>`).join('')}`).join('')}</div>
     </nav>
     <main class="s-main" id="s-main"></main>
   </div>`;
@@ -313,14 +370,15 @@ function pageSettings(root, tab) {
     $$('.s-tab', root).forEach((b) => b.classList.toggle('on', b.dataset.tab === id));
     main.innerHTML = `<header class="s-header"><h1>${esc(t.title)}</h1>${t.desc ? `<p>${esc(t.desc)}</p>` : ''}</header><div class="s-body"></div>`;
     const body = $('.s-body', main);
-    if (t.embed) { body.classList.add('s-embed'); t.embed(body, tab); } else body.innerHTML = t.render();
+    if (t.embed) { body.classList.add('s-embed'); t.embed(body, tab); } else { body.innerHTML = t.render(); t.mount?.(body, tab); }
   };
+  const scrollToAnchor = (anchor) => { if (anchor) $(`[data-anchor="${anchor}"]`, main)?.scrollIntoView({ block: 'start' }); };
 
   // search runs over every regular tab's rows at once
   const search = (q) => {
     const words = q.toLowerCase().split(/\s+/).filter(Boolean);
     $$('.s-tab', root).forEach((b) => b.classList.remove('on'));
-    const sections = SETTINGS_TABS.filter((t) => t.render).map((t) => {
+    const sections = settingsSections().flatMap(([, tabs]) => tabs).filter((t) => t.render).map((t) => {
       const box = h(`<div>${t.render()}</div>`);
       $$('.s-row', box).forEach((r) => { if (!words.every((w) => `${r.textContent} ${t.title}`.toLowerCase().includes(w))) r.remove(); });
       $$('.s-group', box).forEach((g) => { if (!$('.s-row', g)) g.remove(); });
@@ -328,7 +386,10 @@ function pageSettings(root, tab) {
       return $('.s-row', box) ? `<h2 class="s-result-head" data-tab="${t.id}">${icon(t.icon, 15)} ${esc(t.title)}</h2>${box.innerHTML}` : '';
     }).join('');
     const pages = SETTINGS_TABS.filter((t) => t.embed && words.every((w) => `${t.title} ${t.desc}`.toLowerCase().includes(w)))
-      .map((t) => `<button class="s-jump" data-tab="${t.id}">${icon(t.icon, 15)} Open ${esc(t.title)} ${icon('forward', 13)}</button>`).join('');
+      .map((t) => `<button class="s-jump" data-tab="${t.id}">${icon(t.icon, 15)} Open ${esc(t.title)} ${icon('forward', 13)}</button>`).join('')
+      // parts of a tab that aren't rows of settings (the sidebar buttons editor), found by their name
+      + SETTINGS_TABS.flatMap((t) => (t.jumps || []).filter(([title, , more]) => words.every((w) => `${title} ${more}`.toLowerCase().includes(w)))
+        .map(([title, anchor]) => `<button class="s-jump" data-tab="${t.id}" data-anchor="${anchor}">${icon(t.icon, 15)} Open ${esc(title)} ${icon('forward', 13)}</button>`)).join('');
     main.innerHTML = `<header class="s-header"><h1>Results for “${esc(q)}”</h1></header>
       <div class="s-body">${pages}${sections || (pages ? '' : '<div class="empty">No setting matches</div>')}</div>`;
   };
@@ -356,8 +417,9 @@ function pageSettings(root, tab) {
     const d = t.dataset;
     if (d.tab && !t.classList.contains('s-tab')) {
       $('#s-query', root).value = '';
-      tab.url = `ultima://settings#${d.tab}`;
+      tab.url = `ultima://settings#${d.tab}${d.anchor ? `/${d.anchor}` : ''}`;
       show(d.tab);
+      scrollToAnchor(d.anchor);
       return;
     }
     if (d.switch) {
@@ -367,7 +429,9 @@ function pageSettings(root, tab) {
       const n = autoGroupAll();
       toast(n ? `Made ${n === 1 ? 'a group' : `${n} groups`}` : 'No new groups: no app or site has enough ungrouped tabs');
       return;
-    } else if (t.hasAttribute('data-a11y-reset')) applySettings({ pageContrast: 100, pageBrightness: 100, colorFilter: 'none' });
+    } else if (t.hasAttribute('data-relaunch')) { await window.ultima.relaunch(); return; }
+    else if (t.hasAttribute('data-sb-style-reset')) applySettings({ sidebarFont: 'inter', sidebarTextSize: 13, sidebarDensity: 'default' });
+    else if (t.hasAttribute('data-a11y-reset')) applySettings({ pageContrast: 100, pageBrightness: 100, colorFilter: 'none' });
     else if (d.v && t.parentElement.dataset.key) {
       applySettings({ [t.parentElement.dataset.key]: d.v });
       const sp = t.parentElement.dataset.key === 'theme' && modeOverride();
@@ -448,11 +512,13 @@ main.addEventListener('change', (e) => {
     const k = e.target.dataset.setting;
     if (k && e.target.tagName === 'SELECT') {
       applySettings({ [k]: 'number' in e.target.dataset ? Number(e.target.value) : e.target.value });
-      if (k === 'colorFilter' && activeTab() === tab) rerender(); // shows or hides "Reset page colors"
+      // shows or hides "Reset page colors" and "Reset sidebar style"
+      if ((k === 'colorFilter' || k === 'sidebarFont' || k === 'sidebarTextSize') && activeTab() === tab) rerender();
     }
   });
 
   show(current);
+  scrollToAnchor(settingsAnchor(tab));
 }
 
 // The custom loading gradient's color stops: a color picker each, plus add and remove.

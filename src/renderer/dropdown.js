@@ -1,7 +1,8 @@
 // Ultima's own dropdowns. Every <select> in the UI keeps its options and value (so the code using it is unchanged),
 // but opens this menu instead of the system's: a frosted panel hanging from the field, the current choice marked
 // with an accent bar and a check, keyboard navigation (arrows, Home/End, Enter, Esc, type to jump) and a choice
-// reported as an ordinary change event. The closed field is styled in styles.css (select.field).
+// reported as an ordinary change event. The closed field is styled in styles.css (select.field). An option can show
+// itself in a font (data-font), and a disabled one can head the options after it (data-heading).
 const DD = { open: null }; // { select, layer, menu, items, active }
 
 function openDropdown(select) {
@@ -10,8 +11,8 @@ function openDropdown(select) {
   if (!options.length) return;
   const layer = h('<div class="dd-layer"></div>');
   const menu = h(`<div class="dd-menu" role="listbox">${options.map((o, i) => `
-    <div class="dd-item ${o.selected ? 'on' : ''} ${o.disabled ? 'disabled' : ''}" data-i="${i}" role="option" aria-selected="${o.selected}">
-      <span class="dd-label">${esc(o.textContent)}</span><span class="dd-check">${o.selected ? icon('check', 14) : ''}</span>
+    <div class="dd-item ${o.selected ? 'on' : ''} ${o.disabled ? 'disabled' : ''} ${'heading' in o.dataset ? 'dd-heading' : ''}" data-i="${i}" role="option" aria-selected="${o.selected}">
+      <span class="dd-label" ${o.dataset.font ? `style="font-family: ${esc(o.dataset.font)}"` : ''}>${esc(o.textContent)}</span><span class="dd-check">${o.selected ? icon('check', 14) : ''}</span>
     </div>`).join('')}</div>`);
   layer.append(menu);
   document.body.append(layer);

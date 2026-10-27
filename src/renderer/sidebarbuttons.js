@@ -1,5 +1,5 @@
 // The sidebar's buttons: which ones, in which order, at the top (beside the logo) or the bottom.
-// Edited in Settings → Sidebar by dragging, or by right-clicking a button in the sidebar itself.
+// Edited in Settings → Appearance (Sidebar buttons) by dragging, or by right-clicking a button in the sidebar itself.
 const SIDEBAR_BUTTONS = {
   back: { icon: 'back', cmd: 'back', label: 'Back' },
   forward: { icon: 'forward', cmd: 'forward', label: 'Forward' },
@@ -11,14 +11,15 @@ const SIDEBAR_BUTTONS = {
   'private-tab': { icon: 'incognito', cmd: 'new-private-tab', label: 'New private tab' },
   palette: { icon: 'command', cmd: 'palette', label: 'Control Palette' },
   'url-menu': { icon: 'more', cmd: 'url-menu', label: 'Address bar menu' },
-  bookmarks: { icon: 'bookmark', cmd: 'open-bookmarks', label: 'Bookmarks' },
-  'bookmarks-bar': { icon: 'star', cmd: 'toggle-bookmarks-bar', label: 'Show / hide bookmarks bar' },
+  bookmarks: { icon: 'bookmark', cmd: 'open-bookmarks', label: 'Waypoints' },
+  'bookmarks-bar': { icon: 'star', cmd: 'toggle-bookmarks-bar', label: 'Show / hide Waypoints bar' },
   'tab-folder': { icon: 'folder', cmd: 'tab-folder-new', label: 'Add tab to a new folder' },
   split: { icon: 'split', cmd: 'split-tab', label: 'Split view' },
-  'bookmark-page': { icon: 'star', cmd: 'bookmark', label: 'Bookmark this page' },
+  'bookmark-page': { icon: 'star', cmd: 'bookmark', label: 'Add this page to Waypoints' },
   history: { icon: 'history', cmd: 'open-history', label: 'History' },
   'tab-history': { icon: 'tabHistory', cmd: 'tab-history', label: 'Tab History' },
   downloads: { icon: 'download', cmd: 'open-downloads', label: 'Downloads' },
+  'task-manager': { icon: 'activity', cmd: 'task-manager', label: 'Task manager' },
   extensions: { icon: 'puzzle', cmd: 'open-extensions', label: 'Extensions' },
   passwords: { icon: 'key', cmd: 'open-passwords', label: 'Passwords' },
   import: { icon: 'import', cmd: 'open-import', label: 'Import browser data' },
@@ -130,7 +131,7 @@ async function sidebarButtonMenu(key, pos) {
   else if (choice === 'remove') removeSidebarButton(key);
 }
 
-// ---------- Settings → Sidebar ----------
+// ---------- Settings → Appearance → Sidebar buttons ----------
 function pageSidebarButtons(el) {
   el.innerHTML = '<div class="sbe"></div>';
   const ed = $('.sbe', el);
@@ -210,7 +211,7 @@ function renderSidebarEditor(ed) {
   };
   const free = Object.keys(SIDEBAR_BUTTONS).filter((k) => !used.has(k));
   ed.innerHTML = `
-    <section class="s-group"><h3 class="s-group-title">Your sidebar</h3>
+    <section class="s-group"><h3 class="s-group-title">Sidebar buttons</h3>
       <div class="s-card sbe-card">
         <div class="sbe-mock">
           <div class="sbe-row sbe-top">

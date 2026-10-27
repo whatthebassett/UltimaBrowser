@@ -3,11 +3,15 @@
 // Each item is [what, a sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
-    version: '0.1.4',
-    date: '2026-10-26',
+    version: '0.2.0',
+    date: '2026-10-27',
     new: [
       ['Automatic tab groups', 'Tabs from the same work app (Google Docs, Sheets and Drive, Word, Excel and Teams, Jira, Confluence, Slack and many more) or the same website gather in a folder named for it. Group work apps by app or by suite, choose how many tabs it takes, or turn it off, in Settings → Productivity. Rename a folder and it keeps your name; take a tab out and it stays out.'],
       ['Accessibility settings', 'A new Accessibility page in Settings: page zoom, text size and a minimum text size; page contrast, brightness, grayscale, inverted colors and color-blindness filters; a strong outline on the focused item, underlined links, caret browsing (F7) to move through pages with a text cursor; and higher contrast and reduced motion in Ultima itself.'],
+      ['A welcome worth watching', 'The first time you open Ultima, a short film under the stars sets it up with you: light or dark and an accent color, your first space’s name, icon and colors, Essentials from popular sites (Google Drive, Microsoft 365, Slack, Spotify, Apple Music, Claude, Netflix and dozens more), your bookmarks and history from another browser, and the default browser. A miniature Ultima shows every choice as you make it. Replay it any time from Settings → About.'],
+      ['Task manager', 'Press Shift+Esc (or find it in the Control Palette, or in Settings → General) to see every process Ultima runs and what it uses: memory, processor and graphics card, with totals and graphs of the last two minutes. End a tab’s process to free it up: the tab is unloaded, and loads again when you open it.'],
+      ['Sidebar style', 'Choose the sidebar’s font (a built-in one, or any font installed on your computer, each previewed in its own typeface), its text size, and how tall tabs are: Compact, Default or Roomy. In Settings → Appearance → Sidebar, the same in every space and window.'],
+      ['Performance settings', 'A new Performance section in Settings → General shows what your graphics card draws right now (pages, video, canvas and 3D) and lets you turn hardware acceleration off, for when pages flicker, go black or show garbled patches, or back on. A Restart button applies it, and your windows and tabs come back as they were.'],
       ['Glance', 'Alt+click, Shift+click, or press and hold a link to preview it over the page without leaving it. The preview is the real page: use it, open it as a tab (nothing reloads), put it in split view, or press Esc to close it. Choose which gesture glances, or turn it off, in Settings → General.'],
       ['Ad and tracker blocking', 'Ultima blocks ads and the trackers that follow you from site to site, including YouTube’s video ads and the sponsored posts in Facebook, Instagram and X, and hides the empty boxes ads leave behind. The shield in the address bar shows how many it blocked on the page; click it to turn blocking off for a site. Turn ads and trackers on or off separately in Settings → Privacy.'],
       ['Tracking protection', 'Links you open lose their tracking codes (like utm_source and fbclid), and every site is asked not to sell or share your data (Global Privacy Control). You can also block third-party cookies in Settings → Privacy.'],
@@ -20,6 +24,11 @@ const PATCH_NOTES = [
       ['Tab folders and split views after a restart', 'Folders and split views come back when Ultima starts again. Before, restarting took your tabs out of their folders and split views apart.'],
     ],
     improved: [
+      ['Bookmarks are now Waypoints', 'Bookmarks have a new name. Everything works as before: the star (Ctrl+D) adds a page, the Waypoints bar sits under the toolbar, and Ctrl+Shift+O opens the Waypoints page. Your bookmarks are already there as Waypoints, and importing from another browser brings its bookmarks in as Waypoints.'],
+      ['Quick actions in the page menu', 'Right-clicking a page puts Copy, Paste, Waypoints and Reload in a row of buttons at the top of the menu. The star fills in when the page is already one of your Waypoints; click it again to remove it.'],
+      ['Split views in the sidebar', 'The close button sits neatly inside each part of a split view and eases in when you point at it, with the icon making room, and the line between the parts is easier to see.'],
+      ['Settings in sections', 'The list of settings pages is grouped under Basics, Browsing, Privacy and security, and Ultima, so each page is quicker to find.'],
+      ['All sidebar settings in one place', 'The sidebar’s buttons, style, Essentials size and compact and hidden modes are all in Settings → Appearance now, instead of on a page of their own.'],
       ['Dropdowns', 'Every dropdown in Ultima (search engine, site permissions and the rest) now opens Ultima’s own menu, with the current choice marked, instead of the system’s. Arrow keys, Enter, Esc and typing a letter work in it.'],
       ['Pinned tabs and Essentials stay put', 'They come back even with “Restore tabs from last time” turned off. Before, starting without restoring tabs lost them.'],
       ['Closing the last tab', 'Closing your last tab leaves a new tab page instead of waking one of your pinned tabs, and pressing Ctrl+W again there closes the window.'],

@@ -23,9 +23,9 @@ function bmpMatches() {
 async function pageBookmarks(root, tab) {
   BMP.tab = tab;
   const star = keysFor('bookmark')[0];
-  root.innerHTML = `<div class="page bm-page" id="bm-page"><h1>Bookmarks</h1>
-    <p class="sub">${star ? `Press ${kbdHtml(star)} on any page to bookmark it.` : 'Use the star in the toolbar to bookmark a page.'} Drag bookmarks to rearrange them or move them into folders.</p>
-    <div class="toolbar"><input class="field" id="bq" placeholder="Search bookmarks" spellcheck="false" value="${esc(BMP.query)}">
+  root.innerHTML = `<div class="page bm-page" id="bm-page"><h1>Waypoints</h1>
+    <p class="sub">${star ? `Press ${kbdHtml(star)} on any page to add it as a Waypoint.` : 'Use the star in the toolbar to add a page as a Waypoint.'} Drag Waypoints to rearrange them or move them into folders. Waypoints are Ultima’s bookmarks.</p>
+    <div class="toolbar"><input class="field" id="bq" placeholder="Search Waypoints" spellcheck="false" value="${esc(BMP.query)}">
       <button class="btn" id="bnew-folder">${icon('folder')} New folder</button>
       <button class="btn" id="badd-page">${icon('plus')} Add page</button>
       <button class="btn" id="bimport">${icon('import')} Import</button></div>
@@ -73,7 +73,7 @@ function drawBookmarksPage() {
       : `<button class="bmc" data-open-folder="${esc(n.id)}" data-drop-folder="${esc(n.id)}">${esc(n.title)}</button>${icon('forward', 12)}`)).join('') + count;
 
   $('#blist').innerHTML = items.length ? items.map((n) => bmpRowHtml(n, q)).join('')
-    : `<div class="empty">${q ? 'Nothing matches' : 'This folder is empty — drag bookmarks here, or use Add page'}</div>`;
+    : `<div class="empty">${q ? 'Nothing matches' : 'This folder is empty — drag Waypoints here, or use Add page'}</div>`;
 }
 
 function bmpTreeHtml(parent, depth) {
@@ -101,7 +101,7 @@ function bmpRowHtml(n, q) {
     <span class="bm-ic">${favHtml(bmFavicon(n), n.url, n.title)}</span>
     <div class="main"><div class="t">${highlight(n.title || n.url, q)}</div><div class="u">${highlight(n.url, q)}</div></div>${where}
     <div class="acts"><button class="icon-btn" data-act="tab" title="Open in new tab">${icon('external', 15)}</button>
-    <button class="icon-btn" data-act="edit" title="Edit bookmark">${icon('edit', 15)}</button>
+    <button class="icon-btn" data-act="edit" title="Edit Waypoint">${icon('edit', 15)}</button>
     <button class="icon-btn" data-act="more" title="More">${icon('more', 15)}</button></div></div>`;
 }
 

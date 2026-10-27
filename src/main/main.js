@@ -9,6 +9,7 @@ const { BrowserData, hostOf } = require('./data');
 const importer = require('./importer');
 const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
+const taskManager = require('./taskmanager');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -29,6 +30,16 @@ app.userAgentFallback = app.userAgentFallback
   .replace(/\s?Ultima ?Browser\/\S+/i, ''); // written with or without the space, depending on the Electron version
 
 if (!app.requestSingleInstanceLock()) app.quit();
+// Hardware acceleration (Settings → General → Performance): the graphics card draws pages, video and 3D unless it's
+// turned off. Chromium settles this as it starts, so the setting is read here, before anything else, and a change takes
+// a restart.
+const HARDWARE_ACCELERATION = (() => {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')).hardwareAcceleration !== false;
+  } catch { return true; } // first run or unreadable: on, as DEFAULT_SETTINGS has it
+})();
+if (!HARDWARE_ACCELERATION) app.disableHardwareAcceleration();
+const RESTART_SWITCH = '--ultima-restarted'; // started again by Ultima itself (app:relaunch)
 // a link or .html file Ultima was started with; the UI opens it once it has restored its tabs
 let launchUrl = defaultBrowser.launchTarget(process.argv);
 
@@ -55,7 +66,12 @@ const DEFAULT_SETTINGS = {
   sidebarCollapsed: false,
   sidebarHidden: false,
   essentialsHeight: 44,
-  onboarded: false,
+  // sidebar style, in every space and window (renderer/sidebarstyle.js)
+  sidebarFont: 'inter', // inter, system, serif, mono, or "font:<family>" for an installed font
+  sidebarTextSize: 13, // px
+  sidebarDensity: 'default', // tab height: compact, default or roomy
+  onboarded: false, // the welcome (renderer/welcome.js) has been seen
+  welcomeMuted: false, // the welcome's sound, turned off with its speaker button
   keybindings: {},
   permissions: {}, // origin → { key: true/false } (see sitepermissions.js)
   siteDefaults: {}, // key → true/false, for every site without its own choice
@@ -83,7 +99,8 @@ const DEFAULT_SETTINGS = {
   caretBrowsing: false, // a text cursor in pages (caret-preload.js), F7
   uiContrast: false,
   reduceMotion: false,
-  window: { width: 1440, height: 900, maximized: false },
+  hardwareAcceleration: true, // read at startup (HARDWARE_ACCELERATION above); a change applies after a restart
+  window:{ width: 1440, height: 900, maximized: false },
 };
 
 // ---- windows ----
@@ -182,6 +199,18 @@ function pageContextMenu(wc, p) {
   const openTab = (url, background = true) => send('open-url', { url, background, private: priv });
   const short = (s, n = 32) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
+  // Copy, Paste, Waypoints and Reload, always at the top as a row of buttons (overlays.js draws `type: 'actions'`)
+  const saved = data.isBookmarked(wc.getURL());
+  t.push({
+    type: 'actions',
+    buttons: [
+      item('Copy', () => wc.copy(), { icon: 'copy', enabled: Boolean(p.editFlags.canCopy || p.selectionText.trim()), hint: `${MOD}+C` }),
+      item('Paste', () => wc.paste(), { icon: 'paste', enabled: Boolean(p.isEditable && p.editFlags.canPaste), hint: `${MOD}+V` }),
+      item(saved ? 'Remove from Waypoints' : 'Add this page to Waypoints', () => send('command', 'bookmark'), { icon: 'star', on: saved, shortcut: 'bookmark' }),
+      item('Reload', () => wc.reload(), { icon: 'reload', shortcut: 'reload' }),
+    ],
+  });
+
   if (p.misspelledWord) {
     for (const s of p.dictionarySuggestions.slice(0, 5)) t.push(item(s, () => wc.replaceMisspelling(s), { icon: 'check' }));
     if (!p.dictionarySuggestions.length) t.push({ id: 'none', label: 'No spelling suggestions', enabled: false });
@@ -225,25 +254,22 @@ function pageContextMenu(wc, p) {
       item('Redo', () => wc.redo(), { enabled: f.canRedo, hint: `${MOD}+Y` }),
       sep,
       item('Cut', () => wc.cut(), { enabled: f.canCut, icon: 'cut', hint: `${MOD}+X` }),
-      item('Copy', () => wc.copy(), { enabled: f.canCopy, icon: 'copy', hint: `${MOD}+C` }),
-      item('Paste', () => wc.paste(), { enabled: f.canPaste, icon: 'paste', hint: `${MOD}+V` }),
       item('Paste as plain text', () => wc.pasteAndMatchStyle(), { enabled: f.canPaste, hint: `${MOD}+Shift+V` }),
       item('Select all', () => wc.selectAll(), { enabled: f.canSelectAll, hint: `${MOD}+A` }),
       sep,
     );
-    const saved = data.passwordsFor(wc.getURL());
-    if (saved.length) {
+    const logins = data.passwordsFor(wc.getURL());
+    if (logins.length) {
       t.push({
         id: 'logins',
         label: 'Fill saved login',
         icon: 'key',
-        submenu: saved.map((s) => item(s.username || '(no username)', () => fillLogin(wc, s.id))),
+        submenu: logins.map((s) => item(s.username || '(no username)', () => fillLogin(wc, s.id))),
       }, sep);
     }
   } else if (p.selectionText.trim()) {
     const sel = p.selectionText.trim();
     t.push(
-      item('Copy', () => wc.copy(), { icon: 'copy', hint: `${MOD}+C` }),
       item(`Search for “${short(sel, 28)}”`, () => send('open-url', { search: sel, background: false, private: priv }), { icon: 'search' }),
       item('Copy link to highlight', () => {
         const page = new URL(wc.getURL());
@@ -255,7 +281,6 @@ function pageContextMenu(wc, p) {
   }
   if (!p.linkURL && !p.isEditable && !p.selectionText.trim() && p.mediaType === 'none') {
     t.push(
-      item('Bookmark this page', () => send('command', 'bookmark'), { icon: 'star', shortcut: 'bookmark' }),
       item('Copy page link', () => clipboard.writeText(wc.getURL()), { icon: 'link', shortcut: 'copy-url' }),
       item('Find in page…', () => send('command', 'find'), { icon: 'find', shortcut: 'find' }),
       item('Print…', () => send('command', 'print'), { icon: 'print', shortcut: 'print' }),
@@ -265,7 +290,6 @@ function pageContextMenu(wc, p) {
   t.push(
     item('Back', () => wc.navigationHistory.goBack(), { icon: 'back', enabled: wc.navigationHistory.canGoBack(), shortcut: 'back' }),
     item('Forward', () => wc.navigationHistory.goForward(), { icon: 'forward', enabled: wc.navigationHistory.canGoForward(), shortcut: 'forward' }),
-    item('Reload', () => wc.reload(), { icon: 'reload', shortcut: 'reload' }),
     sep,
     item('View page source', () => openTab(`view-source:${wc.getURL()}`, false), { icon: 'code' }),
     item('Inspect', () => wc.inspectElement(p.x, p.y), { icon: 'code', shortcut: 'devtools' }),
@@ -1016,7 +1040,7 @@ function forgetWindow(key) {
   sessionStore.data.windows = savedWindows().filter((s) => s.key !== key);
   sessionStore.save(800);
 }
-// Sessions from before 0.1.4 were one window with every tab in one list: its pinned tabs and Essentials (`kept`, each
+// Sessions from before 0.2.0 were one window with every tab in one list: its pinned tabs and Essentials (`kept`, each
 // given a key that names it in every window) become the shared sidebar, the rest that window's own tabs.
 function migrateSession(s) {
   if (s.v === 2) return s;
@@ -1201,6 +1225,7 @@ function registerIpc() {
       systemDark: nativeTheme.shouldUseDarkColors,
       glass: GLASS,
       backdrops: BACKDROPS,
+      hardwareAcceleration: HARDWARE_ACCELERATION, // what this run started with
       launchUrl: url,
     };
   });
@@ -1222,6 +1247,26 @@ function registerIpc() {
     sessionStore.save(800);
   });
   handle('app:quit', () => app.quit()); // every window is kept for next time (see before-quit)
+  // Quits and starts again (a new hardware acceleration setting), with the same switches but not the link or file
+  // Ultima was opened with, which would open again. Every window's tabs come back, even with "Restore tabs" off.
+  handle('app:relaunch', () => {
+    const args = process.argv.slice(1).filter((a) => a !== '--single-argument' && a !== RESTART_SWITCH && !defaultBrowser.launchTarget(['', a]));
+    app.relaunch({ args: [...args, RESTART_SWITCH] });
+    app.quit();
+  });
+  // the task manager (taskmanager.js): Ultima's processes, and ending one. The windows showing pages from an ended
+  // process are told first, so they unload those tabs instead of showing them as crashed.
+  handle('tasks:list', () => taskManager.collect({ isPrivate }));
+  handle('tasks:end', (pid) => {
+    const r = taskManager.endProcess(Number(pid));
+    if (!r.ok) return { ok: false };
+    broadcast('tasks-ended', r.contents);
+    setTimeout(r.kill, 100);
+    return { ok: true, pages: r.contents.length };
+  });
+  // what the graphics card is doing right now: Chromium also turns parts off itself, for drivers it knows are broken
+  // or after the graphics process crashed
+  handle('gpu:status', () => app.getGPUFeatureStatus());
   handleFrom('window:new', (_e, opts) => {
     const url = typeof opts?.url === 'string' && /^(https?|ultima):/i.test(opts.url) ? opts.url : null;
     createWindow({ private: Boolean(opts?.private), url });
@@ -1628,7 +1673,7 @@ app.whenReady().then(async () => {
   await widevineReady();
   // every window that was open last time comes back (its regular tabs only when "Restore tabs" is on; the shared
   // sidebar always does); a link Ultima was started with opens in the last of them
-  if (!settings.data.restoreSession) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
+  if (!settings.data.restoreSession && !process.argv.includes(RESTART_SWITCH)) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
   const restore = savedWindows();
   if (restore.length) restore.forEach((r, i) => createWindow({ restore: r, url: i === restore.length - 1 ? launchUrl : null }));
   else createWindow({ url: launchUrl });
@@ -1644,6 +1689,7 @@ app.on('session-end', () => { quitting = true; });
 
 app.on('before-quit', () => {
   quitting = true; // windows closing now are kept for next time
+  taskManager.stopGpu();
   data?.flush();
   for (const s of [settings, sessionStore]) if (s?.timer) s.flush();
 });

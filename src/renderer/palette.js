@@ -19,7 +19,7 @@ const COMMANDS = [
   { id: 'hard-reload', title: 'Hard reload (ignore cache)', icon: 'reload' },
   { id: 'back', title: 'Go back', icon: 'back' },
   { id: 'forward', title: 'Go forward', icon: 'forward' },
-  { id: 'bookmark', title: 'Bookmark this page', icon: 'star' },
+  { id: 'bookmark', title: 'Add this page to Waypoints', icon: 'star', words: 'bookmark save star favorite' },
   { id: 'copy-url', title: 'Copy page URL', icon: 'link' },
   { id: 'find', title: 'Find in page', icon: 'find' },
   { id: 'fill-login', title: 'Fill saved login on this page', icon: 'key' },
@@ -30,10 +30,12 @@ const COMMANDS = [
   { id: 'toggle-sidebar', title: 'Toggle sidebar', icon: 'sidebar' },
   { id: 'toggle-sidebar-hidden', title: 'Hide / show sidebar', icon: 'sidebar', words: 'auto-hide autohide full screen focus zen arc distraction' },
   { id: 'open-import', title: 'Import data from Chrome, Edge, Firefox, Zen…', icon: 'import', words: 'migrate transfer chrome edge firefox zen brave vivaldi' },
-  { id: 'open-bookmarks', title: 'Open bookmarks', icon: 'bookmark' },
+  { id: 'open-bookmarks', title: 'Open Waypoints', icon: 'bookmark', words: 'bookmarks favorites saved manager' },
   { id: 'open-history', title: 'Open history', icon: 'history' },
   { id: 'tab-history', title: 'Tab History', icon: 'tabHistory', words: 'back forward pages visited tab navigation list' },
   { id: 'open-downloads', title: 'Open downloads', icon: 'download' },
+  { id: 'welcome', title: 'Replay welcome', icon: 'sparkle', words: 'onboarding setup tour intro first run essentials customize' },
+  { id: 'task-manager', title: 'Task manager', icon: 'activity', words: 'processes memory ram cpu gpu performance kill end task usage' },
   { id: 'open-extensions', title: 'Open extensions', icon: 'puzzle', words: 'addons add-ons plugins chrome web store' },
   { id: 'url-menu', title: 'Address bar menu', icon: 'more', words: 'history downloads extensions' },
   { id: 'open-passwords', title: 'Open passwords', icon: 'key', words: 'logins credentials' },
@@ -52,7 +54,7 @@ const COMMANDS = [
   { id: 'tab-folder-new', title: 'Add tab to a new folder', icon: 'folder', words: 'group tab group folder organize organize' },
   { id: 'tab-folder-remove', title: 'Remove tab from its folder', icon: 'folder', words: 'ungroup tab group folder' },
   { id: 'import-bookmarks-bar', title: 'Import bookmarks bar (Chrome, Edge…)', icon: 'import', words: 'chrome edge brave vivaldi favorites favorites copy' },
-  { id: 'toggle-bookmarks-bar', title: 'Show / hide bookmarks bar', icon: 'bookmark', words: 'favorites favorites toolbar bar' },
+  { id: 'toggle-bookmarks-bar', title: 'Show / hide Waypoints bar', icon: 'bookmark', words: 'bookmarks favorites toolbar bar' },
   { id: 'customize-sidebar', title: 'Customize sidebar buttons', icon: 'sidebar', words: 'widgets toolbar add remove buttons edit layout' },
   { id: 'toggle-loading-animation', title: 'Loading animation on / off', icon: 'sparkle', words: 'address bar progress gradient spinner' },
   { id: 'theme-dark', title: 'Theme: Dark', icon: 'moon' },
@@ -158,7 +160,7 @@ async function updatePalette() {
     const open = new Set(B.tabs.map((t) => t.url));
     res.bookmarks = res.bookmarks.filter((b) => !open.has(b.url));
     res.history = res.history.filter((x) => !open.has(x.url));
-    for (const b of res.bookmarks) items.push({ group: 'Bookmarks', kind: 'url', url: b.url, title: b.title, sub: b.url, fav: favHtml('', b.url, b.title), hint: icon('star', 13) });
+    for (const b of res.bookmarks) items.push({ group: 'Waypoints', kind: 'url', url: b.url, title: b.title, sub: b.url, fav: favHtml('', b.url, b.title), hint: icon('star', 13) });
     for (const x of res.history) items.push({ group: 'History', kind: 'url', url: x.url, title: x.title || x.url, sub: x.url, fav: favHtml('', x.url, x.title) });
   }
 

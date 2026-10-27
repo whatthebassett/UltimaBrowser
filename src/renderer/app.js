@@ -126,14 +126,16 @@ function runCommand(cmd) {
     case 'make-default-browser': return makeDefaultBrowser();
     case 'open-extensions': return openInternal('settings#extensions');
     case 'url-menu': return openUrlMenu();
-    case 'open-bookmarks': return openInternal('bookmarks');
+    case 'open-bookmarks': return openInternal('waypoints');
+    case 'task-manager': return openInternal('tasks');
+    case 'welcome': return startWelcome({ replay: true });
     case 'open-history': return openInternal('history');
     case 'tab-history': return toggleTabHistory();
     case 'open-downloads': return openInternal('downloads');
     case 'open-passwords': return openInternal('settings#passwords');
     case 'open-settings': return openInternal('settings');
     case 'open-shortcuts': return openInternal('settings#shortcuts');
-    case 'customize-sidebar': return openInternal('settings#sidebar');
+    case 'customize-sidebar': return openInternal('settings#appearance/sidebar-buttons');
     case 'toggle-bookmarks-bar': return toggleBookmarksBar();
     case 'import-bookmarks-bar': return importChromeBookmarkBar();
     case 'rename-tab': sidebarShowForCommand(); return startRenameTab(activeTab());
@@ -161,7 +163,7 @@ async function toggleBookmark() {
   const tab = activeTab();
   if (!tab || isInternal(tab.url)) return;
   const added = await window.ultima.toggleBookmark({ url: tab.url, title: tab.title, favicon: tab.favicon });
-  toast(added ? 'Added to the bookmarks bar' : 'Bookmark removed', added ? { label: 'Undo', run: () => window.ultima.toggleBookmark({ url: tab.url }).then(updateChrome) } : undefined);
+  toast(added ? 'Added to the Waypoints bar' : 'Waypoint removed', added ? { label: 'Undo', run: () => window.ultima.toggleBookmark({ url: tab.url }).then(updateChrome) } : undefined);
   updateChrome();
 }
 
@@ -383,6 +385,7 @@ function applyTheme() {
   rootEl.style.setProperty('--glass', dark ? `rgba(20, 20, 26, ${tint})` : `rgba(248, 248, 252, ${tint})`);
   rootEl.style.setProperty('--sidebar-w', `${s.sidebarWidth}px`);
   rootEl.style.setProperty('--ess-height', `${Math.max(36, Math.min(72, s.essentialsHeight ?? 44))}px`);
+  applySidebarStyle(); // font, text size and tab height (sidebarstyle.js)
   document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed));
   const wasHidden = document.body.classList.contains('sb-hidden');
   const wasPeeking = document.body.classList.contains('sb-peek');
@@ -433,6 +436,7 @@ async function boot() {
   B.dataFolder = state.dataFolder;
   B.systemDark = state.systemDark;
   B.backdrops = state.backdrops;
+  B.hardwareAcceleration = state.hardwareAcceleration; // what this run started with (Settings → General → Performance)
   loadKeys(B.settings.keybindings, state.platform);
   for (const d of state.downloads) B.downloads.set(d.id, d);
   document.body.classList.toggle('mac', state.platform === 'darwin');
@@ -468,6 +472,7 @@ async function boot() {
   initTabCardDrag();
   initSplitView();
   initGlance();
+  initTaskManager();
   initDropdowns();
   initAccessibility();
   initSpaceUi();
@@ -536,16 +541,12 @@ async function boot() {
   if (state.launchUrl) createTab({ url: state.launchUrl });
   else if (active) activateTab(active.id);
   else if (restored.length) activateTab(restored[0].id);
-  else createTab({ url: B.settings.onboarded || B.private ? NEWTAB : 'ultima://import' });
+  else createTab({ url: NEWTAB });
   markSidebarSaved();
   B.restored = true; // from now on the window saves its tabs (saveSession)
   // Settings shows whether Ultima is the default browser; that changes outside Ultima (in Windows Settings)
   window.addEventListener('focus', () => { if (B.defaultBrowser) refreshDefaultBrowser(); });
-  if (!B.settings.onboarded) {
-    applySettings({ onboarded: true });
-    if (B.tabs.length && !B.tabs.some((t) => t.url === 'ultima://import')) openInternal('import');
-    toast(keyText('palette') ? `Welcome to Ultima — press ${keyText('palette')} for the Control Palette` : 'Welcome to Ultima');
-  }
+  if (shouldWelcome()) startWelcome(); // the first time: the welcome film, which sets Ultima up (welcome.js)
 }
 
 boot();

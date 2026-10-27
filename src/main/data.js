@@ -124,7 +124,7 @@ class BrowserData {
   // imported ones keep their folders under Other bookmarks.
   migrateBookmarks() {
     const list = this.bookmarkStore.data;
-    if (list.length && list.every((n) => n.type)) return;
+    if (list.length && list.every((n) => n.type)) { if (this.ensureBookmarkRoots()) this.bookmarkStore.save(); return; }
     const old = list.filter((n) => !n.type);
     this.bookmarkStore.data = list.filter((n) => n.type);
     this.ensureBookmarkRoots();
@@ -135,10 +135,17 @@ class BrowserData {
     this.bookmarkStore.save();
   }
 
+  // Bookmarks are called Waypoints in Ultima; the two top folders had other names before 0.2.0 (and "Other waypoints"
+  // in early 0.2.0 builds)
   ensureBookmarkRoots() {
-    for (const [id, title] of [['bar', 'Bookmarks bar'], ['other', 'Other bookmarks']]) {
-      if (!this.nodes.some((n) => n.id === id)) this.nodes.unshift({ id, type: 'folder', title, parent: null, added: Date.now() });
+    const roots = [['bar', 'Waypoints bar', ['Bookmarks bar']], ['other', 'Other Waypoints', ['Other bookmarks', 'Other waypoints']]];
+    let changed = false;
+    for (const [id, title, oldTitles] of roots) {
+      const root = this.nodes.find((n) => n.id === id);
+      if (!root) { this.nodes.unshift({ id, type: 'folder', title, parent: null, added: Date.now() }); changed = true; }
+      else if (oldTitles.includes(root.title)) { root.title = title; changed = true; }
     }
+    return changed;
   }
 
   // the folder at `names` under `parent`, made if missing

@@ -8,6 +8,10 @@ contextBridge.exposeInMainWorld('ultima', {
   newWindow: invoke('window:new'),
   closeWindow: invoke('window:close'),
   quit: invoke('app:quit'),
+  relaunch: invoke('app:relaunch'),
+  gpuStatus: invoke('gpu:status'),
+  taskList: invoke('tasks:list'),
+  taskEnd: invoke('tasks:end'),
   setSettings: invoke('settings:set'),
   resetPermissions: invoke('permissions:reset'),
   setKeyRecording: invoke('keys:recording'),
@@ -87,7 +91,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape'];
+    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

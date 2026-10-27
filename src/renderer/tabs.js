@@ -32,10 +32,13 @@ const isUnloaded = (tab) => !tab.webview && !isInternal(tab.url);
 const sortZones = () => { B.tabs = ZONES.flatMap((z) => B.tabs.filter((t) => t.zone === z)); };
 
 const INTERNAL_TITLES = {
-  newtab: 'New Tab', settings: 'Settings', history: 'History', bookmarks: 'Bookmarks',
-  import: 'Import browser data', passwords: 'Passwords', downloads: 'Downloads', shortcuts: 'Keyboard shortcuts',
+  newtab: 'New Tab', settings: 'Settings', history: 'History', waypoints: 'Waypoints',
+  import: 'Import browser data', passwords: 'Passwords', downloads: 'Downloads', shortcuts: 'Keyboard shortcuts', tasks: 'Task manager',
 };
-const internalName = (url) => url.replace('ultima://', '').split(/[/?#]/)[0];
+const internalName = (url) => {
+  const name = url.replace('ultima://', '').split(/[/?#]/)[0];
+  return name === 'bookmarks' ? 'waypoints' : name; // the Waypoints page's address before they were renamed
+};
 
 function createTab({
   url = NEWTAB, title, name, favicon = '', zone, pinned = false, homeUrl, homeTitle, homeFavicon, activate = true, lazy = false, index, opener, spaceId, folderId, splitId,
@@ -51,7 +54,7 @@ function createTab({
     key: z === 'normal' ? undefined : key || newTabKey(), // names a pinned tab or Essential in every window
     spaceId: spaceById(spaceId) ? spaceId : opener?.spaceId || B.activeSpaceId,
     url,
-    title: title || (isInternal(url) ? INTERNAL_TITLES[internalName(url)] || 'Ultima' : url),
+    title: (isInternal(url) && INTERNAL_TITLES[internalName(url)]) || title || (isInternal(url) ? 'Ultima' : url),
     name: typeof name === 'string' && name.trim() ? name.trim() : undefined,
     favicon,
     zone: z,
@@ -156,6 +159,7 @@ function ensureWebview(tab, adopt = null) {
     changed();
   });
   wv.addEventListener('render-process-gone', () => {
+    if (endedByTaskManager(wv)) { unloadTab(tab); return; } // ended in the task manager: it loads again when opened
     tab.error = { code: 'crashed', desc: 'The page crashed', url: tab.url };
     if (isActive()) renderError();
   });
@@ -497,7 +501,7 @@ const saveSession = debounce(() => {
 function tabIcon(tab) {
   if (tab.loading) return '<span class="spinner"></span>';
   if (isInternal(tab.url)) {
-    const map = { newtab: 'sparkle', settings: 'settings', history: 'history', bookmarks: 'bookmark', import: 'import', passwords: 'key', downloads: 'download', shortcuts: 'command' };
+    const map = { newtab: 'sparkle', settings: 'settings', history: 'history', waypoints: 'bookmark', import: 'import', passwords: 'key', downloads: 'download', shortcuts: 'command', tasks: 'activity' };
     return `<span class="fav" style="color:var(--accent)">${icon(map[internalName(tab.url)] || 'sparkle')}</span>`;
   }
   // (a private page's icon isn't fetched: the sidebar would load it outside private browsing)

@@ -5,7 +5,7 @@ function renderInternal(tab) {
   clearInterval(pageTimer);
   const root = $('#internal');
   const name = internalName(tab.url);
-  const pages = { newtab: pageNewTab, settings: pageSettings, history: pageHistory, bookmarks: pageBookmarks, import: pageImport, passwords: pagePasswords, downloads: pageDownloads, shortcuts: pageShortcuts };
+  const pages = { newtab: pageNewTab, settings: pageSettings, history: pageHistory, waypoints: pageBookmarks, import: pageImport, passwords: pagePasswords, downloads: pageDownloads, shortcuts: pageShortcuts, tasks: pageTasks };
   root.scrollTop = 0;
   (pages[name] || pageNewTab)(root, tab);
 }
@@ -23,7 +23,7 @@ async function pageNewTab(root, tab) {
     <div class="greet" id="ntp-greet"></div>
     <label class="ntp-search">${icon('search', 18)}<input id="ntp-q" placeholder="Search ${esc(engine.name)} or type a URL" spellcheck="false"></label>
     ${tab.private ? `<div class="ntp-private">${icon('incognito', 20)}<div><b>${B.private ? 'Private window' : 'Private tab'}</b>
-      <span>Pages you visit here aren’t saved to your history, and their cookies and site data are deleted when your last private tab closes. Downloads and bookmarks are kept. Extensions are off.</span></div></div>`
+      <span>Pages you visit here aren’t saved to your history, and their cookies and site data are deleted when your last private tab closes. Downloads and Waypoints are kept. Extensions are off.</span></div></div>`
     : '<div class="tiles" id="ntp-tiles"></div>'}
     ${keysFor('palette')[0] ? `<div class="ntp-hint">Press ${kbdHtml(keysFor('palette')[0])} anywhere to open the Control Palette</div>` : ''}
   </div>`;
@@ -159,7 +159,7 @@ async function pageImport(root) {
     const res = $('#imp-html-res');
     try {
       const r = await window.ultima.importBookmarksHtml();
-      if (r) { res.className = 'result'; res.textContent = `✓ ${r.added} bookmarks added`; }
+      if (r) { res.className = 'result'; res.textContent = `✓ ${r.added} bookmarks added to your Waypoints`; }
     } catch (err) { res.className = 'result err'; res.textContent = err.message; }
   };
 

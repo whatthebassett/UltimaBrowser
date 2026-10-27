@@ -1,6 +1,6 @@
 // Tab History: a panel listing every open tab in the space with the complete list of pages it has been through
 // (newest first, the page it's on marked, pages you went back from dimmed), with a search across all of them.
-// Opened from its sidebar button (Settings → Sidebar), the Control Palette or a shortcut. Clicking a page jumps that
+// Opened from its sidebar button (Settings → Appearance), the Control Palette or a shortcut. Clicking a page jumps that
 // tab straight to it; clicking a tab's heading switches to the tab. Back/forward lists come from main
 // (webContents.navigationHistory); an unloaded tab has none, since Chromium drops it with the page.
 const TH = { panel: null };

@@ -3,6 +3,7 @@
 //
 // Menu items: { id, label, icon?, leadHtml? (e.g. a site icon), shortcut? (command id), hint? (literal key text), enabled?,
 //               type?: 'separator' | 'checkbox', checked?, danger?, submenu?: [items] }
+// or a row of icon buttons: { type: 'actions', buttons: [{ id, label, icon, enabled?, on?, shortcut?, hint? }] }
 
 const OV = { pointer: { x: 0, y: 0 }, menu: null, dialog: null };
 
@@ -38,6 +39,13 @@ function closeMenu(result) {
 
 function menuItemHtml(it, i) {
   if (it.type === 'separator') return '<div class="ctx-sep"></div>';
+  if (it.type === 'actions') {
+    // the label (with its keys) is the button's tooltip
+    return `<div class="ctx-actions" data-i="${i}">${it.buttons.map((b, n) => {
+      const keys = (b.shortcut && keyText(b.shortcut)) || b.hint || '';
+      return `<button class="ctx-act ${b.on ? 'on' : ''}" data-act="${n}" ${b.enabled === false ? 'disabled' : ''} data-tip="${esc(keys ? `${b.label} (${keys})` : b.label)}" aria-label="${esc(b.label)}">${icon(b.icon, 16)}</button>`;
+    }).join('')}</div>`;
+  }
   const keys = it.shortcut && keysFor(it.shortcut)[0] ? kbdHtml(keysFor(it.shortcut)[0])
     : it.hint ? it.hint.split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('') : '';
   const tick = it.type === 'checkbox' && it.checked ? icon('check', 14) : '';
@@ -95,6 +103,12 @@ function openLevel(items, pos, parentItemEl) {
     }, 160);
   });
   el.addEventListener('click', (e) => {
+    const act = e.target.closest('.ctx-act');
+    if (act) {
+      const b = items[Number(act.closest('.ctx-actions').dataset.i)].buttons[Number(act.dataset.act)];
+      if (b.enabled !== false) closeMenu(b.id);
+      return;
+    }
     const itemEl = e.target.closest('.ctx-item');
     if (itemEl) activateItem(level, Number(itemEl.dataset.i), itemEl);
   });
@@ -108,7 +122,7 @@ function selectItem(level, i) {
 
 function activateItem(level, i, itemEl) {
   const it = level.items[i];
-  if (!it || it.type === 'separator' || it.enabled === false) return;
+  if (!it || it.type === 'separator' || it.type === 'actions' || it.enabled === false) return;
   if (it.submenu) {
     const sub = openLevel(it.submenu, null, itemEl || $(`.ctx-item[data-i="${i}"]`, level.el));
     moveSel(sub, 1);
@@ -123,7 +137,7 @@ function moveSel(level, dir) {
   for (let step = 0; step < n; step += 1) {
     i = (i + dir + n) % n;
     const it = level.items[i];
-    if (it.type !== 'separator' && it.enabled !== false) { selectItem(level, i); return; }
+    if (it.type !== 'separator' && it.type !== 'actions' && it.enabled !== false) { selectItem(level, i); return; }
   }
 }
 

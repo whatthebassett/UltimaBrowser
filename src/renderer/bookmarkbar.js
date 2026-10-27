@@ -34,10 +34,10 @@ function renderBookmarkBar() {
   const items = bmChildren('bar');
   bar.innerHTML = `
     <div class="bmb-items">${items.length ? items.map(bmItemHtml).join('')
-      : `<span class="bmb-empty">For quick access, place your bookmarks here on the bookmarks bar.</span>
+      : `<span class="bmb-empty">For quick access, place your Waypoints here on the Waypoints bar.</span>
          <button class="bmb-link" data-bmb="import" title="Copy the bookmarks bar of Chrome, Edge, Brave or Vivaldi">Import bookmarks now…</button>`}</div>
-    <button class="bmb-item bmb-more" data-bmb="more" hidden title="More bookmarks">»</button>
-    ${bmChildren('other').length ? `<span class="bmb-sep"></span>${bmItemHtml({ ...bmNode('other'), title: 'Other bookmarks' }).replace('draggable="true"', '')}` : ''}`;
+    <button class="bmb-item bmb-more" data-bmb="more" hidden title="More Waypoints">»</button>
+    ${bmChildren('other').length ? `<span class="bmb-sep"></span>${bmItemHtml({ ...bmNode('other'), title: 'Other Waypoints' }).replace('draggable="true"', '')}` : ''}`;
   fitBookmarkBar();
 }
 
@@ -94,7 +94,7 @@ function openBookmark(n, how) {
 
 async function openAllBookmarks(folderId) {
   const urls = bmChildren(folderId).filter((n) => n.type === 'url');
-  if (urls.length > 15 && !await confirmDialog(`This opens ${urls.length} tabs.`, { title: `Open all ${urls.length} bookmarks?`, ok: 'Open all' })) return;
+  if (urls.length > 15 && !await confirmDialog(`This opens ${urls.length} tabs.`, { title: `Open all ${urls.length} Waypoints?`, ok: 'Open all' })) return;
   urls.forEach((n, i) => createTab({ url: n.url, title: n.title, activate: i === 0 }));
 }
 
@@ -119,7 +119,7 @@ async function addBookmarkFolder(parent = 'bar', index) {
 async function editBookmark(n) {
   const fields = [{ id: 'title', label: 'Name', value: n.title }];
   if (n.type === 'url') fields.push({ id: 'url', label: 'URL', value: n.url });
-  const v = await editDialog({ title: n.type === 'folder' ? 'Rename folder' : 'Edit bookmark', fields, ok: 'Save' });
+  const v = await editDialog({ title: n.type === 'folder' ? 'Rename folder' : 'Edit Waypoint', fields, ok: 'Save' });
   if (v) await window.ultima.updateBookmark({ id: n.id, title: v.title, url: v.url ? fixUrl(v.url.trim()) : undefined });
 }
 
@@ -132,7 +132,7 @@ async function deleteBookmark(n) {
   }
   const index = bmChildren(n.parent).indexOf(n);
   await window.ultima.removeBookmark(n.id);
-  toast('Bookmark deleted', { label: 'Undo', run: () => window.ultima.addBookmark({ url: n.url, title: n.title, parent: n.parent, index, favicon: n.favicon }) });
+  toast('Waypoint deleted', { label: 'Undo', run: () => window.ultima.addBookmark({ url: n.url, title: n.title, parent: n.parent, index, favicon: n.favicon }) });
 }
 
 // typed addresses without a scheme get https://
@@ -154,8 +154,8 @@ async function bookmarkBarMenu(e) {
     { id: 'add-page', label: 'Add page…', icon: 'plus' },
     { id: 'add-folder', label: 'Add folder…', icon: 'folder' },
     { type: 'separator' },
-    { id: 'manager', label: 'Bookmark manager', icon: 'bookmark', shortcut: 'open-bookmarks' },
-    { id: 'show', label: 'Show bookmarks bar', type: 'checkbox', checked: bmShown(), shortcut: 'toggle-bookmarks-bar' },
+    { id: 'manager', label: 'Open Waypoints', icon: 'bookmark', shortcut: 'open-bookmarks' },
+    { id: 'show', label: 'Show Waypoints bar', type: 'checkbox', checked: bmShown(), shortcut: 'toggle-bookmarks-bar' },
   ];
   let items;
   if (n?.type === 'url') {
@@ -204,7 +204,7 @@ async function importChromeBookmarkBar() {
   }
   try {
     const added = await window.ultima.importBookmarkBar(src.id);
-    return toast(added ? `Added ${added} bookmark${added === 1 ? '' : 's'} from ${src.label}’s bookmarks bar` : `Nothing new on ${src.label}’s bookmarks bar`);
+    return toast(added ? `Added ${added} Waypoint${added === 1 ? '' : 's'} from ${src.label}’s bookmarks bar` : `Nothing new on ${src.label}’s bookmarks bar`);
   } catch (err) {
     return toast(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
   }
