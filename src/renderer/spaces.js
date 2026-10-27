@@ -17,14 +17,23 @@ B.activeSpaceId = null;
 const newSpaceId = () => Math.random().toString(36).slice(2, 10);
 const spaceById = (id) => B.spaces.find((s) => s.id === id) || null;
 const activeSpace = () => spaceById(B.activeSpaceId) || B.spaces[0];
-// Tabs shown while a space is open: the shared essentials plus that space's own pinned and regular tabs.
-const spaceTabs = (id = B.activeSpaceId) => B.tabs.filter((t) => t.zone === 'essential' || t.spaceId === id);
+// Essentials are shared by every space, except a space with its own (space.ownEssentials): its Essentials
+// (tab.essentialsOf = its id) are shown there alone, and the shared ones aren't.
+const essentialsSpace = (id = B.activeSpaceId) => (spaceById(id)?.ownEssentials ? id : undefined);
+// the space a tab belongs to: its own, or for an Essential the space whose own Essentials it is (none when shared)
+const homeSpaceOf = (t) => (t.zone === 'essential' ? t.essentialsOf : t.spaceId);
+// Tabs shown while a space is open: its Essentials (shared or its own), plus its own pinned and regular tabs.
+const spaceTabs = (id = B.activeSpaceId) => B.tabs.filter((t) => (t.zone === 'essential' ? t.essentialsOf === essentialsSpace(id) : t.spaceId === id));
 const ownTabs = (id) => B.tabs.filter((t) => t.zone !== 'essential' && t.spaceId === id);
+const ownEssentials = (id) => B.tabs.filter((t) => t.zone === 'essential' && t.essentialsOf === id);
 const partitionFor = (spaceId) => (spaceById(spaceId)?.separate ? `${SHARED_PARTITION}-space-${spaceId}` : SHARED_PARTITION);
-// Essentials are shared by every space, so they always use the shared sign-ins.
-const tabPartition = (tab) => (tab.zone === 'essential' ? SHARED_PARTITION : partitionFor(tab.spaceId));
+// Shared Essentials use the shared sign-ins; a space's own Essentials use that space's. Private tabs browse in memory only.
+const tabPartition = (tab) => (tab.private ? PRIVATE_PARTITION
+  : tab.zone === 'essential' ? (tab.essentialsOf ? partitionFor(tab.essentialsOf) : SHARED_PARTITION) : partitionFor(tab.spaceId));
 
 function initSpaces(saved, activeId) {
+  // a private window has one space of its own, not yours (windows.js)
+  if (B.private) saved = [privateSpace()];
   B.spaces = saved?.length ? saved : DEFAULT_SPACES.map((s) => ({ ...s, id: newSpaceId(), separate: false }));
   B.activeSpaceId = spaceById(activeId) ? activeId : B.spaces[0].id;
   applySpaceTheme();
@@ -65,6 +74,7 @@ function cycleSpace(dir) {
 }
 
 function createSpace(switchTo = true) {
+  if (B.private) return toast('Private windows don’t have spaces');
   const usedIcons = new Set(B.spaces.map((s) => s.icon));
   const colors = Object.values(SPACE_COLORS);
   const space = {
@@ -106,7 +116,7 @@ function setSpaceSeparate(space, separate) {
   if (Boolean(space.separate) === separate) return;
   space.separate = separate;
   // A webview can't change partition once attached, so reload this space's tabs into the new one.
-  for (const t of ownTabs(space.id)) dropWebview(t);
+  for (const t of [...ownTabs(space.id), ...ownEssentials(space.id)]) dropWebview(t);
   const cur = activeTab();
   if (cur?.spaceId === space.id) activateTab(cur.id);
   renderTabs();
@@ -115,11 +125,37 @@ function setSpaceSeparate(space, separate) {
   toast(separate ? `${space.name} now keeps its own sign-ins and cookies` : `${space.name} now shares sign-ins with your other spaces`);
 }
 
+// Gives a space Essentials of its own instead of the shared ones, or takes them away. Its own Essentials stay with it
+// when they go: they become its pinned tabs, so nothing is lost.
+function setSpaceEssentials(space, own) {
+  if (Boolean(space.ownEssentials) === own) return;
+  space.ownEssentials = own;
+  const kept = own ? [] : ownEssentials(space.id);
+  for (const t of kept) Object.assign(t, { zone: 'pinned', essentialsOf: undefined, spaceId: space.id });
+  // the page you're on may be an Essential this space no longer shows: you stay on it, and the sidebar shows its own
+  sortZones();
+  renderTabs();
+  renderSpaces();
+  saveSession();
+  if (own) toast(`${space.name} now has its own Essentials. Drag tabs to the top of the sidebar to add them.`);
+  else toast(`${space.name} uses the shared Essentials again${kept.length ? `; its own ${kept.length === 1 ? 'one is now a pinned tab' : `${kept.length} are now pinned tabs`} there` : ''}`);
+}
+
+// An Essential of a space that no longer has its own (turned off in another window, or a space deleted there) becomes a
+// pinned tab of that space, or a shared Essential if the space is gone
+function settleEssentials() {
+  for (const t of B.tabs) {
+    if (t.zone !== 'essential' || !t.essentialsOf || essentialsSpace(t.essentialsOf)) continue;
+    if (spaceById(t.essentialsOf)) Object.assign(t, { zone: 'pinned', spaceId: t.essentialsOf, essentialsOf: undefined });
+    else t.essentialsOf = undefined;
+  }
+}
+
 async function deleteSpace(space) {
   if (B.spaces.length === 1) return toast('You need at least one space');
-  const tabs = ownTabs(space.id);
+  const tabs = [...ownTabs(space.id), ...ownEssentials(space.id)];
   const closes = tabs.length ? `Its ${tabs.length} tab${tabs.length > 1 ? 's' : ''} will be closed. ` : '';
-  const ok = await confirmDialog(`${closes}Essentials are kept.`, { title: `Delete the “${space.name}” space?`, ok: 'Delete space', danger: true });
+  const ok = await confirmDialog(`${closes}${space.ownEssentials ? 'Its own Essentials go with it; the shared ones are kept.' : 'Essentials are kept.'}`, { title: `Delete the “${space.name}” space?`, ok: 'Delete space', danger: true });
   if (!ok) return undefined;
   for (const t of tabs) dropWebview(t);
   B.tabs = B.tabs.filter((t) => !tabs.includes(t));
@@ -139,7 +175,7 @@ function moveTabToSpace(tab, spaceId) {
     if (next) activateTab(next.id);
     else createTab();
   }
-  if (tab.zone === 'essential') tab.zone = 'pinned'; // an essential sent to one space becomes a pinned tab there
+  if (tab.zone === 'essential') Object.assign(tab, { zone: 'pinned', essentialsOf: undefined }); // an essential sent to one space becomes a pinned tab there
   tab.spaceId = spaceId;
   tab.openerId = undefined;
   tab.folderId = undefined; // folders and split views belong to a space
@@ -152,11 +188,13 @@ function moveTabToSpace(tab, spaceId) {
 }
 
 async function spaceMenu(space = activeSpace(), pos = undefined) {
+  if (B.private) return;
   const choice = await showMenu([
     { id: 'rename', icon: 'layers', label: 'Rename space' },
     { label: 'Icon', icon: 'sparkle', submenu: SPACE_ICONS.map((i) => ({ id: `icon:${i}`, label: i })) },
     { id: 'theme', icon: 'palette', label: 'Edit theme…', shortcut: 'space-theme' },
     { id: 'separate', type: 'checkbox', checked: space.separate, label: 'Separate sign-ins and cookies' },
+    { id: 'essentials', type: 'checkbox', checked: Boolean(space.ownEssentials), label: 'Own Essentials' },
     { type: 'separator' },
     { label: 'Switch to', icon: 'forward', submenu: B.spaces.map((s) => ({ id: `go:${s.id}`, label: `${s.icon}  ${s.name}`, enabled: s.id !== B.activeSpaceId })) },
     { id: 'new', icon: 'plus', label: 'New space', shortcut: 'new-space' },
@@ -169,6 +207,7 @@ async function spaceMenu(space = activeSpace(), pos = undefined) {
   else if (kind === 'icon') { space.icon = value; renderSpaces(); renderTabs(); saveSession(); }
   else if (kind === 'theme') openThemeEditor(space);
   else if (kind === 'separate') setSpaceSeparate(space, !space.separate);
+  else if (kind === 'essentials') setSpaceEssentials(space, !space.ownEssentials);
   else if (kind === 'go') switchSpace(value);
   else if (kind === 'new') createSpace();
   else if (kind === 'delete') deleteSpace(space);

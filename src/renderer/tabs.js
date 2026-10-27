@@ -6,6 +6,8 @@ const B = {
   closed: [],
   nextId: 1,
   dragId: null,
+  private: false, // a private window (windows.js)
+  windowId: null,
 };
 
 const NEWTAB = 'ultima://newtab';
@@ -37,11 +39,16 @@ const internalName = (url) => url.replace('ultima://', '').split(/[/?#]/)[0];
 
 function createTab({
   url = NEWTAB, title, name, favicon = '', zone, pinned = false, homeUrl, homeTitle, homeFavicon, activate = true, lazy = false, index, opener, spaceId, folderId, splitId,
+  key, private: priv = false, essentialsOf,
 } = {}) {
+  // a private window's tabs are all private (windows.js); private tabs are regular tabs, never pinned
+  const isPriv = B.private || Boolean(priv);
   // `pinned` is the pre-Essentials session format, where pinned tabs were the icon grid
-  const z = ZONES.includes(zone) ? zone : pinned ? 'essential' : 'normal';
+  const z = isPriv ? 'normal' : ZONES.includes(zone) ? zone : pinned ? 'essential' : 'normal';
   const tab = {
     id: B.nextId++,
+    private: isPriv || undefined,
+    key: z === 'normal' ? undefined : key || newTabKey(), // names a pinned tab or Essential in every window
     spaceId: spaceById(spaceId) ? spaceId : opener?.spaceId || B.activeSpaceId,
     url,
     title: title || (isInternal(url) ? INTERNAL_TITLES[internalName(url)] || 'Ultima' : url),
@@ -57,12 +64,14 @@ function createTab({
     muted: false,
     error: null,
   };
+  // one of a space's own Essentials belongs to that space (spaces.js)
+  if (z === 'essential' && essentialsSpace(essentialsOf)) Object.assign(tab, { essentialsOf, spaceId: essentialsOf });
   if (z !== 'normal') {
     tab.homeTitle = homeTitle || (tab.url === tab.homeUrl ? tab.title : hostname(tab.homeUrl) || tab.homeUrl);
     tab.homeFavicon = homeFavicon ?? (tab.url === tab.homeUrl ? favicon : '');
   }
-  // a tab opened from a tab in a folder joins that folder, as in Chrome
-  if (z === 'normal') tab.folderId = folderById(folderId) ? folderId : opener?.zone === 'normal' ? opener.folderId : undefined;
+  // a tab opened from a tab in a folder joins that folder, as in Chrome (pinned folders hold only pinned tabs)
+  if (z !== 'essential') tab.folderId = folderById(folderId)?.zone === z ? folderId : z === 'normal' && opener?.zone === 'normal' ? opener.folderId : undefined;
   if (z === 'normal' && splitById(splitId)) tab.splitId = splitId; // restoring a session
   let at = index ?? B.tabs.length;
   if (index === undefined && opener) {
@@ -81,23 +90,27 @@ function createTab({
   return tab;
 }
 
-function ensureWebview(tab) {
+// `adopt`: a page already open in #viewport (a glance becoming a tab) instead of a new one
+function ensureWebview(tab, adopt = null) {
   if (tab.webview) return tab.webview;
-  const wv = document.createElement('webview');
-  wv.setAttribute('partition', tabPartition(tab));
-  wv.setAttribute('allowpopups', '');
-  wv.className = 'hidden';
-  wv.src = isInternal(tab.url) ? 'about:blank' : tab.url;
+  const wv = adopt || document.createElement('webview');
+  if (!adopt) {
+    wv.setAttribute('partition', tabPartition(tab));
+    wv.setAttribute('allowpopups', '');
+    wv.className = 'hidden';
+    wv.src = isInternal(tab.url) ? 'about:blank' : tab.url;
+  }
   tab.webview = wv;
-  tab.ready = false;
+  tab.ready = Boolean(adopt);
 
   const isActive = () => B.activeId === tab.id;
   const changed = () => { renderTabs(); if (isActive()) updateChrome(); saveSession(); };
+  const addHistory = (entry) => { if (!tab.private) window.ultima.addHistory(entry); }; // private pages leave no history
 
   wv.addEventListener('dom-ready', () => {
     const first = !tab.ready;
     tab.ready = true;
-    if (first && tab.zoom) wv.setZoomLevel(tab.zoom);
+    pageReady(wv, tab); // its zoom and accessibility style sheet, for each new document (accessibility.js)
     if (first && tab.muted) wv.setAudioMuted(true);
     if (first) applySiteSound(tab); // a site whose sound is blocked (sitesettings.js)
     if (first && isActive()) notifyActiveTab(tab); // the page is attached now, so it has an id to report
@@ -109,7 +122,8 @@ function ensureWebview(tab) {
   wv.addEventListener('page-title-updated', (e) => {
     tab.title = e.title || tab.url;
     if (isKept(tab) && !offSite(tab)) tab.homeTitle = tab.title;
-    window.ultima.addHistory({ url: tab.url, title: tab.title, visit: false });
+    if (tab.folderId) refreshGroupName(folderById(tab.folderId)); // an automatic group named from its tabs' titles
+    addHistory({ url: tab.url, title: tab.title, visit: false });
     changed();
   });
   wv.addEventListener('page-favicon-updated', (e) => {
@@ -123,13 +137,15 @@ function ensureWebview(tab) {
     tab.url = e.url;
     if (otherSite) applySiteSound(tab);
     if (isActive()) showContent(tab);
-    window.ultima.addHistory({ url: e.url, visit: true });
+    addHistory({ url: e.url, visit: true });
+    autoGroupTab(tab); // into its app's or site's folder (autogroup.js)
     changed();
   });
   wv.addEventListener('did-navigate-in-page', (e) => {
     if (!e.isMainFrame) return;
     tab.url = e.url;
-    window.ultima.addHistory({ url: e.url, title: tab.title, visit: true });
+    addHistory({ url: e.url, title: tab.title, visit: true });
+    autoGroupTab(tab);
     changed();
   });
   wv.addEventListener('did-fail-load', (e) => {
@@ -167,7 +183,8 @@ function ensureWebview(tab) {
     closeExtensionPopup({ fromPage: true });
   });
 
-  $('#viewport').prepend(wv);
+  if (adopt) applySiteSound(tab); // what dom-ready does for a new page
+  else $('#viewport').prepend(wv);
   return wv;
 }
 
@@ -184,11 +201,13 @@ function dropWebview(tab) {
 function activateTab(id) {
   const tab = tabById(id);
   if (!tab) return;
+  if (GL.open && GL.open.source !== tab) closeGlance({ instant: true }); // a glance belongs to the page it came from
   B.activeId = id;
   tab.lastActive = Date.now();
-  // essentials are shared, so opening one never changes the space you are in
-  if (tab.zone !== 'essential' && tab.spaceId !== B.activeSpaceId) {
-    B.activeSpaceId = tab.spaceId;
+  // shared Essentials don't change the space you are in, unless it has Essentials of its own (then it's one that doesn't)
+  const home = homeSpaceOf(tab) || (essentialsSpace() ? B.spaces.find((s) => !s.ownEssentials)?.id : undefined);
+  if (home && home !== B.activeSpaceId) {
+    B.activeSpaceId = home;
     applySpaceTheme();
     renderSpaces();
   }
@@ -272,10 +291,11 @@ function navigate(tab, url) {
 
 // Where to go when `tab` stops being the active one: stay in the current space and prefer the opener,
 // then the neighbor in the sidebar, then the most recently used tab.
+// Never wakes an unloaded pinned tab or Essential: with nothing else open, you get a new tab.
 function pickNextTab(tab) {
-  const visible = spaceTabs().filter((t) => t !== tab);
+  const all = spaceTabs().filter((t) => t === tab || !isUnloaded(t));
+  const visible = all.filter((t) => t !== tab);
   if (!visible.length) return null;
-  const all = spaceTabs();
   const i = all.indexOf(tab);
   const opener = visible.find((t) => t.id === tab.openerId);
   const neighbor = (i >= 0 && (all[i + 1] || all[i - 1])) || null;
@@ -322,7 +342,8 @@ function closeTab(id, { remove = false } = {}) {
   if (isKept(tab) && !remove) { unloadTab(tab); return; }
   const animate = TD.drag ? null : animateTabClose(id);
   const idx = B.tabs.indexOf(tab);
-  B.closed.push({ url: tab.url, title: tab.title, name: tab.name, favicon: tab.favicon, zone: tab.zone, homeUrl: tab.homeUrl, homeTitle: tab.homeTitle, homeFavicon: tab.homeFavicon, index: idx, spaceId: tab.spaceId, folderId: tab.folderId });
+  // a closed private tab can come back only inside a private window
+  if (!tab.private || B.private) B.closed.push({ url: tab.url, title: tab.title, name: tab.name, favicon: tab.favicon, zone: tab.zone, homeUrl: tab.homeUrl, homeTitle: tab.homeTitle, homeFavicon: tab.homeFavicon, index: idx, spaceId: tab.spaceId, folderId: tab.folderId, essentialsOf: tab.essentialsOf });
   if (B.closed.length > 25) B.closed.shift();
   if (B.activeId === id) {
     const next = pickNextTab(tab);
@@ -335,6 +356,13 @@ function closeTab(id, { remove = false } = {}) {
   animate?.();
   saveSession();
 }
+
+// Nothing open but the new tab page you were left with: no other tab in any space, no pinned tab or Essential loaded.
+const windowIsEmpty = () => {
+  const tab = activeTab();
+  return Boolean(tab) && tab.url === NEWTAB && tab.zone === 'normal'
+    && B.tabs.every((t) => t === tab || (isKept(t) && !t.webview));
+};
 
 function unloadTab(tab) {
   if (!tab) return;
@@ -360,17 +388,20 @@ function sendHome(tab) {
 function reopenClosedTab() {
   const c = B.closed.pop();
   if (!c) return toast('No recently closed tabs');
-  createTab({ url: c.url, title: c.title, name: c.name, favicon: c.favicon, zone: c.zone, homeUrl: c.homeUrl, homeTitle: c.homeTitle, homeFavicon: c.homeFavicon, index: c.index, spaceId: c.spaceId, folderId: c.folderId });
+  createTab({ url: c.url, title: c.title, name: c.name, favicon: c.favicon, zone: c.zone, homeUrl: c.homeUrl, homeTitle: c.homeTitle, homeFavicon: c.homeFavicon, index: c.index, spaceId: c.spaceId, folderId: c.folderId, essentialsOf: c.essentialsOf });
 }
 
-// Moves a tab into a zone. Essentials use the shared sign-ins, so crossing that line may reload the page.
+// Moves a tab into a zone. Shared Essentials use the shared sign-ins, so crossing that line may reload the page.
 function applyZone(tab, zone) {
   if (tab.zone === zone) return;
   const before = tabPartition(tab);
-  if (tab.zone === 'essential') tab.spaceId = B.activeSpaceId; // an essential leaving lands in the space you are in
+  if (tab.zone === 'essential') Object.assign(tab, { spaceId: B.activeSpaceId, essentialsOf: undefined }); // an essential leaving lands in the space you are in
+  // one joining goes to its space's own Essentials, if it has them, or the shared ones
+  if (zone === 'essential') tab.essentialsOf = essentialsSpace(tab.spaceId);
   if (tab.zone === 'normal') Object.assign(tab, { homeUrl: tab.url, homeTitle: tab.title, homeFavicon: tab.favicon }); // pinned where it is
-  if (zone === 'normal') Object.assign(tab, { homeUrl: undefined, homeTitle: undefined, homeFavicon: undefined });
-  else { tab.folderId = undefined; tab.splitId = undefined; } // folders and split views hold regular tabs only
+  if (zone === 'normal') Object.assign(tab, { homeUrl: undefined, homeTitle: undefined, homeFavicon: undefined, key: undefined });
+  else { tab.splitId = undefined; tab.key ??= newTabKey(); } // split views hold regular tabs only
+  if (folderById(tab.folderId)?.zone !== zone) tab.folderId = undefined; // and a folder holds regular or pinned tabs
   tab.zone = zone;
   if (tab.webview && tabPartition(tab) !== before) {
     dropWebview(tab);
@@ -381,6 +412,8 @@ function applyZone(tab, zone) {
 function moveTab(id, toIndex, zone) {
   const tab = tabById(id);
   if (!tab) return;
+  // pinned tabs and Essentials are in every window's sidebar, so a private page can't become one
+  if (tab.private && zone !== 'normal') { toast('Private tabs can’t be pinned or added to Essentials'); renderTabs(); return; }
   const from = B.tabs.indexOf(tab);
   B.tabs.splice(from, 1);
   if (from < toIndex) toIndex -= 1;
@@ -427,7 +460,7 @@ async function editPinnedLink(tab) {
 }
 
 function duplicateTab(tab) {
-  if (tab) createTab({ url: tab.url, title: tab.title, favicon: tab.favicon, opener: tab.zone === 'normal' ? tab : undefined });
+  if (tab) createTab({ url: tab.url, title: tab.title, favicon: tab.favicon, opener: tab.zone === 'normal' ? tab : undefined, private: tab.private });
 }
 
 function toggleMute(tab) {
@@ -444,17 +477,19 @@ function cycleTab(dir) {
   activateTab(tabs[(i + dir + tabs.length) % tabs.length].id);
 }
 
+// Saves this window's own regular tabs (private ones never) and, when it changed, the sidebar every window shares:
+// spaces, pinned tabs and Essentials (windows.js). A private window saves nothing.
+// Nothing is saved until the window has restored what it had (B.restored, set at startup in app.js): a window whose
+// startup failed part-way must not write its empty sidebar over yours.
 const saveSession = debounce(() => {
-  const tabs = B.tabs.map((t) => ({
-    url: t.url, title: t.title, name: t.name, favicon: t.favicon, zone: t.zone, homeUrl: t.homeUrl, homeTitle: t.homeTitle, homeFavicon: t.homeFavicon, spaceId: t.spaceId, folderId: t.folderId, splitId: t.splitId,
-  }));
+  if (B.private || !B.restored) return;
+  const own = B.tabs.filter((t) => t.zone === 'normal' && !t.private);
+  const tabs = own.map((t) => ({ url: t.url, title: t.title, name: t.name, favicon: t.favicon, spaceId: t.spaceId, folderId: t.folderId, splitId: t.splitId }));
+  const cur = activeTab();
+  const active = !cur ? null : isKept(cur) ? { key: cur.key } : own.includes(cur) ? { normal: own.indexOf(cur) } : null;
   window.ultima.saveSession({
-    spaces: B.spaces,
-    folders: B.folders,
-    splits: B.splits,
-    activeSpaceId: B.activeSpaceId,
-    tabs,
-    activeIndex: Math.max(0, B.tabs.findIndex((t) => t.id === B.activeId)),
+    window: { folders: B.folders.filter((f) => f.zone !== 'pinned'), splits: B.splits, activeSpaceId: B.activeSpaceId, tabs, active },
+    sidebar: sharedSidebarIfChanged(),
   });
 }, 300);
 
@@ -465,7 +500,20 @@ function tabIcon(tab) {
     const map = { newtab: 'sparkle', settings: 'settings', history: 'history', bookmarks: 'bookmark', import: 'import', passwords: 'key', downloads: 'download', shortcuts: 'command' };
     return `<span class="fav" style="color:var(--accent)">${icon(map[internalName(tab.url)] || 'sparkle')}</span>`;
   }
+  // (a private page's icon isn't fetched: the sidebar would load it outside private browsing)
+  if (tab.private) return `<span class="fav private-fav" title="Private">${icon('incognito')}</span>`;
   return favHtml(tab.favicon, tab.url, tab.title);
+}
+
+// What a tab shows where its icon goes in the sidebar: the icon, or while it plays sound, moving sound bars; while
+// it's muted, a muted speaker. Either way it's a button that mutes / unmutes the tab.
+function tabFace(t) {
+  if (t.muted) return `<button class="tab-sound muted" data-act="mute" title="Unmute tab">${icon('mute', 14)}</button>`;
+  if (t.audible) {
+    return `<button class="tab-sound playing" data-act="mute" title="Mute tab">
+      <span class="sound-bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span class="sound-hover">${icon('mute', 14)}</span></button>`;
+  }
+  return tabIcon(t);
 }
 
 function tabRow(t) {
@@ -476,16 +524,15 @@ function tabRow(t) {
     : '';
   const renaming = B.renaming?.id === t.id;
   const home = offSite(t) ? `<button class="tab-home" data-act="home" title="${esc(`Back to the pinned link\n${t.homeUrl}`)}">${icon('home', 14)}</button>` : '';
-  return `<div class="tab ${kept ? 'pinned-row' : ''} ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false" ${renaming ? '' : `title="${esc(tabTip(t))}"`}>
-      ${tabIcon(t)}
+  return `<div class="tab ${kept ? 'pinned-row' : ''} ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''} ${t.private && !B.private ? 'private' : ''}" data-tab="${t.id}" draggable="false" ${renaming ? '' : `title="${esc(tabTip(t))}"`}>
+      ${tabFace(t)}
       ${renaming ? `<input class="tab-rename" maxlength="80" spellcheck="false" aria-label="Tab name" placeholder="${esc(t.title)}">` : `<span class="title">${esc(tabLabel(t))}</span>`}
-      ${t.audible || t.muted ? `<button class="tab-audio" data-act="mute" title="${t.muted ? 'Unmute' : 'Mute'} tab">${icon(t.muted ? 'mute' : 'volume', 14)}</button>` : ''}
       ${home}${close}
     </div>`;
 }
 
 // a renamed tab's tooltip still says what the page is
-const tabTip = (t) => `${tabLabel(t)}${t.name ? `\n${t.title}` : ''}\n${t.url}${isUnloaded(t) ? '\n(unloaded — click to load)' : ''}`;
+const tabTip = (t) => `${tabLabel(t)}${t.name ? `\n${t.title}` : ''}\n${t.url}${isUnloaded(t) ? '\n(unloaded — click to load)' : ''}${t.private && !B.private ? '\nPrivate tab' : ''}`;
 
 // Essentials fill the sidebar's width in balanced rows, as in Zen: up to 4 share one row (a lone one is full width),
 // then 5–6 go 3 a row, 7–8 go 4, 9 is 3×3 and more go 4 a row. A narrow sidebar fits fewer a row (styles.css).
@@ -498,15 +545,17 @@ function layoutEssentials() {
 
 function renderTabs() {
   if (TD.drag) { TD.dirty = true; return; } // not mid-drag (it would pull the gap away); redrawn when the card lands
+  settleEssentials();
+  tidyAutoGroups();
   normalizeSplits();
   normalizeTabFolders();
   const visible = spaceTabs();
   $('#essentials').innerHTML = visible.filter((t) => t.zone === 'essential').map((t) => `
     <div class="pin ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false"
-      title="${esc(tabTip(t))}" ${pinRingStyle(t)}>${tabIcon(t)}</div>`).join('');
+      title="${esc(tabTip(t))}" ${pinRingStyle(t)}>${tabFace(t)}</div>`).join('');
   layoutEssentials();
-  $('#pinned-list').innerHTML = visible.filter((t) => t.zone === 'pinned').map(tabRow).join('');
-  $('#tabs').innerHTML = normalTabsHtml(visible.filter((t) => t.zone === 'normal'));
+  $('#pinned-list').innerHTML = tabListHtml(visible.filter((t) => t.zone === 'pinned'));
+  $('#tabs').innerHTML = tabListHtml(visible.filter((t) => t.zone === 'normal'));
   document.title = `${tabLabel(activeTab()) || 'Ultima'} — Ultima Browser`;
   restoreTabRename();
   syncPanes();
@@ -518,7 +567,8 @@ function renderTabs() {
 // which show no names, use a dialog.
 function startRenameTab(tab) {
   if (!tab) return;
-  if (tab.zone === 'essential' || document.body.classList.contains('collapsed') || tab.spaceId !== B.activeSpaceId) {
+  // no room to type where the name is: Essentials and split views show only icons, as does the compact sidebar
+  if (tab.zone === 'essential' || tab.splitId || document.body.classList.contains('collapsed') || tab.spaceId !== B.activeSpaceId) {
     renameTabDialog(tab);
     return;
   }
@@ -716,7 +766,7 @@ function initTabStrip() {
       if (B.dragId === null) return;
       e.preventDefault();
       clearDropMarks();
-      const head = zone === 'normal' && e.target.closest('[data-folder-head]'); // onto a folder: into it
+      const head = zone !== 'essential' && e.target.closest('[data-folder-head]'); // onto a folder: into it
       if (head) { head.classList.add('drop-into'); return; }
       const el = e.target.closest('[data-tab]');
       if (zone === 'essential' || !el) { (el || container).classList.add('drop-target'); return; }
@@ -730,7 +780,7 @@ function initTabStrip() {
       // the drop redraws the sidebar, taking the dragged row (and its dragend) with it, so finish the drag here
       endTabDrag();
       B.dragId = dragId;
-      const head = zone === 'normal' && e.target.closest('[data-folder-head]');
+      const head = zone !== 'essential' && e.target.closest('[data-folder-head]');
       if (head) { addTabToFolder(tabById(B.dragId), head.dataset.folderHead); B.dragId = null; return; }
       const el = e.target.closest('[data-tab]');
       const target = el && tabById(Number(el.dataset.tab));
@@ -738,7 +788,7 @@ function initTabStrip() {
       if (target) index = B.tabs.indexOf(target) + (zone !== 'essential' && el.classList.contains('drop-after') ? 1 : 0);
       const dragged = tabById(B.dragId);
       // among a folder's tabs it joins that folder; anywhere else it is on its own
-      if (dragged && zone === 'normal') dragged.folderId = target?.folderId;
+      if (dragged && zone !== 'essential') dragged.folderId = target?.folderId;
       moveTab(B.dragId, index, zone);
       B.dragId = null;
     });

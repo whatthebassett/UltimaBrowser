@@ -6,7 +6,10 @@
   // macOS where the system owns the combo (Cmd+Tab switches apps, Cmd+H hides the app), following Chrome on the Mac.
   const COMMANDS = [
     // Tabs
-    { id: 'new-tab', title: 'New tab', group: 'Tabs', keys: ['Mod+T', 'Mod+N'] },
+    { id: 'new-tab', title: 'New tab', group: 'Tabs', keys: ['Mod+T'] },
+    { id: 'new-window', title: 'New window', group: 'Tabs', keys: ['Mod+N'] },
+    { id: 'new-private-window', title: 'New private window', group: 'Tabs', keys: ['Mod+Shift+N'] },
+    { id: 'new-private-tab', title: 'New private tab in this window', group: 'Tabs', keys: ['Alt+Shift+N'] },
     { id: 'close-tab', title: 'Close tab (unloads pinned tabs and Essentials)', group: 'Tabs', keys: ['Mod+W', 'Mod+F4'] },
     { id: 'reopen-tab', title: 'Reopen closed tab', group: 'Tabs', keys: ['Mod+Shift+T'] },
     { id: 'next-tab', title: 'Next tab', group: 'Tabs', keys: ['Mod+Tab', 'Mod+PageDown'], macKeys: ['Ctrl+Tab'] },
@@ -24,7 +27,7 @@
     { id: 'split-focus-prev', title: 'Split view: previous pane', group: 'Tabs', keys: [] },
     { id: 'tab-folder-new', title: 'Add tab to a new folder', group: 'Tabs', keys: [] },
     { id: 'tab-folder-remove', title: 'Remove tab from its folder', group: 'Tabs', keys: [] },
-    { id: 'essential-tab', title: 'Add to / remove from Essentials (all spaces)', group: 'Tabs', keys: [] },
+    { id: 'essential-tab', title: 'Add to / remove from Essentials', group: 'Tabs', keys: [] },
     { id: 'unload-tab', title: 'Unload tab (free its memory, keep it in the sidebar)', group: 'Tabs', keys: [] },
     { id: 'reset-tab', title: 'Pinned tab or Essential: back to its pinned link', group: 'Tabs', keys: [] },
     { id: 'edit-pinned-link', title: 'Pinned tab or Essential: edit its pinned link', group: 'Tabs', keys: [] },
@@ -54,6 +57,7 @@
     { id: 'bookmark', title: 'Bookmark this page', group: 'Page', keys: ['Mod+D'] },
     { id: 'copy-url', title: 'Copy page URL', group: 'Page', keys: ['Mod+Shift+C'] },
     { id: 'find', title: 'Find in page', group: 'Page', keys: ['Mod+F'] },
+    { id: 'caret-browsing', title: 'Caret browsing on/off (a text cursor in pages)', group: 'Page', keys: ['F7'] },
     { id: 'fill-login', title: 'Fill saved login', group: 'Page', keys: [] },
     { id: 'zoom-in', title: 'Zoom in', group: 'Page', keys: ['Mod+=', 'Mod+Shift+=', 'Mod+NumAdd'] },
     { id: 'zoom-out', title: 'Zoom out', group: 'Page', keys: ['Mod+-', 'Mod+NumSub'] },
@@ -81,6 +85,8 @@
     { id: 'theme-dark', title: 'Theme: Dark', group: 'Ultima', keys: [] },
     { id: 'theme-light', title: 'Theme: Light', group: 'Ultima', keys: [] },
     { id: 'theme-system', title: 'Theme: Match system', group: 'Ultima', keys: [] },
+    // (on macOS the app menu's Cmd+Q quits)
+    { id: 'quit', title: 'Quit Ultima (all its windows come back next time)', group: 'Ultima', keys: ['Mod+Shift+Q'], macKeys: [] },
     // Scoped keys
     { id: 'palette.next', title: 'Next result', group: 'Inside the Control Palette', scope: 'palette', keys: ['Down', 'Tab'] },
     { id: 'palette.prev', title: 'Previous result', group: 'Inside the Control Palette', scope: 'palette', keys: ['Up', 'Shift+Tab'] },

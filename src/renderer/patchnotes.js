@@ -3,6 +3,30 @@
 // Each item is [what, a sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.1.4',
+    date: '2026-10-26',
+    new: [
+      ['Automatic tab groups', 'Tabs from the same work app (Google Docs, Sheets and Drive, Word, Excel and Teams, Jira, Confluence, Slack and many more) or the same website gather in a folder named for it. Group work apps by app or by suite, choose how many tabs it takes, or turn it off, in Settings → Productivity. Rename a folder and it keeps your name; take a tab out and it stays out.'],
+      ['Accessibility settings', 'A new Accessibility page in Settings: page zoom, text size and a minimum text size; page contrast, brightness, grayscale, inverted colors and color-blindness filters; a strong outline on the focused item, underlined links, caret browsing (F7) to move through pages with a text cursor; and higher contrast and reduced motion in Ultima itself.'],
+      ['Glance', 'Alt+click, Shift+click, or press and hold a link to preview it over the page without leaving it. The preview is the real page: use it, open it as a tab (nothing reloads), put it in split view, or press Esc to close it. Choose which gesture glances, or turn it off, in Settings → General.'],
+      ['Ad and tracker blocking', 'Ultima blocks ads and the trackers that follow you from site to site, including YouTube’s video ads and the sponsored posts in Facebook, Instagram and X, and hides the empty boxes ads leave behind. The shield in the address bar shows how many it blocked on the page; click it to turn blocking off for a site. Turn ads and trackers on or off separately in Settings → Privacy.'],
+      ['Tracking protection', 'Links you open lose their tracking codes (like utm_source and fbclid), and every site is asked not to sell or share your data (Global Privacy Control). You can also block third-party cookies in Settings → Privacy.'],
+      ['More than one window', 'Open a new window with Ctrl+N, or a link in one from its right-click menu. Every window has the same spaces, Essentials and pinned tabs, kept in sync, and its own regular tabs. Quit with Ctrl+Shift+Q and every window comes back next time.'],
+      ['Private windows and tabs', 'Ctrl+Shift+N opens a private window, and Alt+Shift+N a private tab in the window you’re in (or right-click a link). Private pages leave no history, aren’t saved for next time and run without extensions; their cookies and site data are deleted when the last one closes.'],
+      ['Essentials for each space', 'Any space can have Essentials of its own instead of the ones your spaces share: choose Own Essentials in its menu, or in Settings → Spaces. They use that space’s sign-ins, and turning it off keeps them as pinned tabs there.'],
+      ['Folders of pinned tabs', 'Folders work in the pinned area too. Drag a folder up there, or right-click it and choose Pin folder, and its tabs are pinned with it. Pinned folders, like pinned tabs, are in every window.'],
+    ],
+    fixed: [
+      ['Tab folders and split views after a restart', 'Folders and split views come back when Ultima starts again. Before, restarting took your tabs out of their folders and split views apart.'],
+    ],
+    improved: [
+      ['Dropdowns', 'Every dropdown in Ultima (search engine, site permissions and the rest) now opens Ultima’s own menu, with the current choice marked, instead of the system’s. Arrow keys, Enter, Esc and typing a letter work in it.'],
+      ['Pinned tabs and Essentials stay put', 'They come back even with “Restore tabs from last time” turned off. Before, starting without restoring tabs lost them.'],
+      ['Closing the last tab', 'Closing your last tab leaves a new tab page instead of waking one of your pinned tabs, and pressing Ctrl+W again there closes the window.'],
+      ['Clearing a site’s data', 'A site’s settings, at the top of the address bar menu, can clear its cache, delete its cookies, or clear all of its data, and the page reloads fresh. Clearing all of a site’s data now empties its cache too.'],
+    ],
+  },
+  {
     version: '0.1.3',
     date: '2026-10-26',
     fixed: [

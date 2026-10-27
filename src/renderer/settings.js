@@ -93,14 +93,31 @@ function downloadRows() {
   ];
 }
 
+// a dropdown of numbers or words for one setting
+const sPick = (key, opts, fallback) => `<select class="field" data-setting="${key}" ${typeof opts[0][0] === 'number' ? 'data-number' : ''}>${opts.map(([v, label]) => `<option value="${v}" ${(B.settings[key] ?? fallback) === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`;
+// a slider in percent, with its value beside it
+const sPercent = (key, min, max, step) => `<input type="range" data-setting="${key}" data-number min="${min}" max="${max}" step="${step}" value="${B.settings[key] ?? 100}"><span class="s-range-out" data-out="${key}">${B.settings[key] ?? 100}%</span>`;
+const PAGE_ZOOMS = [50, 67, 75, 80, 90, 100, 110, 125, 150, 175, 200, 250, 300].map((z) => [z, `${z}%`]);
+const TEXT_SIZES = [[9, 'Very small'], [12, 'Small'], [16, 'Medium'], [20, 'Large'], [24, 'Very large']];
+const MIN_FONT_SIZES = [[0, 'None'], ...[9, 10, 12, 14, 16, 18, 20, 24].map((n) => [n, `${n} px`])];
+const COLOR_FILTERS = [['none', 'None'], ['grayscale', 'Grayscale'], ['invert', 'Inverted colors'],
+  ['protanopia', 'Red-weak (protanopia)'], ['deuteranopia', 'Green-weak (deuteranopia)'], ['tritanopia', 'Blue-weak (tritanopia)']];
+
+// what opens a link in a glance (glance-preload.js asks main, which reads settings.glanceTrigger)
+const GLANCE_TRIGGERS = [['any', 'Alt+click, Shift+click or click and hold'], ['alt', 'Alt+click'], ['shift', 'Shift+click'], ['hold', 'Click and hold'], ['off', 'Off']];
+
 // ---------- tabs ----------
 const SETTINGS_TABS = [
   {
-    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, downloads and search.',
+    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads and search.',
     render: () => [
       sGroup('Default browser', [defaultBrowserRow()]),
       sGroup('Startup', [
         sRow('Restore tabs from last time', 'Tabs come back unloaded and load when you open them.', sSwitch('restoreSession')),
+      ]),
+      sGroup('Glance', [
+        sRow('Open links in a glance with', 'A preview over the page you can use, then close, open as a tab or put in split view. Click and hold means pressing on a link for half a second without moving.',
+          `<select class="field" data-setting="glanceTrigger">${GLANCE_TRIGGERS.map(([v, label]) => `<option value="${v}" ${(B.settings.glanceTrigger || 'any') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`),
       ]),
       sGroup('Downloads', downloadRows()),
       sGroup('Search', [
@@ -139,11 +156,54 @@ const SETTINGS_TABS = [
     },
   },
   {
-    id: 'spaces', title: 'Spaces', icon: 'layers', desc: 'Your spaces, their themes and their sign-ins.',
+    id: 'productivity', title: 'Productivity', icon: 'bolt', desc: 'Features that keep your tabs in order.',
+    render: () => {
+      const on = Boolean(B.settings.autoGroup);
+      return sGroup('Automatic tab groups', [
+        sRow('Group tabs automatically', 'Tabs from the same work app or website gather in a folder named for it, in each space. Rename a folder and it keeps your name; take a tab out and it stays out.', sSwitch('autoGroup')),
+        on && sRow('Group when there are at least', 'Tabs of one app or site in a space.', sPick('autoGroupMin', [[2, '2 tabs'], [3, '3 tabs'], [4, '4 tabs'], [5, '5 tabs']], 2)),
+        on && sRow('Work apps', 'Google Docs, Sheets and Drive, Word, Excel and Teams, Jira, Confluence, Slack, Notion, Figma, GitHub and more each get a folder, or one for each suite: Google Workspace, Microsoft 365 and Atlassian.',
+          sPick('autoGroupWork', [['app', 'A folder for each app'], ['suite', 'A folder for each suite']], 'app')),
+        on && sRow('Other websites too', 'Groups tabs from the same website, named after it, not only work apps.', sSwitch('autoGroupSites')),
+        on && sRow('Group open tabs now', 'Puts the tabs you already have into groups.', '<button class="btn" data-autogroup-now>Group tabs</button>'),
+      ]);
+    },
+  },
+  {
+    id: 'accessibility', title: 'Accessibility', icon: 'accessibility', desc: 'Zoom, text size, page colors, focus and motion.',
+    render: () => {
+      const s = B.settings;
+      const colorsChanged = (s.pageContrast ?? 100) !== 100 || (s.pageBrightness ?? 100) !== 100 || (s.colorFilter || 'none') !== 'none';
+      return [
+        sGroup('Zoom and text', [
+          sRow('Page zoom', `How big pages are, unless you zoom one yourself${keyText('zoom-in') ? ` (${esc(keyText('zoom-in'))} and ${esc(keyText('zoom-out'))})` : ''}.`, sPick('pageZoom', PAGE_ZOOMS, 100)),
+          sRow('Text size', 'The size of text on pages that don’t set their own. For pages opened from now on.', sPick('textSize', TEXT_SIZES, 16)),
+          sRow('Minimum text size', 'Text on pages is never smaller than this. For pages opened from now on.', sPick('minFontSize', MIN_FONT_SIZES, 0)),
+        ]),
+        sGroup('Page colors', [
+          sRow('Contrast', 'Makes the difference between light and dark parts of pages stronger, or softer.', sPercent('pageContrast', 50, 200, 10)),
+          sRow('Brightness', 'Makes pages lighter or darker.', sPercent('pageBrightness', 40, 150, 5)),
+          sRow('Color filter', 'Grayscale, inverted colors, or colors shifted so they’re easier to tell apart with color blindness.', sPick('colorFilter', COLOR_FILTERS, 'none')),
+          colorsChanged && sRow('Back to normal colors', '', '<button class="btn" data-a11y-reset>Reset page colors</button>'),
+        ]),
+        sGroup('Focus and links', [
+          sRow('Highlight the focused item', 'A thick outline in your accent color around the link, button or field the keyboard is on, in pages and in Ultima.', sSwitch('focusHighlight')),
+          sRow('Underline links', 'Links on pages are always underlined, so they don’t depend on color alone.', sSwitch('underlineLinks')),
+          sRow('Navigate pages with a text cursor', `Caret browsing: move a cursor through a page’s text with the arrow keys (Ctrl to go by word), select with Shift, and press Enter on a link to follow it.${keyText('caret-browsing') ? ` Turn it on or off with ${esc(keyText('caret-browsing'))}.` : ''}`, sSwitch('caretBrowsing')),
+        ]),
+        sGroup('Ultima', [
+          sRow('Increase contrast', 'Stronger text and edges and less see-through glass in Ultima itself.', sSwitch('uiContrast')),
+          sRow('Reduce motion', 'Turns off Ultima’s animations. Always on while animation effects are off in Windows.', sSwitch('reduceMotion')),
+        ]),
+      ].join('');
+    },
+  },
+  {
+    id: 'spaces', title: 'Spaces', icon: 'layers', desc: 'Your spaces, their themes, sign-ins and Essentials.',
     render: () => [
       sGroup('', B.spaces.map((sp) => sRow(
         `<span class="s-space">${sp.icon}</span>${esc(sp.name)}${sp.id === B.activeSpaceId ? ' <span class="s-badge">Current</span>' : ''}`,
-        `${spaceTheme(sp).colors.length === 1 ? 'Solid color' : `${spaceTheme(sp).colors.length}-color gradient`} · ${({ auto: 'follows app mode', light: 'always light', dark: 'always dark' })[spaceTheme(sp).mode]}${sp.separate ? ' · own sign-ins' : ''}`,
+        `${spaceTheme(sp).colors.length === 1 ? 'Solid color' : `${spaceTheme(sp).colors.length}-color gradient`} · ${({ auto: 'follows app mode', light: 'always light', dark: 'always dark' })[spaceTheme(sp).mode]}${sp.separate ? ' · own sign-ins' : ''}${sp.ownEssentials ? ' · own Essentials' : ''}`,
         `<span class="s-theme-chip" data-chip="${sp.id}" style="background:${themeBackground({ ...spaceTheme(sp), intensity: 100 })}"></span>
          <button class="btn" data-space-theme="${sp.id}">${icon('palette', 14)} Edit theme</button>
          <button class="icon-btn" data-space-menu="${sp.id}" title="More">${icon('more', 16)}</button>`,
@@ -152,6 +212,10 @@ const SETTINGS_TABS = [
       sGroup('Sign-ins', [
         ...B.spaces.map((sp) => sRow(`Separate sign-ins for ${sp.icon} ${esc(sp.name)}`, 'Its own cookies and logins, so you can use different accounts there.',
           `<button class="switch ${sp.separate ? 'on' : ''}" data-space-separate="${sp.id}" role="switch"></button>`)),
+      ]),
+      sGroup('Essentials', [
+        ...B.spaces.map((sp) => sRow(`Own Essentials for ${sp.icon} ${esc(sp.name)}`, 'Essentials of its own instead of the ones your other spaces share. Turning this off keeps them as pinned tabs there.',
+          `<button class="switch ${sp.ownEssentials ? 'on' : ''}" data-space-essentials="${sp.id}" role="switch"></button>`)),
       ]),
     ].join(''),
   },
@@ -197,8 +261,9 @@ const SETTINGS_TABS = [
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'command', desc: 'Change, add or remove any shortcut in Ultima.', embed: (el, tab) => pageShortcuts(el, tab) },
   { id: 'passwords', title: 'Passwords', icon: 'key', desc: 'Saved logins, encrypted with your Windows account.', embed: (el, tab) => pagePasswords(el, tab) },
   {
-    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'What Ultima keeps on this computer, and what sites may do.',
+    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'Ads and trackers, what Ultima keeps on this computer, and what sites may do.',
     render: () => [
+      blockerSettingsGroups(), // blocking.js
       sGroup('Clear browsing data', [
         sRow('History', 'Every page you have visited.', '<button class="btn" data-clear="history">Clear history</button>'),
         sRow('Cache', 'Saved copies of pages and images. Sites may load slower at first.', '<button class="btn" data-clear="cache">Clear cache</button>'),
@@ -295,7 +360,14 @@ function pageSettings(root, tab) {
       show(d.tab);
       return;
     }
-    if (d.switch) applySettings({ [d.switch]: !(B.settings[d.switch] !== false && B.settings[d.switch]) });
+    if (d.switch) {
+      applySettings({ [d.switch]: !(B.settings[d.switch] !== false && B.settings[d.switch]) });
+      if (d.switch === 'autoGroup' && B.settings.autoGroup) autoGroupAll(); // turned on: the open tabs group now
+    } else if (t.hasAttribute('data-autogroup-now')) {
+      const n = autoGroupAll();
+      toast(n ? `Made ${n === 1 ? 'a group' : `${n} groups`}` : 'No new groups: no app or site has enough ungrouped tabs');
+      return;
+    } else if (t.hasAttribute('data-a11y-reset')) applySettings({ pageContrast: 100, pageBrightness: 100, colorFilter: 'none' });
     else if (d.v && t.parentElement.dataset.key) {
       applySettings({ [t.parentElement.dataset.key]: d.v });
       const sp = t.parentElement.dataset.key === 'theme' && modeOverride();
@@ -316,6 +388,7 @@ function pageSettings(root, tab) {
     else if (d.spaceTheme) { openThemeEditor(spaceById(d.spaceTheme)); return; }
     else if (d.spaceMenu) { const r = t.getBoundingClientRect(); await spaceMenu(spaceById(d.spaceMenu), { x: r.right - 220, y: r.bottom + 4 }); }
     else if (d.spaceSeparate) { const sp = spaceById(d.spaceSeparate); setSpaceSeparate(sp, !sp.separate); }
+    else if (d.spaceEssentials) { const sp = spaceById(d.spaceEssentials); setSpaceEssentials(sp, !sp.ownEssentials); }
     else if (d.run) { runCommand(d.run); return; }
     else if (d.extToggle) { const ext = EXT.list.find((x) => x.id === d.extToggle); await window.ultima.setExtensionEnabled({ id: ext.id, enabled: !ext.enabled }); return; }
     else if (d.extPin) { const ext = EXT.list.find((x) => x.id === d.extPin); await window.ultima.setExtensionPinned({ id: ext.id, pinned: !ext.pinned }); return; }
@@ -336,7 +409,9 @@ function pageSettings(root, tab) {
         if (ext) toast(ext.error ? `${ext.name} couldn’t start: ${ext.error}` : `Loaded ${ext.name}`);
       } catch (err) { toast(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
       return;
-    } else if (t.hasAttribute('data-run-perm')) { await window.ultima.resetPermissions(); toast('Site permissions reset'); return; }
+    } else if (t.hasAttribute('data-blocker-update')) { updateBlockerLists(); return; }
+    else if (d.blockingOn) { await window.ultima.blockerSetSite({ url: `https://${d.blockingOn}/`, off: false }); return; }
+    else if (t.hasAttribute('data-run-perm')) { await window.ultima.resetPermissions(); toast('Site permissions reset'); return; }
     else if (t.hasAttribute('data-dl-choose')) { chooseDownloadDir(); return; }
     else if (t.hasAttribute('data-dl-reset')) { resetDownloadDir(); return; }
     else if (d.clear) {
@@ -349,7 +424,11 @@ function pageSettings(root, tab) {
   });
   main.addEventListener('input', (e) => {
     const k = e.target.dataset.setting;
-    if (k && e.target.type === 'range') applySettings({ [k]: Number(e.target.value) });
+    if (k && e.target.type === 'range') {
+      applySettings({ [k]: Number(e.target.value) });
+      const out = $(`[data-out="${k}"]`, main);
+      if (out) out.textContent = `${e.target.value}%`;
+    }
     // custom loading colors follow the picker live, without redrawing the page (that would close the picker)
     if (e.target.dataset.lc !== undefined) {
       const colors = [...customLoaderColors()];
@@ -367,7 +446,10 @@ function pageSettings(root, tab) {
 main.addEventListener('change', (e) => {
     if (e.target.dataset.lc !== undefined) previewLoader();
     const k = e.target.dataset.setting;
-    if (k && e.target.tagName === 'SELECT') applySettings({ [k]: e.target.value });
+    if (k && e.target.tagName === 'SELECT') {
+      applySettings({ [k]: 'number' in e.target.dataset ? Number(e.target.value) : e.target.value });
+      if (k === 'colorFilter' && activeTab() === tab) rerender(); // shows or hides "Reset page colors"
+    }
   });
 
   show(current);

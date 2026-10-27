@@ -2,13 +2,14 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const {
-  app, BrowserWindow, ipcMain, session, Menu, clipboard, dialog, shell, webContents, webFrameMain, nativeTheme,
+  app, BrowserWindow, ipcMain, session, Menu, clipboard, dialog, shell, webContents, webFrameMain, nativeTheme, net,
 } = require('electron');
 const { JsonStore } = require('./store');
 const { BrowserData, hostOf } = require('./data');
 const importer = require('./importer');
 const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
+const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
 
@@ -31,7 +32,6 @@ if (!app.requestSingleInstanceLock()) app.quit();
 // a link or .html file Ultima was started with; the UI opens it once it has restored its tabs
 let launchUrl = defaultBrowser.launchTarget(process.argv);
 
-let win = null;
 let settings;
 let sessionStore;
 let data;
@@ -59,10 +59,63 @@ const DEFAULT_SETTINGS = {
   keybindings: {},
   permissions: {}, // origin → { key: true/false } (see sitepermissions.js)
   siteDefaults: {}, // key → true/false, for every site without its own choice
+  blockAds: true,
+  blockTrackers: true,
+  cleanLinks: true, // takes tracking codes (utm_source, fbclid…) out of the links you open
+  globalPrivacyControl: true, // tells sites not to sell or share your data (Sec-GPC)
+  blockThirdPartyCookies: false,
+  blockingOff: {}, // host → true: sites where ads and trackers aren't blocked (with their subdomains)
+  glanceTrigger: 'any', // what opens a link in a glance (a preview over the page): any, alt, shift, hold or off
+  // productivity: automatic tab groups (renderer/autogroup.js)
+  autoGroup: true,
+  autoGroupMin: 2, // tabs of one app or site in a space before they're grouped
+  autoGroupWork: 'app', // app: a folder per work app; suite: one per suite (Google Workspace, Microsoft 365, Atlassian)
+  autoGroupSites: true, // other websites too, not only work apps
+  // accessibility (renderer/accessibility.js applies most of these; text sizes and caret browsing are set here)
+  pageZoom: 100, // %
+  textSize: 16, // px, for text a page doesn't size itself
+  minFontSize: 0, // px, 0 = none
+  pageContrast: 100, // %
+  pageBrightness: 100, // %
+  colorFilter: 'none', // none, grayscale, invert, protanopia, deuteranopia, tritanopia
+  focusHighlight: false,
+  underlineLinks: false,
+  caretBrowsing: false, // a text cursor in pages (caret-preload.js), F7
+  uiContrast: false,
+  reduceMotion: false,
   window: { width: 1440, height: 900, maximized: false },
 };
 
-const send = (channel, payload) => { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); };
+// ---- windows ----
+// Every Ultima window, by BrowserWindow id: { win, private, key, bounds, activeTab, url }. Normal windows share the
+// sidebar (spaces, Essentials and pinned tabs) and each keeps its own regular tabs, saved in the session file under its
+// key. Private windows keep nothing.
+const windows = new Map();
+let lastFocusedId = null;
+let quitting = false;
+// Private windows and tabs browse in memory only: nothing reaches the disk, and it's all cleared when the last private
+// page closes (and gone anyway when Ultima quits). Extensions don't run there, as in Chrome.
+const PRIVATE_PARTITION = 'ultima-private';
+const isPrivateSession = (ses) => ses === session.fromPartition(PRIVATE_PARTITION);
+const isPrivate = (wc) => Boolean(wc) && !wc.isDestroyed() && isPrivateSession(wc.session);
+
+const liveWindows = () => [...windows.values()].filter((w) => !w.win.isDestroyed());
+// the window the UI or a page belongs to (a page's host is the UI holding its <webview>)
+function windowOf(wc) {
+  if (!wc || wc.isDestroyed()) return null;
+  const host = wc.hostWebContents || wc;
+  return liveWindows().find((w) => w.win.webContents === host) || null;
+}
+// where things go that don't come from a window (links from other apps, extensions): the window used last
+function currentWindow({ normal = false } = {}) {
+  const list = liveWindows().filter((w) => !normal || !w.private);
+  return list.find((w) => w.win.id === lastFocusedId) || list[list.length - 1] || null;
+}
+const sendTo = (w, channel, payload) => { if (w && !w.win.isDestroyed()) w.win.webContents.send(channel, payload); };
+const send = (channel, payload) => sendTo(currentWindow(), channel, payload);
+const broadcast = (channel, payload, { except = null, normalOnly = false } = {}) => {
+  for (const w of liveWindows()) if (w !== except && !(normalOnly && w.private)) sendTo(w, channel, payload);
+};
 
 // ---- keyboard shortcuts (work whether the chrome UI or a page has focus) ----
 // Every binding comes from the shared keymap plus the user's overrides in settings.keybindings.
@@ -92,12 +145,20 @@ function shortcutFor(input, wc) {
   return cmd;
 }
 
+// Pages open in a glance (glance.js): Esc there closes the glance, as it does in the UI
+const glancePages = new Set(); // webContents ids
+
 function hookShortcuts(wc) {
   const id = wc.id;
-  wc.once('destroyed', () => typingIn.delete(id));
+  wc.once('destroyed', () => { typingIn.delete(id); glancePages.delete(id); });
   wc.on('before-input-event', (event, input) => {
+    if (glancePages.has(id) && input.type === 'keyDown' && input.key === 'Escape' && !input.shift && !input.control && !input.alt && !input.meta) {
+      event.preventDefault();
+      sendTo(windowOf(wc), 'glance-escape', id);
+      return;
+    }
     const cmd = shortcutFor(input, wc);
-    if (cmd) { event.preventDefault(); send('command', cmd); }
+    if (cmd) { event.preventDefault(); sendTo(windowOf(wc), 'command', cmd); }
   });
 }
 
@@ -116,7 +177,9 @@ function pageContextMenu(wc, p) {
   };
   const sep = { type: 'separator' };
   const t = [];
-  const openTab = (url, background = true) => send('open-url', { url, background });
+  const send = (channel, payload) => sendTo(windowOf(wc), channel, payload); // the window the page is in
+  const priv = isPrivate(wc); // links from a private page open privately
+  const openTab = (url, background = true) => send('open-url', { url, background, private: priv });
   const short = (s, n = 32) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
   if (p.misspelledWord) {
@@ -128,7 +191,12 @@ function pageContextMenu(wc, p) {
     t.push(
       item('Open link in new tab', () => openTab(p.linkURL), { icon: 'external' }),
       item('Open link in new tab and switch', () => openTab(p.linkURL, false), { icon: 'tab' }),
-      item('Open link in a space…', () => send('open-url', { url: p.linkURL, pickSpace: true }), { icon: 'layers' }),
+      item('Open link in new window', () => createWindow({ url: p.linkURL, private: priv }), { icon: 'window' }),
+      ...(priv ? [] : [
+        item('Open link in private tab', () => send('open-url', { url: p.linkURL, background: false, private: true }), { icon: 'incognito' }),
+        item('Open link in private window', () => createWindow({ url: p.linkURL, private: true }), { icon: 'incognito' }),
+        item('Open link in a space…', () => send('open-url', { url: p.linkURL, pickSpace: true }), { icon: 'layers' }),
+      ]),
       item('Copy link address', () => clipboard.writeText(p.linkURL), { icon: 'link' }),
       ...(p.linkText?.trim() ? [item('Copy link text', () => clipboard.writeText(p.linkText.trim()), { icon: 'copy' })] : []),
       sep,
@@ -176,7 +244,7 @@ function pageContextMenu(wc, p) {
     const sel = p.selectionText.trim();
     t.push(
       item('Copy', () => wc.copy(), { icon: 'copy', hint: `${MOD}+C` }),
-      item(`Search for “${short(sel, 28)}”`, () => send('open-url', { search: sel, background: false }), { icon: 'search' }),
+      item(`Search for “${short(sel, 28)}”`, () => send('open-url', { search: sel, background: false, private: priv }), { icon: 'search' }),
       item('Copy link to highlight', () => {
         const page = new URL(wc.getURL());
         page.hash = `:~:text=${encodeURIComponent(sel.slice(0, 300))}`;
@@ -246,6 +314,11 @@ function originOf(url) { try { return new URL(url).origin; } catch { return url 
 
 // What a site may do (see sitepermissions.js): true = allow, false = block, undefined = ask.
 const siteAllows = (origin, key) => SITE_PERMS.effective(settings.data.permissions[origin], key, settings.data.siteDefaults);
+// Choices remembered while browsing privately last only as long as private browsing does; your saved site settings
+// still apply there.
+const privatePermissions = {}; // origin → { key: true/false }
+const allowsIn = (ses, origin, key) => (isPrivateSession(ses) && privatePermissions[origin]?.[key] !== undefined
+  ? privatePermissions[origin][key] : siteAllows(origin, key));
 
 // Saves a site's choices ({ key: true/false/null }; null = back to the default). The camera-and-microphone choice
 // older versions kept as one ("media") becomes two the first time either is set.
@@ -277,7 +350,7 @@ const siteSessions = () => [...configuredSessions].map((name) => session.fromPar
 // Extensions open tabs through Ultima (Electron has no chrome.tabs.create). Web pages can't use this.
 const hookedWorkers = new Set(); // worker version ids
 function openTabForExtension(url) {
-  if (typeof url === 'string' && /^(https?|chrome-extension):/i.test(url)) send('open-url', { url, background: false });
+  if (typeof url === 'string' && /^(https?|chrome-extension):/i.test(url)) sendTo(currentWindow({ normal: true }), 'open-url', { url, background: false });
 }
 // ---------- chrome.alarms for extensions ----------
 // Electron 45.0.0 schedules alarms but never delivers onAlarm to background workers (electron/electron#52451), so
@@ -412,7 +485,7 @@ ipcMain.handle('ultima:ext-contexts', (e, filter) => extensionContexts(extIdOf(e
 // chrome.tabs.remove: tab ids are webContents ids; the UI closes the matching tabs
 function closeTabsForExtension(ids) {
   const list = [].concat(ids).map(Number).filter(Number.isFinite);
-  if (list.length) send('ext-close-tabs', list);
+  if (list.length) broadcast('ext-close-tabs', list);
 }
 ipcMain.on('ultima:ext-close-tabs', (e, ids) => { if (extIdOf(e.senderFrame?.url)) closeTabsForExtension(ids); });
 
@@ -426,10 +499,10 @@ function openPopoutForExtension(extId, url, width, height) {
   if (!extId || typeof url !== 'string' || extIdOf(url) !== extId) return; // only the extension's own pages
   const entry = extensions?.list.find((e) => e.runtimeId === extId);
   if (!entry) return;
-  send('ext-open-popout', { id: entry.id, path: url.slice(`chrome-extension://${extId}/`.length), width: Number(width) || 0, height: Number(height) || 0 });
+  sendTo(currentWindow({ normal: true }), 'ext-open-popout', { id: entry.id, path: url.slice(`chrome-extension://${extId}/`.length), width: Number(width) || 0, height: Number(height) || 0 });
 }
 ipcMain.on('ultima:ext-open-popout', (e, url, width, height) => openPopoutForExtension(extIdOf(e.senderFrame?.url), url, width, height));
-ipcMain.on('ultima:ext-close-popout', (e) => { if (extIdOf(e.senderFrame?.url)) send('ext-close-popout'); });
+ipcMain.on('ultima:ext-close-popout', (e) => { if (extIdOf(e.senderFrame?.url)) broadcast('ext-close-popout'); });
 // Gives an extension popup's page the real keyboard focus. When a popup opens, the web page behind it still has the
 // keyboard: the popup shows its cursor (Bitwarden focuses its PIN field) but key presses keep going to the page until
 // you click or Tab inside the popup. Chromium only moves the keyboard between pages on real input — focus() calls,
@@ -437,18 +510,18 @@ ipcMain.on('ultima:ext-close-popout', (e) => { if (extIdOf(e.senderFrame?.url)) 
 // already focused (`point`, in UI coordinates), delivered through the window like your own click. Without a point
 // (nothing focused to type into) it falls back to focus(), which is harmless.
 ipcMain.on('ultima:focus-guest', (e, id, point) => {
-  const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
-  if (!wc || wc.isDestroyed() || wc.hostWebContents !== win.webContents) return;
+  const wc = windowOf(e.sender) && webContents.fromId(Number(id));
+  if (!wc || wc.isDestroyed() || wc.hostWebContents !== e.sender) return;
   if (point && Number.isFinite(point.x) && Number.isFinite(point.y)) {
-    for (const type of ['mouseDown', 'mouseUp']) win.webContents.sendInputEvent({ type, x: Math.round(point.x), y: Math.round(point.y), button: 'left', clickCount: 1 });
+    for (const type of ['mouseDown', 'mouseUp']) e.sender.sendInputEvent({ type, x: Math.round(point.x), y: Math.round(point.y), button: 'left', clickCount: 1 });
   } else {
-    win.webContents.focus();
+    e.sender.focus();
     wc.focus();
   }
 });
 // the UI says which popup page is showing as a popout
 ipcMain.on('ultima:popout-shown', (e, id) => {
-  const wc = e.sender === win?.webContents && webContents.fromId(Number(id));
+  const wc = windowOf(e.sender) && webContents.fromId(Number(id));
   if (!wc || wc.isDestroyed() || !extIdOf(wc.getURL())) return;
   popouts.add(wc.id);
   wc.once('destroyed', () => popouts.delete(wc.id));
@@ -457,8 +530,9 @@ ipcMain.on('ultima:popout-shown', (e, id) => {
 // ---- tab and navigation events for extensions ----
 // Electron doesn't send chrome.tabs / chrome.webNavigation / chrome.windows events, so Ultima watches its tabs and
 // forwards them (extension-compat.js turns them back into the real chrome.* events). Tab ids are webContents ids,
-// as in Electron's own chrome.tabs; there is one window, id 0. Frame ids follow Chrome: 0 for the top frame.
-let activeTabWcId = null;
+// as in Electron's own chrome.tabs. Extensions see one window, id 0: whichever Ultima window you're using, so "the
+// current window's active tab" is the one in front of you. Private tabs are hidden from them, as in Chrome.
+// Frame ids follow Chrome: 0 for the top frame.
 const frameIdOf = (wc, frame) => (!frame || frame === wc.mainFrame ? 0 : frame.frameTreeNodeId);
 const frameOf = (processId, routingId) => { try { return webFrameMain.fromId(processId, routingId); } catch { return null; } };
 function frameDetails(wc, frame) {
@@ -468,9 +542,11 @@ function frameDetails(wc, frame) {
   };
 }
 function tabDetails(wc) {
+  const w = windowOf(wc);
+  const active = Boolean(w) && w.activeTab === wc.id && w === currentWindow({ normal: true });
   return {
     id: wc.id, windowId: 0, index: 0, url: wc.getURL(), title: wc.getTitle(), status: wc.isLoading() ? 'loading' : 'complete',
-    active: wc.id === activeTabWcId, highlighted: wc.id === activeTabWcId, selected: wc.id === activeTabWcId, pinned: false,
+    active, highlighted: active, selected: active, pinned: false,
     audible: wc.isCurrentlyAudible(), mutedInfo: { muted: wc.isAudioMuted() }, discarded: false, autoDiscardable: true,
     incognito: false, groupId: -1,
   };
@@ -535,7 +611,7 @@ function extensionWorkerStarted(extId) {
       if (!wc.isDestroyed() && wc.getType() === 'webview' && extIdOf(wc.getURL()) === extId) holdWorkerFor(wc);
     } catch { /* page closing */ }
   }
-  send('ext-worker-started', extId);
+  broadcast('ext-worker-started', extId);
 }
 
 // Extension popups are webviews too, but in Chrome they aren't tabs
@@ -551,7 +627,7 @@ function hookTabEvents(wc) {
   const on = (ev, fn) => wc.on(ev, (...a) => { try { if (!wc.isDestroyed()) fn(...a); } catch { /* ignore */ } });
   const tabId = wc.id;
   let announced = false;
-  const emit = (name, ...args) => { if (!wc.isDestroyed() && !isExtensionPopup(wc)) dispatchExtEvent(name, args); };
+  const emit = (name, ...args) => { if (!wc.isDestroyed() && !isExtensionPopup(wc) && !isPrivate(wc)) dispatchExtEvent(name, args); };
   const nav = (frame, url) => ({ tabId, frameId: frameIdOf(wc, frame), parentFrameId: frame?.parent ? frameIdOf(wc, frame.parent) : -1, url, timeStamp: Date.now(), processId: frame?.processId ?? -1, documentLifecycle: 'active', frameType: frame?.parent ? 'sub_frame' : 'outermost_frame' });
   on('did-start-navigation', (d) => {
     if (!d.frame || d.isSameDocument) return;
@@ -577,7 +653,7 @@ function hookTabEvents(wc) {
   on('did-stop-loading', () => emit('tabs.onUpdated', tabId, { status: 'complete' }, tabDetails(wc)));
   on('page-title-updated', (_e, title) => emit('tabs.onUpdated', tabId, { title }, tabDetails(wc)));
   wc.once('destroyed', () => {
-    if (activeTabWcId === tabId) activeTabWcId = null;
+    for (const w of windows.values()) if (w.activeTab === tabId) w.activeTab = null;
     if (announced) dispatchExtEvent('tabs.onRemoved', [tabId, { windowId: 0, isWindowClosing: false }]);
   });
 }
@@ -597,17 +673,23 @@ function matchesPattern(pattern, url) {
 }
 function queryTabs(q = {}) {
   // an extension page open as a popout is the one tab of its popup window
+  const cur = currentWindow({ normal: true });
+  const inCurrent = new Set(); // tab ids in the window you're using ("the current window" is that one, not the popout)
   const tabs = webContents.getAllWebContents()
-    .filter((wc) => !wc.isDestroyed() && wc.getType() === 'webview' && (!isExtensionPopup(wc) || popouts.has(wc.id)) && wc.hostWebContents === win?.webContents)
-    .map((wc) => (popouts.has(wc.id) ? { ...tabDetails(wc), windowId: POPOUT_WINDOW, active: true, highlighted: true, selected: true } : tabDetails(wc)));
+    .filter((wc) => !wc.isDestroyed() && wc.getType() === 'webview' && (!isExtensionPopup(wc) || popouts.has(wc.id)) && windowOf(wc) && !isPrivate(wc))
+    .map((wc) => {
+      if (popouts.has(wc.id)) return { ...tabDetails(wc), windowId: POPOUT_WINDOW, active: true, highlighted: true, selected: true };
+      if (windowOf(wc) === cur) inCurrent.add(wc.id);
+      return tabDetails(wc);
+    });
   const urls = q.url === undefined ? null : [].concat(q.url);
   const titleRe = typeof q.title === 'string' ? new RegExp(`^${q.title.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`) : null;
   const windowType = (t) => (t.windowId === POPOUT_WINDOW ? 'popup' : 'normal');
   return tabs.filter((t) => (q.active === undefined || t.active === q.active)
     && (q.windowType === undefined || q.windowType === windowType(t))
-    && (q.windowId !== -2 || t.windowId !== POPOUT_WINDOW) // "the current window" is Ultima's, not the popout
-    && (q.currentWindow === undefined || q.currentWindow === (t.windowId !== POPOUT_WINDOW))
-    && (q.lastFocusedWindow === undefined || q.lastFocusedWindow === (t.windowId !== POPOUT_WINDOW))
+    && (q.windowId !== -2 || inCurrent.has(t.id))
+    && (q.currentWindow === undefined || q.currentWindow === inCurrent.has(t.id))
+    && (q.lastFocusedWindow === undefined || q.lastFocusedWindow === inCurrent.has(t.id))
     && (q.highlighted === undefined || t.highlighted === q.highlighted)
     && (q.windowId === undefined || q.windowId === -2 || q.windowId === t.windowId)
     && (q.status === undefined || t.status === q.status)
@@ -631,15 +713,129 @@ ipcMain.handle('ultima:ext-frames', (e, details) => (extIdOf(e.senderFrame?.url)
 // Spaces with separate sign-ins get their own persistent partition: persist:ultima-space-<id>.
 const SPACE_PARTITION = /^persist:ultima(-space-[a-z0-9]{1,16})?$/;
 const configuredSessions = new Set();
+const knownPartition = (partition) => (SPACE_PARTITION.test(partition || '') || partition === PRIVATE_PARTITION ? partition : PARTITION);
 function partitionSession(partition) {
-  const name = SPACE_PARTITION.test(partition || '') ? partition : PARTITION;
+  const name = knownPartition(partition);
   const ses = session.fromPartition(name);
   if (!configuredSessions.has(name)) {
     configuredSessions.add(name);
     setupSession(ses);
-    extensions?.attach(ses, name).then(() => send('extensions-changed'));
+    if (name !== PRIVATE_PARTITION) extensions?.attach(ses, name).then(() => broadcast('extensions-changed'));
   }
   return ses;
+}
+
+// The last private page closed: forget everything private browsing kept (cookies, storage, cache, sign-ins to
+// servers, remembered permissions, its finished downloads in the list).
+function endPrivateBrowsingIfUnused() {
+  const ses = session.fromPartition(PRIVATE_PARTITION);
+  if (webContents.getAllWebContents().some((wc) => !wc.isDestroyed() && wc.session === ses)) return;
+  ses.clearStorageData().catch(() => {});
+  ses.clearCache().catch(() => {});
+  ses.clearAuthCache().catch(() => {});
+  for (const origin of Object.keys(privatePermissions)) delete privatePermissions[origin];
+  for (const [id, d] of downloads) if (d.private && d.state !== 'progressing') downloads.delete(id);
+}
+
+// ---- ad and tracker blocking (the engine is blocker.js) ----
+let blocker = null;
+const blockLists = () => (settings.data.blockAds ? ADS : 0) | (settings.data.blockTrackers ? TRACKERS : 0);
+const siteKey = (host) => host.replace(/^www\./, '');
+// blocking is off on a site you turned it off for, and on its subdomains
+const blockingOffFor = (pageUrl) => [...hostChain(siteKey(urlHost(pageUrl)))].some((h) => settings.data.blockingOff[h]);
+
+// The pages a request belongs to: the document asking for it (what third-party and domain= rules look at) and the top
+// page, the one in the address bar (what the per-site switch looks at). Frames that are gone, and service workers,
+// fall back to the tab's page or the referrer.
+function requestPages(d) {
+  let frameUrl = '';
+  let topUrl = '';
+  try {
+    const frame = d.resourceType === 'subFrame' ? d.frame?.parent : d.frame;
+    frameUrl = frame?.url || '';
+    topUrl = frame?.top?.url || '';
+  } catch { /* the frame went away */ }
+  if (!topUrl) { try { topUrl = d.webContents?.getURL() || ''; } catch { /* closed */ } }
+  if (!topUrl) topUrl = d.referrer || '';
+  if (!/^https?:/i.test(frameUrl)) frameUrl = topUrl; // about:blank and srcdoc frames act for the page around them
+  return { frameUrl, topUrl };
+}
+
+// How many requests were blocked on each tab's page; the UI shows it on the address bar's shield
+const blockedCounts = new Map(); // page webContents id → count
+const countsToSend = new Set();
+let countTimer = null;
+function reportBlocked(wcId, reset = false) {
+  if (!wcId) return;
+  blockedCounts.set(wcId, reset ? 0 : (blockedCounts.get(wcId) || 0) + 1);
+  countsToSend.add(wcId);
+  countTimer ??= setTimeout(() => {
+    countTimer = null;
+    for (const id of countsToSend) {
+      const wc = webContents.fromId(id);
+      if (wc && !wc.isDestroyed()) sendTo(windowOf(wc), 'blocked-count', { webContentsId: id, count: blockedCounts.get(id) || 0 });
+      else blockedCounts.delete(id);
+    }
+    countsToSend.clear();
+  }, 250);
+}
+
+// Tracking codes in links: campaign tags and click ids that tell a site (and its ad networks) where you came from
+const TRACKING_PARAMS = new Set(`fbclid gclid gclsrc dclid gbraid wbraid msclkid yclid ysclid twclid ttclid li_fat_id
+  igshid igsh mc_cid mc_eid _hsenc _hsmi __hssc __hstc __hsfp hsctatracking mkt_tok oly_anon_id oly_enc_id vero_id
+  vero_conv wickedid rb_clickid s_cid _openstat epik srsltid irclickid sc_cid trk_contact trk_msg trk_module trk_sid
+  pk_campaign pk_kwd pk_source pk_medium mtm_campaign mtm_source mtm_medium mtm_keyword ga_source ga_medium
+  ga_campaign ga_content ga_term`.split(/\s+/));
+const isTrackingParam = (key) => key.startsWith('utm_') || TRACKING_PARAMS.has(key);
+// the link without them (null when it has none); the rest of the address is left exactly as it was
+function cleanLink(url) {
+  const q = url.indexOf('?');
+  if (q < 0) return null;
+  const hash = url.indexOf('#', q);
+  const parts = url.slice(q + 1, hash < 0 ? undefined : hash).split('&');
+  const kept = parts.filter((part) => {
+    let key = part.split('=')[0];
+    try { key = decodeURIComponent(key); } catch { /* left as it is */ }
+    return !isTrackingParam(key.toLowerCase());
+  });
+  if (kept.length === parts.length) return null;
+  return url.slice(0, q) + (kept.length ? `?${kept.join('&')}` : '') + (hash < 0 ? '' : url.slice(hash));
+}
+
+// a request to another site than the page's (for blocking third-party cookies)
+function thirdPartyRequest(d) {
+  if (d.resourceType === 'mainFrame') return false;
+  const { topUrl } = requestPages(d);
+  if (!/^https?:/i.test(topUrl) || blockingOffFor(topUrl)) return false;
+  return baseDomain(urlHost(d.url)) !== baseDomain(urlHost(topUrl));
+}
+
+function onBlockerRequest(d, callback) {
+  const wcId = d.webContentsId;
+  if (d.resourceType === 'mainFrame') {
+    if (wcId) reportBlocked(wcId, true); // a new page: its count starts again
+    const clean = settings.data.cleanLinks && d.method === 'GET' && !blockingOffFor(d.url) && cleanLink(d.url);
+    return callback(clean ? { redirectURL: clean } : {});
+  }
+  if (!blocker?.engine || !/^(https?|wss?):/i.test(d.url)) return callback({});
+  const { frameUrl, topUrl } = requestPages(d);
+  if (!/^https?:/i.test(topUrl) || blockingOffFor(topUrl)) return callback({});
+  if (d.resourceType === 'subFrame' && settings.data.cleanLinks && d.method === 'GET') {
+    const clean = cleanLink(d.url);
+    if (clean) return callback({ redirectURL: clean });
+  }
+  const hit = blocker.engine.match(d.url, d.resourceType, frameUrl, blockLists());
+  if (hit) reportBlocked(wcId);
+  return callback(hit ? { cancel: true } : {});
+}
+
+// Global Privacy Control in every page (navigator.globalPrivacyControl) while it's on; the header is added per request
+const GPC_PRELOAD = 'ultima-gpc';
+function applyGpcPreload(ses) {
+  const on = settings.data.globalPrivacyControl;
+  const has = ses.getPreloadScripts().some((p) => p.id === GPC_PRELOAD);
+  if (on && !has) ses.registerPreloadScript({ type: 'frame', id: GPC_PRELOAD, filePath: path.join(__dirname, '..', 'gpc-preload.js') });
+  else if (!on && has) ses.unregisterPreloadScript(GPC_PRELOAD);
 }
 
 function setupSession(ses) {
@@ -648,13 +844,34 @@ function setupSession(ses) {
   for (const type of ['service-worker', 'frame']) {
     ses.registerPreloadScript({ type, id: `ultima-extension-compat-${type}`, filePath: path.join(__dirname, '..', 'extension-compat.js') });
   }
+  // ads and trackers (blocker.js), and tracking codes in links
+  ses.webRequest.onBeforeRequest(onBlockerRequest);
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-blocker', filePath: path.join(__dirname, '..', 'blocker-preload.js') });
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-glance', filePath: path.join(__dirname, '..', 'glance-preload.js') });
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-caret', filePath: path.join(__dirname, '..', 'caret-preload.js') });
+  applyGpcPreload(ses);
+  // Global Privacy Control, and no cookies sent to other sites than the page's while third-party cookies are blocked
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    const gpc = settings.data.globalPrivacyControl;
+    const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
+    if (!gpc && !noCookies) return callback({});
+    const headers = { ...details.requestHeaders };
+    if (gpc) headers['Sec-GPC'] = '1';
+    if (noCookies) for (const k of Object.keys(headers)) if (k.toLowerCase() === 'cookie') delete headers[k];
+    callback({ requestHeaders: headers });
+  });
+  // blocked JavaScript or images (site settings), and no cookies set by other sites while third-party cookies are blocked
   ses.webRequest.onHeadersReceived((details, callback) => {
-    if (details.resourceType !== 'mainFrame' && details.resourceType !== 'subFrame') return callback({});
-    const policy = siteContentPolicy(originOf(details.url));
-    if (!policy) return callback({});
+    const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
+    const frame = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
+    const policy = frame ? siteContentPolicy(originOf(details.url)) : '';
+    if (!policy && !noCookies) return callback({});
     const headers = { ...details.responseHeaders };
-    const key = Object.keys(headers).find((k) => k.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
-    headers[key] = [...(headers[key] || []), policy];
+    if (policy) {
+      const key = Object.keys(headers).find((k) => k.toLowerCase() === 'content-security-policy') || 'Content-Security-Policy';
+      headers[key] = [...(headers[key] || []), policy];
+    }
+    if (noCookies) for (const k of Object.keys(headers)) if (k.toLowerCase() === 'set-cookie') delete headers[k];
     callback({ responseHeaders: headers });
   });
   // Chrome's window.chrome in every web page, which Google's sign-in requires (see page-compat.js)
@@ -677,7 +894,7 @@ function setupSession(ses) {
       worker.ipc.on('ultima:ext-open-tab', (_e, url) => openTabForExtension(url));
       worker.ipc.on('ultima:ext-close-tabs', (_e, ids) => closeTabsForExtension(ids));
       worker.ipc.on('ultima:ext-open-popout', (_e, url, width, height) => openPopoutForExtension(extId, url, width, height));
-      worker.ipc.on('ultima:ext-close-popout', () => send('ext-close-popout'));
+      worker.ipc.on('ultima:ext-close-popout', () => broadcast('ext-close-popout'));
       worker.ipc.handle('ultima:ext-contexts', (_e, filter) => extensionContexts(extId, filter));
       worker.ipc.handle('ultima:ext-frames', (_e, details) => extensionFrames(details));
       worker.ipc.handle('ultima:ext-tabs', (_e, q) => queryTabs(q));
@@ -691,9 +908,9 @@ function setupSession(ses) {
     const origin = originOf(requestingOrigin);
     if (permission === 'media') {
       const keys = details?.mediaType === 'video' ? ['camera'] : details?.mediaType === 'audio' ? ['microphone'] : ['camera', 'microphone'];
-      return keys.every((k) => siteAllows(origin, k) === true);
+      return keys.every((k) => allowsIn(ses, origin, k) === true);
     }
-    return siteAllows(origin, permission) === true;
+    return allowsIn(ses, origin, permission) === true;
   });
 
   ses.setPermissionRequestHandler(async (wc, requested, callback, details) => {
@@ -704,21 +921,28 @@ function setupSession(ses) {
     const origin = originOf(details.requestingUrl || wc.getURL());
     // the camera and microphone are decided apart: a block on either refuses, and only undecided ones are asked
     const keys = permission === 'media' ? [...new Set(details.mediaTypes.map((m) => (m === 'video' ? 'camera' : 'microphone')))] : [permission];
-    const states = keys.map((k) => siteAllows(origin, k));
+    const states = keys.map((k) => allowsIn(ses, origin, k));
     if (states.includes(false)) return callback(false);
     if (states.every((v) => v === true)) return callback(true);
     const undecided = keys.filter((_k, i) => states[i] === undefined);
     let what = permission === 'media' ? `use your ${undecided.join(' and ')}`
       : SITE_PERMS.BY_KEY[permission]?.what || PERMISSION_LABELS[permission] || `use “${permission}”`;
     if (permission === 'openExternal' && details.externalURL) what = `open ${new URL(details.externalURL).protocol} links in another app`;
-    // asked in Ultima's own dialog; no window to ask in means no
-    const answer = await askUi('permission', { site: hostOf(origin) || origin, what });
+    // asked in Ultima's own dialog, in the page's window; no window to ask in means no
+    const answer = await askUi('permission', { site: hostOf(origin) || origin, what }, windowOf(wc));
     const allow = Boolean(answer?.allow);
-    if (answer?.remember) setSitePermissions(origin, Object.fromEntries(undecided.map((k) => [k, allow])));
+    if (answer?.remember) {
+      const choices = Object.fromEntries(undecided.map((k) => [k, allow]));
+      if (isPrivateSession(ses)) privatePermissions[origin] = { ...privatePermissions[origin], ...choices };
+      else setSitePermissions(origin, choices);
+    }
     callback(allow);
   });
 
-  ses.on('will-download', (_e, item) => {
+  // A private download stays out of the other windows' download lists; only the window it started in shows it.
+  ses.on('will-download', (_e, item, wc) => {
+    const from = windowOf(wc);
+    const priv = isPrivateSession(ses);
     const dir = downloadDir().dir;
     const parsed = path.parse(item.getFilename());
     let target = path.join(dir, parsed.base);
@@ -733,9 +957,11 @@ function setupSession(ses) {
       const d = {
         id, state, filename: path.basename(saved), path: saved, url: item.getURL(),
         received: item.getReceivedBytes(), total: item.getTotalBytes(), started: item.getStartTime() * 1000,
+        windowId: from?.win.id, private: priv || undefined,
       };
       downloads.set(id, d);
-      send('download', d);
+      if (priv) sendTo(from, 'download', d);
+      else broadcast('download', d);
     };
     report('progressing');
     item.on('updated', (_ev, state) => report(state === 'interrupted' ? 'interrupted' : item.isPaused() ? 'paused' : 'progressing'));
@@ -782,16 +1008,53 @@ function dataFolderLabel() {
 // the window and taskbar icon (the .ico carries every size Windows asks for; build/make-icons.js makes both)
 const APP_ICON = path.join(__dirname, '..', '..', 'assets', process.platform === 'win32' ? 'icon.ico' : 'icon.png');
 
-function createWindow() {
-  const bounds = settings.data.window;
-  win = new BrowserWindow({
+// The session file: the shared sidebar, and each open normal window's own tabs and place on screen.
+//   { v: 2, sidebar: { spaces, kept }, windows: [{ key, bounds, tabs, folders, splits, activeSpaceId, active }] }
+const savedWindows = () => sessionStore.data.windows;
+const savedWindow = (key) => savedWindows().find((s) => s.key === key) || null;
+function forgetWindow(key) {
+  sessionStore.data.windows = savedWindows().filter((s) => s.key !== key);
+  sessionStore.save(800);
+}
+// Sessions from before 0.1.4 were one window with every tab in one list: its pinned tabs and Essentials (`kept`, each
+// given a key that names it in every window) become the shared sidebar, the rest that window's own tabs.
+function migrateSession(s) {
+  if (s.v === 2) return s;
+  const tabs = Array.isArray(s.tabs) ? s.tabs : [];
+  const zoneOf = (t) => (t.zone || (t.pinned ? 'essential' : 'normal'));
+  const kept = tabs.filter((t) => zoneOf(t) !== 'normal').map((t) => ({
+    key: Math.random().toString(36).slice(2, 12), zone: zoneOf(t), name: t.name, spaceId: t.spaceId,
+    homeUrl: t.homeUrl || t.url, homeTitle: t.homeTitle || t.title, homeFavicon: t.homeFavicon ?? t.favicon,
+  }));
+  const own = tabs.filter((t) => zoneOf(t) === 'normal');
+  const activeTab = tabs[s.activeIndex || 0];
+  const active = !activeTab ? null : zoneOf(activeTab) === 'normal' ? { normal: own.indexOf(activeTab) } : { key: kept[tabs.filter((t) => zoneOf(t) !== 'normal').indexOf(activeTab)].key };
+  return {
+    v: 2,
+    sidebar: { spaces: s.spaces || [], kept },
+    windows: tabs.length || s.spaces ? [{ key: 'main', bounds: null, tabs: own, folders: s.folders, splits: s.splits, activeSpaceId: s.activeSpaceId, active }] : [],
+  };
+}
+
+// A new window opens a little down and to the right of the one you're in, at its size; a restored one where it was.
+function createWindow({ private: priv = false, restore = null, url = null } = {}) {
+  const from = currentWindow();
+  let bounds = restore?.bounds;
+  if (!bounds && from && !from.win.isMaximized() && !from.win.isFullScreen()) {
+    const b = from.win.getBounds();
+    bounds = { ...b, x: b.x + 28, y: b.y + 28, maximized: false };
+  }
+  bounds = bounds || (from ? { ...settings.data.window, x: undefined, y: undefined } : settings.data.window);
+  // a new normal window when none is open starts afresh: the windows closed before it aren't brought back later
+  if (!priv && !restore && !liveWindows().some((w) => !w.private)) { sessionStore.data.windows = []; sessionStore.save(800); }
+  const win = new BrowserWindow({
     width: bounds.width,
     height: bounds.height,
     x: bounds.x,
     y: bounds.y,
     minWidth: 720,
     minHeight: 480,
-    title: 'Ultima Browser',
+    title: priv ? 'Ultima Browser — Private' : 'Ultima Browser',
     icon: APP_ICON,
     backgroundColor: GLASS ? CLEAR : '#111114',
     backgroundMaterial: BACKDROPS ? settings.data.windowMaterial : undefined,
@@ -809,24 +1072,36 @@ function createWindow() {
       spellcheck: true,
     },
   });
+  const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url };
+  windows.set(win.id, w);
+  lastFocusedId = win.id;
   if (bounds.maximized) win.maximize();
   win.once('ready-to-show', () => win.show());
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   hookShortcuts(win.webContents);
 
+  // each window remembers its own place; the last one moved is where the next first window opens
   const rememberBounds = () => {
     if (win.isDestroyed()) return;
-    settings.data.window = win.isMaximized() || win.isFullScreen()
-      ? { ...settings.data.window, maximized: win.isMaximized() }
+    w.bounds = win.isMaximized() || win.isFullScreen()
+      ? { ...w.bounds, maximized: win.isMaximized() }
       : { ...win.getBounds(), maximized: false };
+    if (priv) return;
+    settings.data.window = w.bounds;
     settings.save();
+    const entry = savedWindow(w.key);
+    if (entry) { entry.bounds = w.bounds; sessionStore.save(800); }
   };
   win.on('resize', rememberBounds);
   win.on('move', rememberBounds);
-  win.on('enter-full-screen', () => send('window-fullscreen', true));
-  win.on('focus', () => dispatchExtEvent('windows.onFocusChanged', [0]));
+  win.on('enter-full-screen', () => sendTo(w, 'window-fullscreen', true));
+  win.on('focus', () => {
+    lastFocusedId = win.id;
+    dispatchExtEvent('windows.onFocusChanged', [priv ? -1 : 0]);
+    if (!priv) announceActiveTab(w); // to extensions, the window you're in is "the" window, so its tab is the active one
+  });
   win.on('blur', () => dispatchExtEvent('windows.onFocusChanged', [-1]));
-  win.on('leave-full-screen', () => send('window-fullscreen', false));
+  win.on('leave-full-screen', () => sendTo(w, 'window-fullscreen', false));
 
   // Lock down every <webview> the UI creates.
   win.webContents.on('will-attach-webview', (_e, prefs, params) => {
@@ -837,13 +1112,30 @@ function createWindow() {
     prefs.contextIsolation = true;
     prefs.sandbox = true;
     prefs.spellcheck = true;
-    params.partition = SPACE_PARTITION.test(params.partition || '') ? params.partition : PARTITION;
+    // accessibility: the default zoom (each tab's own goes on top) and text sizes, for pages created from now on
+    const a11y = settings.data;
+    prefs.zoomFactor = Math.max(0.25, Math.min(5, (Number(a11y.pageZoom) || 100) / 100));
+    prefs.defaultFontSize = Math.max(6, Math.min(72, Number(a11y.textSize) || 16));
+    prefs.defaultMonospaceFontSize = Math.round(prefs.defaultFontSize * 13 / 16);
+    if (Number(a11y.minFontSize) > 0) prefs.minimumFontSize = Math.min(72, Number(a11y.minFontSize));
+    params.partition = priv ? PRIVATE_PARTITION : knownPartition(params.partition); // a private window's pages are all private
     partitionSession(params.partition);
   });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('did-start-loading', () => { recordingKeys = false; });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  win.on('closed', () => { win = null; });
+  // Closing a window closes its tabs, unless it's the last normal one: then they're what comes back next time.
+  win.on('closed', () => {
+    windows.delete(win.id);
+    if (lastFocusedId === win.id) lastFocusedId = null;
+    if (!priv && !quitting && liveWindows().some((x) => !x.private)) forgetWindow(w.key);
+  });
+  return w;
+}
+
+function announceActiveTab(w) {
+  const wc = w.activeTab && webContents.fromId(w.activeTab);
+  if (wc && !wc.isDestroyed() && !isPrivate(wc)) dispatchExtEvent('tabs.onActivated', [{ tabId: wc.id, windowId: 0 }]);
 }
 
 app.on('web-contents-created', (_e, wc) => {
@@ -859,15 +1151,17 @@ app.on('web-contents-created', (_e, wc) => {
   const id = wc.id;
   wc.on('did-finish-load', () => { try { holdWorkerFor(wc); } catch { /* never break page loads */ } });
   wc.once('destroyed', () => releaseWorkerFor(id));
+  const priv = isPrivate(wc);
+  if (priv) wc.once('destroyed', () => setTimeout(endPrivateBrowsingIfUnused, 0));
   hookShortcuts(wc);
   hookTabEvents(wc);
   wc.on('context-menu', (_ev, params) => pageContextMenu(wc, params));
   wc.setWindowOpenHandler(({ url, disposition }) => {
     // Real popups (OAuth, payment flows) need window.opener, so give them a window of their own, unless the site's
     // pop-ups are blocked (tabs the user opens from links aren't pop-ups).
-    if (disposition === 'new-window' && siteAllows(originOf(wc.getURL()), 'popups') === false) {
+    if (disposition === 'new-window' && allowsIn(wc.session, originOf(wc.getURL()), 'popups') === false) {
       const origin = originOf(wc.getURL());
-      send('popup-blocked', { origin, site: hostOf(origin) || origin, url });
+      sendTo(windowOf(wc), 'popup-blocked', { origin, site: hostOf(origin) || origin, url });
       return { action: 'deny' };
     }
     if (disposition === 'new-window') {
@@ -876,7 +1170,7 @@ app.on('web-contents-created', (_e, wc) => {
         overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, backgroundColor: '#ffffff', icon: APP_ICON },
       };
     }
-    send('open-url', { url, background: disposition === 'background-tab' });
+    sendTo(windowOf(wc), 'open-url', { url, background: disposition === 'background-tab', private: priv });
     return { action: 'deny' };
   });
 });
@@ -884,29 +1178,64 @@ app.on('web-contents-created', (_e, wc) => {
 // ---- IPC ----
 function registerIpc() {
   const handle = (channel, fn) => ipcMain.handle(channel, (_e, ...args) => fn(...args));
+  // for handlers that act on the window asking (its dialogs, its tabs, its saved state)
+  const handleFrom = (channel, fn) => ipcMain.handle(channel, (e, ...args) => fn(e, ...args));
+  const parentOf = (e) => BrowserWindow.fromWebContents(e.sender) || undefined;
 
-  handle('state:get', () => {
-    const url = launchUrl; // opened once, not again if the UI reloads
-    launchUrl = null;
+  // What a window starts with: the shared sidebar and, for a window that was open last time, its own tabs.
+  // A private window gets neither.
+  handleFrom('state:get', (e) => {
+    const w = windowOf(e.sender);
+    const url = w?.url ?? null; // opened once, not again if the UI reloads
+    if (w) w.url = null;
     return {
       settings: settings.data,
-      session: sessionStore.data,
+      private: Boolean(w?.private),
+      windowId: w?.win.id ?? null,
+      sidebar: w?.private ? null : sessionStore.data.sidebar,
+      window: w && !w.private ? savedWindow(w.key) : null,
       platform: process.platform,
       versions: { app: app.getVersion(), electron: process.versions.electron, chrome: process.versions.chrome, node: process.versions.node },
       dataFolder: dataFolderLabel(),
-      downloads: [...downloads.values()],
+      downloads: [...downloads.values()].filter((d) => !d.private || d.windowId === w?.win.id),
       systemDark: nativeTheme.shouldUseDarkColors,
       glass: GLASS,
       backdrops: BACKDROPS,
       launchUrl: url,
     };
   });
-  handle('session:save', (s) => { sessionStore.data = s; sessionStore.save(800); });
-  handle('settings:set', (patch) => {
+  // A window saves its own tabs; when the shared sidebar changed too, the other normal windows get it.
+  handleFrom('session:save', (e, s) => {
+    const w = windowOf(e.sender);
+    if (!w || w.private || !s || typeof s !== 'object') return;
+    if (s.window && typeof s.window === 'object') {
+      const entry = { ...s.window, key: w.key, bounds: w.bounds };
+      const list = savedWindows();
+      const i = list.findIndex((x) => x.key === w.key);
+      if (i >= 0) list[i] = entry; else list.push(entry);
+    }
+    // a sidebar always has at least one space: one without any comes from a window that didn't start properly
+    if (s.sidebar && typeof s.sidebar === 'object' && Array.isArray(s.sidebar.spaces) && s.sidebar.spaces.length) {
+      sessionStore.data.sidebar = s.sidebar;
+      broadcast('sidebar-changed', s.sidebar, { except: w, normalOnly: true });
+    }
+    sessionStore.save(800);
+  });
+  handle('app:quit', () => app.quit()); // every window is kept for next time (see before-quit)
+  handleFrom('window:new', (_e, opts) => {
+    const url = typeof opts?.url === 'string' && /^(https?|ultima):/i.test(opts.url) ? opts.url : null;
+    createWindow({ private: Boolean(opts?.private), url });
+  });
+  handleFrom('window:close', (e) => parentOf(e)?.close()); // Ctrl+W with no tabs left
+  handleFrom('settings:set', (e, patch) => {
     Object.assign(settings.data, patch);
     settings.save();
     if (patch.keybindings) rebuildKeymap();
-    if (patch.windowMaterial && BACKDROPS && win) win.setBackgroundMaterial(patch.windowMaterial);
+    if (patch.windowMaterial && BACKDROPS) for (const w of liveWindows()) w.win.setBackgroundMaterial(patch.windowMaterial);
+    if ('globalPrivacyControl' in patch) siteSessions().forEach(applyGpcPreload);
+    // caret browsing on or off in the pages already open
+    if ('caretBrowsing' in patch) for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('ultima:caret', Boolean(patch.caretBrowsing));
+    broadcast('settings-changed', patch, { except: windowOf(e.sender) });
     return settings.data;
   });
   // The UI decides light/dark (a space can override the app setting); Acrylic/Mica and web pages follow it.
@@ -917,10 +1246,10 @@ function registerIpc() {
   // the UI's own session, so it usually comes straight from the cache the sidebar loaded it into. Images only, ≤ 1 MB.
   // Copying from the UI. The web clipboard API refuses while a page (not the UI) has focus, which is most of the time.
   handle('clipboard:write', (text) => { if (typeof text === 'string' && text.length <= 1e6) clipboard.writeText(text); });
-  handle('favicon:data', async (url) => {
-    if (typeof url !== 'string' || !/^https?:\/\//i.test(url) || !win) return null;
+  handleFrom('favicon:data', async (e, url) => {
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
     try {
-      const res = await win.webContents.session.fetch(url);
+      const res = await e.sender.session.fetch(url);
       if (!res.ok) return null;
       let type = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
       if (!type.startsWith('image/')) {
@@ -933,23 +1262,23 @@ function registerIpc() {
     } catch { return null; }
   });
   // A tab's back/forward list for Tab History in the address bar menu, and jumping to one of its pages.
-  // Only Ultima's own tabs (webviews in its window) are answered.
-  const tabContents = (id) => {
+  // Only the asking window's own tabs (webviews in it) are answered.
+  const tabContents = (e, id) => {
     const wc = webContents.fromId(Number(id));
-    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents === win?.webContents ? wc : null;
+    return wc && !wc.isDestroyed() && wc.getType() === 'webview' && wc.hostWebContents === e.sender ? wc : null;
   };
-  handle('tab:history', (id) => {
-    const wc = tabContents(id);
+  handleFrom('tab:history', (e, id) => {
+    const wc = tabContents(e, id);
     if (!wc) return null;
-    return { entries: wc.navigationHistory.getAllEntries().map((e) => ({ url: e.url, title: e.title })), active: wc.navigationHistory.getActiveIndex() };
+    return { entries: wc.navigationHistory.getAllEntries().map((x) => ({ url: x.url, title: x.title })), active: wc.navigationHistory.getActiveIndex() };
   });
-  handle('tab:history-go', (id, index) => {
-    const wc = tabContents(id);
+  handleFrom('tab:history-go', (e, id, index) => {
+    const wc = tabContents(e, id);
     if (wc && Number.isInteger(index) && wc.navigationHistory.canGoToOffset(index - wc.navigationHistory.getActiveIndex())) wc.navigationHistory.goToIndex(index);
   });
   handle('downloads:dir', () => downloadDir());
-  handle('downloads:choose-dir', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  handleFrom('downloads:choose-dir', async (e) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), {
       title: 'Choose where downloads go', buttonLabel: 'Use this folder', defaultPath: downloadDir().dir, properties: ['openDirectory', 'createDirectory'],
     });
     if (canceled || !filePaths[0]) return null;
@@ -962,6 +1291,65 @@ function registerIpc() {
   handle('default-browser:set', () => defaultBrowser.makeDefault());
   handle('keys:recording', (on) => { recordingKeys = Boolean(on); });
   handle('permissions:reset', () => { settings.data.permissions = {}; settings.save(); });
+  // ---- ad and tracker blocking ----
+  handle('blocker:status', () => blocker.status());
+  handle('blocker:update', async () => {
+    const work = blocker.update(true);
+    broadcast('blocker-changed');
+    await work;
+    broadcast('blocker-changed');
+    return blocker.status();
+  });
+  // a site's switch: whether blocking is off there (its own host or a parent domain), and turning it on or off
+  handle('blocker:site', (url) => ({ off: /^https?:/i.test(url || '') && blockingOffFor(url), site: siteKey(urlHost(url || '')) }));
+  handle('blocker:set-site', ({ url, off }) => {
+    const host = siteKey(urlHost(url || ''));
+    if (!host) return;
+    const list = { ...settings.data.blockingOff };
+    if (off) list[host] = true;
+    else for (const h of hostChain(host)) delete list[h];
+    settings.data.blockingOff = list;
+    settings.save();
+    broadcast('settings-changed', { blockingOff: list });
+  });
+  // What blocker-preload.js asks as each web page and frame starts: its scriptlets (synchronously, so they're in place
+  // before the page's own scripts run), then its element hiding and procedural rules
+  const blockedFrame = (frame) => {
+    if (!blocker?.engine || !frame || !blockLists()) return null;
+    let topUrl = '';
+    try { topUrl = frame.top?.url || ''; } catch { /* gone */ }
+    if (!/^https?:/i.test(frame.url) || !/^https?:/i.test(topUrl) || blockingOffFor(topUrl)) return null;
+    return { frameUrl: frame.url, topUrl };
+  };
+  // ---- glance (glance-preload.js notices the gestures in pages; the UI shows the preview) ----
+  const tabPage = (wc) => Boolean(wc) && !wc.isDestroyed() && wc.getType() === 'webview' && Boolean(windowOf(wc));
+  ipcMain.handle('ultima:glance-config', (e) => {
+    if (!tabPage(e.sender)) return null;
+    const t = settings.data.glanceTrigger || 'any';
+    return { alt: t === 'any' || t === 'alt', shift: t === 'any' || t === 'shift', hold: t === 'any' || t === 'hold' };
+  });
+  ipcMain.handle('ultima:caret-config', (e) => tabPage(e.sender) && Boolean(settings.data.caretBrowsing));
+  ipcMain.on('ultima:glance', (e, d) => {
+    if (!tabPage(e.sender) || typeof d?.url !== 'string' || !/^https?:\/\//i.test(d.url)) return;
+    const r = d.rect;
+    const rect = e.senderFrame === e.sender.mainFrame && r && [r.x, r.y, r.width, r.height].every(Number.isFinite) ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+    sendTo(windowOf(e.sender), 'glance', { url: d.url, rect, webContentsId: e.sender.id });
+  });
+  handleFrom('glance:watch', (e, id, on) => {
+    const wc = webContents.fromId(Number(id));
+    if (!wc || wc.hostWebContents !== e.sender) return; // only the window's own pages
+    if (on) glancePages.add(wc.id); else glancePages.delete(wc.id);
+  });
+  ipcMain.on('ultima:scriptlets', (e) => {
+    try {
+      const f = blockedFrame(e.senderFrame);
+      e.returnValue = f ? blocker.engine.scriptlets(f.frameUrl, f.topUrl, blockLists()) : [];
+    } catch { e.returnValue = []; }
+  });
+  ipcMain.handle('ultima:cosmetics', (e) => {
+    const f = blockedFrame(e.senderFrame);
+    return f ? blocker.engine.cosmetics(f.frameUrl, f.topUrl, blockLists()) : null;
+  });
   // ---- site settings (see sitepermissions.js) ----
   const webOrigin = (o) => { try { const u = new URL(o); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } };
   handle('site:get', (o) => {
@@ -985,7 +1373,7 @@ function registerIpc() {
     else delete settings.data.siteDefaults[key];
     settings.save();
   });
-  // cookies the site has in this space, and clearing everything it stored, in every space
+  // cookies the site has in this space, and clearing its cache, cookies and stored data, in every space
   handle('site:data', async ({ origin: o, partition }) => {
     const origin = webOrigin(o);
     if (!origin) return null;
@@ -993,18 +1381,23 @@ function registerIpc() {
     const cookies = (await partitionSession(partition).cookies.get({})).filter((c) => cookieForHost(c, host));
     return { cookies: cookies.length };
   });
-  handle('site:clear-data', async (o) => {
+  handle('site:clear-data', async ({ origin: o, cache, cookies, storage }) => {
     const origin = webOrigin(o);
     if (!origin) return;
     const host = new URL(origin).hostname;
     for (const ses of siteSessions()) {
-      for (const c of (await ses.cookies.get({})).filter((x) => cookieForHost(x, host))) {
-        await ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {});
+      // the pages, scripts and images it served (Chromium matches cache by the file's own origin, so a CDN's stay)
+      if (cache) await ses.clearData({ dataTypes: ['cache'], origins: [origin] }).catch(() => {});
+      if (cookies) {
+        for (const c of (await ses.cookies.get({})).filter((x) => cookieForHost(x, host))) {
+          await ses.cookies.remove(`http${c.secure ? 's' : ''}://${c.domain.replace(/^\./, '')}${c.path}`, c.name).catch(() => {});
+        }
       }
-      await ses.clearStorageData({ origin, storages: ['filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }).catch(() => {});
+      if (storage) await ses.clearStorageData({ origin, storages: ['filesystem', 'indexdb', 'localstorage', 'shadercache', 'websql', 'serviceworkers', 'cachestorage'] }).catch(() => {});
     }
   });
-  handle('overlay:set', ({ color, symbolColor }) => {
+  handleFrom('overlay:set', (e, { color, symbolColor }) => {
+    const win = parentOf(e);
     if (win && process.platform !== 'darwin') win.setTitleBarOverlay({ color: GLASS ? CLEAR : color, symbolColor, height: 40 });
   });
 
@@ -1034,23 +1427,24 @@ function registerIpc() {
   });
 
   // ---- extensions ----
-  const extChanged = (result) => { send('extensions-changed'); return result; };
+  const extChanged = (result) => { broadcast('extensions-changed'); return result; };
   handle('ext:list', () => extensions.all());
   handle('ext:install-webstore', async (input) => extChanged(await extensions.installFromWebStore(input)));
-  handle('ext:install-unpacked', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Choose an unpacked extension folder', properties: ['openDirectory'] });
+  handleFrom('ext:install-unpacked', async (e) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), { title: 'Choose an unpacked extension folder', properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
     return extChanged(await extensions.installUnpacked(filePaths[0]));
   });
   handle('ext:set-enabled', async ({ id, enabled }) => extChanged(await extensions.setEnabled(id, enabled)));
   handle('ext:set-pinned', ({ id, pinned }) => extChanged(extensions.setPinned(id, pinned)));
   handle('ext:remove', (id) => extChanged(extensions.remove(id)));
-  // the UI reports which tab is showing, for chrome.tabs.onActivated
-  handle('tabs:active', (id) => {
+  // each window reports which tab is showing in it, for chrome.tabs.onActivated
+  handleFrom('tabs:active', (e, id) => {
+    const w = windowOf(e.sender);
     const next = Number.isFinite(id) ? id : null;
-    if (next === activeTabWcId) return;
-    activeTabWcId = next;
-    if (next !== null) dispatchExtEvent('tabs.onActivated', [{ tabId: next, windowId: 0 }]);
+    if (!w || next === w.activeTab) return;
+    w.activeTab = next;
+    if (next !== null && w === currentWindow({ normal: true })) announceActiveTab(w);
   });
   handle('ext:open-log', () => {
     if (!fs.existsSync(extLogFile)) fs.writeFileSync(extLogFile, '');
@@ -1064,16 +1458,16 @@ function registerIpc() {
     if (!src) throw new Error('That browser profile is no longer available.');
     return importer.runImport(src, what, data, partitionSession(partition));
   });
-  handle('import:passwords-csv', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  handleFrom('import:passwords-csv', async (e) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), {
       title: 'Import passwords from CSV', properties: ['openFile'], filters: [{ name: 'CSV', extensions: ['csv'] }],
     });
     if (canceled || !filePaths[0]) return null;
     const entries = importer.passwordsFromCsv(fs.readFileSync(filePaths[0], 'utf8'));
     return { found: entries.length, added: await data.mergePasswords(entries, path.basename(filePaths[0])), file: filePaths[0] };
   });
-  handle('import:bookmarks-html', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, {
+  handleFrom('import:bookmarks-html', async (e) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), {
       title: 'Import bookmarks from HTML', properties: ['openFile'], filters: [{ name: 'Bookmarks', extensions: ['html', 'htm'] }],
     });
     if (canceled || !filePaths[0]) return null;
@@ -1121,8 +1515,8 @@ function registerIpc() {
     action?.();
   });
   // Edit commands for Ultima's own text boxes (its custom right-click menu)
-  handle('ui:edit', (action) => {
-    if (win && ['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'selectAll'].includes(action)) win.webContents[action]();
+  handleFrom('ui:edit', (e, action) => {
+    if (['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'selectAll'].includes(action)) e.sender[action]();
   });
   handle('ask:answer', ({ id, answer }) => {
     pendingAsks.get(id)?.(answer);
@@ -1133,12 +1527,14 @@ function registerIpc() {
 // Questions for the user (e.g. permission prompts) are shown by the UI in Ultima's own dialogs.
 const pendingAsks = new Map();
 let askSeq = 0;
-function askUi(kind, payload) {
-  if (!win || win.isDestroyed()) return Promise.resolve(null);
+// (in the window the question comes from, or the one you're using)
+function askUi(kind, payload, w = null) {
+  const target = w || currentWindow();
+  if (!target) return Promise.resolve(null);
   return new Promise((resolve) => {
     askSeq += 1;
     pendingAsks.set(askSeq, resolve);
-    send('ask', { id: askSeq, kind, payload });
+    sendTo(target, 'ask', { id: askSeq, kind, payload });
   });
 }
 
@@ -1158,12 +1554,15 @@ async function widevineReady() {
   }
 }
 
+// Ultima started again (a link from another app, the taskbar icon): the last normal window you used comes forward and
+// opens the link; with only private windows open, a normal one opens for it.
 app.on('second-instance', (_e, argv) => {
-  if (!win) return;
-  if (win.isMinimized()) win.restore();
-  win.focus();
   const url = defaultBrowser.launchTarget(argv);
-  if (url) send('open-url', { url, background: false });
+  const w = currentWindow({ normal: true });
+  if (!w) { if (app.isReady()) createWindow({ url }); return; }
+  if (w.win.isMinimized()) w.win.restore();
+  w.win.focus();
+  if (url) sendTo(w, 'open-url', { url, background: false });
 });
 
 // macOS hands links over as an event, also before the window exists
@@ -1172,7 +1571,7 @@ app.on('second-instance', (_e, argv) => {
 // leaves pages waiting on requests that never finish; Chrome asks, and so does Ultima. Requests asking for the same
 // server at once (dozens, behind a proxy) share one dialog; Chromium then reuses the answer for that server.
 const pendingLogins = new Map(); // host|realm|proxy → Promise of the answer
-app.on('login', (event, _wc, details, authInfo, callback) => {
+app.on('login', (event, wc, details, authInfo, callback) => {
   event.preventDefault();
   const key = `${authInfo.host}:${authInfo.port}|${authInfo.realm}|${authInfo.isProxy}`;
   let answer = pendingLogins.get(key);
@@ -1184,7 +1583,7 @@ app.on('login', (event, _wc, details, authInfo, callback) => {
       proxy: authInfo.isProxy,
       retry: details.firstAuthAttempt === false,
       insecure: !authInfo.isProxy && /^http:/i.test(details.url || ''),
-    }).finally(() => pendingLogins.delete(key));
+    }, windowOf(wc)).finally(() => pendingLogins.delete(key));
     pendingLogins.set(key, answer);
   }
   answer.then((a) => (a?.username ? callback(a.username, a.password || '') : callback()), () => callback());
@@ -1192,32 +1591,59 @@ app.on('login', (event, _wc, details, authInfo, callback) => {
 
 app.on('open-url', (e, url) => {
   e.preventDefault();
-  if (win && !win.isDestroyed()) send('open-url', { url, background: false });
+  const w = windows.size ? currentWindow({ normal: true }) : null;
+  if (w) sendTo(w, 'open-url', { url, background: false });
+  else if (windows.size) createWindow({ url }); // only private windows are open
+  else if (app.isReady()) createWindow({ url, restore: savedWindows()[0] }); // macOS, every window closed
   else launchUrl = url;
 });
 
 app.whenReady().then(async () => {
   const dir = app.getPath('userData');
   settings = new JsonStore(dir, 'settings', DEFAULT_SETTINGS);
+  // Glance first had a switch per gesture; now it's one choice
+  for (const k of ['glanceAlt', 'glanceShift', 'glanceHold']) delete settings.data[k];
   syncNativeTheme();
   rebuildKeymap();
-  sessionStore = new JsonStore(dir, 'session', { tabs: [], activeIndex: 0 });
+  sessionStore = new JsonStore(dir, 'session', { sidebar: null, windows: [] });
+  sessionStore.data = migrateSession(sessionStore.data);
   data = new BrowserData(dir);
-  data.onBookmarksChanged = () => send('bookmarks-changed');
+  data.onBookmarksChanged = () => broadcast('bookmarks-changed');
   extensions = new ExtensionManager(dir);
   extLogFile = path.join(dir, 'logs', 'extensions.log');
   fs.mkdirSync(path.dirname(extLogFile), { recursive: true });
   setAppMenu();
+  // the ad and tracker lists on disk, ready before the first page loads; refreshed in the background when they're due
+  blocker = new Blocker(path.join(dir, 'filters'), async (url) => {
+    const res = await net.fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  });
+  blocker.load();
+  const refreshLists = () => blocker.update().then((changed) => { if (changed) broadcast('blocker-changed'); }).catch(() => {});
+  setTimeout(refreshLists, 5000);
+  setInterval(refreshLists, 6 * 60 * 60 * 1000);
   partitionSession(PARTITION);
   registerIpc();
   await widevineReady();
-  createWindow();
+  // every window that was open last time comes back (its regular tabs only when "Restore tabs" is on; the shared
+  // sidebar always does); a link Ultima was started with opens in the last of them
+  if (!settings.data.restoreSession) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
+  const restore = savedWindows();
+  if (restore.length) restore.forEach((r, i) => createWindow({ restore: r, url: i === restore.length - 1 ? launchUrl : null }));
+  else createWindow({ url: launchUrl });
+  launchUrl = null;
   defaultBrowser.refreshRegistration();
-  nativeTheme.on('updated', () => send('system-theme', nativeTheme.shouldUseDarkColors));
-  app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(); });
+  nativeTheme.on('updated', () => broadcast('system-theme', nativeTheme.shouldUseDarkColors));
+  // macOS: clicking the Dock icon with every window closed brings back the last one
+  app.on('activate', () => { if (!liveWindows().length) createWindow({ restore: savedWindows()[0] }); });
 });
 
+// signing out of Windows or shutting down closes the windows one by one: all of them come back, as after Quit
+app.on('session-end', () => { quitting = true; });
+
 app.on('before-quit', () => {
+  quitting = true; // windows closing now are kept for next time
   data?.flush();
   for (const s of [settings, sessionStore]) if (s?.timer) s.flush();
 });

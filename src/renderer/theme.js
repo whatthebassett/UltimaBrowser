@@ -18,6 +18,18 @@ const THEME_PRESETS = [
 const MAX_THEME_COLORS = 3;
 
 // ---------- color math ----------
+// White or black for marks on a color: black only on light ones (amber, cyan, green, gray). Plain WCAG contrast would
+// pick black on mid tones like the default purple too, where white reads better.
+function inkOn(hex) {
+  let x = String(hex || '').replace('#', '').trim();
+  if (x.length === 3) x = [...x].map((c) => c + c).join('');
+  if (!/^[0-9a-f]{6}$/i.test(x)) return '#fff';
+  const lin = (c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+  const [r, g, b] = [0, 2, 4].map((i) => lin(parseInt(x.slice(i, i + 2), 16) / 255));
+  const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  return lum > 0.3 ? '#000' : '#fff';
+}
+
 function hexToHsl(hex) {
   let x = hex.replace('#', '').trim();
   if (x.length === 3) x = [...x].map((c) => c + c).join('');
@@ -127,6 +139,8 @@ function spreadColor(hex) {
 }
 
 function loaderColors(key) {
+  // a private window's space is black and its accent gray: following either, the animation is in grays
+  if (B.private && (key === 'space' || key === 'accent' || !LOADER_THEMES[key])) return PRIVATE_LOADER;
   if (key === 'accent') return spreadColor(B.settings.accent || '#8b5cf6');
   if (key === 'custom') return customLoaderColors();
   if (key === 'space' || !LOADER_THEMES[key]) {
@@ -317,5 +331,5 @@ function removeThemeColor() {
 
 // clicking anywhere else closes the editor (menus it opened don't count)
 document.addEventListener('mousedown', (e) => {
-  if (TE.el && !TE.el.contains(e.target) && !e.target.closest('.ctx-layer, .space-chip')) closeThemeEditor();
+  if (TE.el && !TE.el.contains(e.target) && !e.target.closest('.ctx-layer, .dd-layer, .space-chip')) closeThemeEditor();
 }, true);

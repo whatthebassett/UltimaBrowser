@@ -24,6 +24,7 @@ const COMMANDS = [
   { id: 'find', title: 'Find in page', icon: 'find' },
   { id: 'fill-login', title: 'Fill saved login on this page', icon: 'key' },
   { id: 'zoom-in', title: 'Zoom in', icon: 'zoomIn' },
+  { id: 'caret-browsing', title: 'Caret browsing on/off', icon: 'accessibility', words: 'text cursor keyboard accessibility navigate select f7' },
   { id: 'zoom-out', title: 'Zoom out', icon: 'zoomOut' },
   { id: 'zoom-reset', title: 'Reset zoom', icon: 'search' },
   { id: 'toggle-sidebar', title: 'Toggle sidebar', icon: 'sidebar' },
@@ -135,8 +136,8 @@ async function updatePalette() {
       .sort((a, b) => (q ? b.s - a.s : (b.t.lastActive || 0) - (a.t.lastActive || 0)))
       .slice(0, q ? 5 : 6);
     for (const { t } of tabs) {
-      const space = spaceById(t.spaceId);
-      const elsewhere = space && t.zone !== 'essential' && t.spaceId !== B.activeSpaceId;
+      const space = spaceById(homeSpaceOf(t));
+      const elsewhere = space && space.id !== B.activeSpaceId;
       items.push({
         group: 'Open tabs', kind: 'tab', tab: t, title: tabLabel(t), sub: hostname(t.url) || t.url, fav: favHtml(t.favicon, t.url, t.title),
         hint: elsewhere ? `${space.icon} ${esc(space.name)}` : t.zone === 'essential' ? 'Essential' : isUnloaded(t) ? 'Unloaded' : 'Switch to tab',

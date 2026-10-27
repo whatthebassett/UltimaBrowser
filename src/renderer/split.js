@@ -10,15 +10,23 @@ const SPLIT_MIN = 0.15; // the smallest share a pane can be dragged down to
 const splitById = (id) => B.splits.find((s) => s.id === id) || null;
 const splitTabs = (id) => B.tabs.filter((t) => t.splitId === id);
 const canSplit = (t) => t && t.zone === 'normal' && !isInternal(t.url);
+let holdSplits = false;
 
 function initSplits(saved) {
   B.splits = (Array.isArray(saved) ? saved : []).filter((s) => s && typeof s.id === 'string')
     .map((s) => ({ id: s.id, sizes: Array.isArray(s.sizes) ? s.sizes.map(Number) : [] }));
 }
 
+// Runs fn, which adds many tabs, without breaking up the splits whose other panes are still on the way.
+function withSplitsHeld(fn) {
+  holdSplits = true;
+  try { return fn(); } finally { holdSplits = false; }
+}
+
 // Keeps splits sound: only regular tabs of one space showing a web page, side by side in the sidebar (where the
 // first one is), in the same folder, 2 to 4 of them, with sizes that add up.
 function normalizeSplits() {
+  if (holdSplits) return;
   for (const t of B.tabs) {
     if (t.splitId && (!splitById(t.splitId) || !canSplit(t))) t.splitId = undefined;
   }

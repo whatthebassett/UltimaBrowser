@@ -25,6 +25,19 @@ function sidebarLeave(delay = 300) {
   }, delay);
 }
 
+// Back in its place beside the page: it slides in from the window's left edge, the page narrowing alongside it.
+function slideSidebarIn() {
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const sb = $('#sidebar');
+  clearTimeout(slideSidebarIn.timer);
+  sb.style.transition = 'none';
+  sb.style.marginLeft = `${-sb.offsetWidth}px`;
+  void sb.offsetWidth;
+  sb.style.transition = 'margin-left 0.26s cubic-bezier(0.2, 0.8, 0.2, 1)';
+  sb.style.marginLeft = '0px';
+  slideSidebarIn.timer = setTimeout(() => { sb.style.transition = ''; sb.style.marginLeft = ''; }, 320);
+}
+
 // for commands that need the sidebar on screen (renaming a tab or a space from the keyboard)
 function sidebarShowForCommand() {
   if (!sidebarHidden()) return;
@@ -45,6 +58,6 @@ function initSidebarHide() {
   $('#sidebar').addEventListener('mouseleave', () => { if (sidebarPeeking()) sidebarLeave(); });
   // a click elsewhere in Ultima's own UI puts it away at once (clicks on the page itself go to the page)
   document.addEventListener('mousedown', (e) => {
-    if (sidebarPeeking() && !e.target.closest('#sidebar, #sb-hotzone, .ctx-layer, .url-menu, .tab-history, .ext-popup, .theme-editor, .dlg-backdrop')) sidebarLeave(0);
+    if (sidebarPeeking() && !e.target.closest('#sidebar, #sb-hotzone, .ctx-layer, .dd-layer, .url-menu, .tab-history, .ext-popup, .theme-editor, .dlg-backdrop')) sidebarLeave(0);
   }, true);
 }

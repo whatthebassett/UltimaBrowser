@@ -2,7 +2,8 @@
 // movement), the other tabs slide aside to open a gap where it will land, and on release it settles into the gap.
 // It can land among regular or pinned tabs, in Essentials, in a folder (in its gap, or on its header), or on the
 // bookmarks bar (which bookmarks it). Esc (rebindable) or dropping anywhere else sends it back.
-// A folder drags the same way by its header: the whole folder is the card, and it lands among the regular tabs.
+// A folder drags the same way by its header: the whole folder is the card, and it lands among the regular or pinned
+// tabs (which pins or unpins it).
 const TD = { press: null, drag: null, dirty: false };
 const CARD_START = 5; // pixels the pointer moves before a press becomes a drag
 const LIST_ZONES = { essentials: 'essential', 'pinned-list': 'pinned', tabs: 'normal' };
@@ -12,6 +13,7 @@ function initTabCardDrag() {
   side.addEventListener('pointerdown', (e) => {
     if (e.button !== 0 || TD.drag) return;
     const head = e.target.closest('.tfolder-head');
+    if (head && e.target.closest('button')) return; // the header's own buttons (new tab in folder)
     if (head) { TD.press = { el: head.parentElement, folderId: head.dataset.folderHead, x: e.clientX, y: e.clientY, pointerId: e.pointerId }; return; }
     const el = e.target.closest('.tab[data-tab], .pin[data-tab]');
     if (!el || e.target.closest('[data-act], .tab-rename, input')) return;
@@ -72,10 +74,14 @@ function onCardMove(e) {
   d.vx = d.vx * 0.6 + (e.clientX - d.x) * 0.4;
   d.x = e.clientX;
   d.y = e.clientY;
-  if (!d.hitQueued) {
-    d.hitQueued = true;
-    requestAnimationFrame(() => { d.hitQueued = false; if (TD.drag === d) aimCard(); });
-  }
+  d.settle = 0;
+  queueAim(d);
+}
+
+function queueAim(d) {
+  if (d.hitQueued) return;
+  d.hitQueued = true;
+  requestAnimationFrame(() => { d.hitQueued = false; if (TD.drag === d) aimCard(); });
 }
 
 // The card follows the pointer, lifting (a little bigger) as it starts and leaning into its movement.
@@ -130,19 +136,15 @@ function aimCard() {
     return;
   }
   if (!at?.closest('#sidebar')) { d.target = { kind: 'none' }; moveSlot(d.home.parent, d.home.next); return; }
-  // onto the middle of a folder's header: into the folder
-  const head = at.closest('[data-folder-head]');
-  if (head && d.tab.zone !== 'essential') {
-    const r = head.getBoundingClientRect();
-    if (d.y > r.top + r.height * 0.25 && d.y < r.bottom - r.height * 0.25) {
-      head.classList.add('drop-into');
-      d.target = { kind: 'folder', id: head.dataset.folderHead };
-      moveSlot(d.home.parent, d.home.next);
-      return;
-    }
-  }
   const zone = at.closest('#essentials, #pinned-list, #tabs');
   if (!zone) return; // between zones: keep the last gap
+  // over the gap itself: it already shows where the tab will land, so nothing moves (moving it would shift what's
+  // under the pointer and make the gap chase it)
+  const sr = restingRect(d.slot);
+  if (d.slot.closest('#essentials, #pinned-list, #tabs') === zone && d.x >= sr.left && d.x <= sr.right && d.y >= sr.top && d.y <= sr.bottom) {
+    markFolderTarget(d);
+    return;
+  }
   d.target = { kind: 'list' };
   d.slot.className = `drag-slot ${zone.id === 'essentials' ? 'pin-slot' : 'tab-slot'}`;
   if (zone.id === 'essentials') {
@@ -155,14 +157,11 @@ function aimCard() {
   // over a split row: between its parts, left to right (rearranges the split, or joins it). Once the gap is in a
   // row it stays while the pointer is within the row and a gap's height around it: taking the gap out of the
   // list moves the row by that much, which would otherwise bounce the gap straight back out.
-  // A row just below the gap is judged where it was before the gap pushed it down, so the gap can't sit in its way.
   const inRow = d.slot.parentElement.classList.contains('tsplit') ? d.slot.parentElement : null;
-  const gapH = inRow ? 0 : d.slot.offsetHeight + 2;
   const band = (el) => {
     const r = restingRect(el);
-    const pushed = gapH && (d.slot.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) ? gapH : 0;
     const extra = el === inRow ? 38 : 0;
-    return d.y >= r.top - pushed - (extra && 6) && d.y <= r.bottom - pushed + extra;
+    return d.y >= r.top - (extra && 6) && d.y <= r.bottom + extra;
   };
   const row = canSplit(d.tab) && $$('.tsplit', zone).find(band);
   if (row && (row.dataset.split === d.tab.splitId || splitTabs(row.dataset.split).length < SPLIT_MAX)) {
@@ -171,6 +170,7 @@ function aimCard() {
     moveSlot(row, after || null);
     return;
   }
+  if (aimIntoFolder(d, zone)) return;
   // a list: before the first row (or folder header, or split view) whose middle is below the pointer
   const items = [...new Set($$('.tab[data-tab]:not(.drag-source), .tfolder-head', zone).map((el) => el.closest('.tsplit') || el))];
   const next = items.find((el) => { const r = restingRect(el); return r.top + r.height / 2 > d.y; });
@@ -189,11 +189,11 @@ function restingRect(el) {
   return { left: r.left - m.m41, right: r.right - m.m41, top: r.top - m.m42, bottom: r.bottom - m.m42, width: r.width, height: r.height };
 }
 
-// A folder lands among the regular tabs, between rows and other folders (never inside one): before the first row,
-// or folder header, whose middle is below the pointer.
+// A folder lands among the regular or pinned tabs, between rows and other folders (never inside one): before the
+// first row, or folder header, whose middle is below the pointer.
 function aimFolderCard(d, at) {
-  const zone = at?.closest('#tabs');
-  // anywhere but the regular tabs (Essentials, pinned, the page…): it would go back where it was
+  const zone = at?.closest('#pinned-list, #tabs');
+  // anywhere else (Essentials, the page…): it would go back where it was
   if (!zone) { d.target = { kind: 'none' }; moveSlot(d.home.parent, d.home.next); return; }
   d.target = { kind: 'list' };
   const items = [...zone.children].filter((el) => !el.classList.contains('drag-source') && !el.classList.contains('drag-slot'));
@@ -210,15 +210,58 @@ function showSplitDrop(side, why) {
   $('span', el).innerHTML = side ? `${icon('split', 18)} Split view` : esc(why);
 }
 
+// A folder is one big target: anywhere from its header down to a little past its last tab puts the tab in it, at
+// that spot (the folder lights up in its color). Only the top of the header means "just above the folder".
+// A collapsed folder takes the tab at its end.
+const FOLDER_LIP = 14; // px below a folder's last tab that still count as "in the folder"
+function aimIntoFolder(d, zone) {
+  for (const fEl of $$('.tfolder', zone)) {
+    if (fEl.classList.contains('drag-source')) continue;
+    const r = restingRect(fEl);
+    if (d.y < r.top || d.y > r.bottom + FOLDER_LIP) continue;
+    const head = $('.tfolder-head', fEl);
+    const hr = restingRect(head);
+    if (d.y < hr.top + hr.height * 0.3) { moveSlot(fEl.parentElement, fEl); return true; } // just above it
+    fEl.classList.add('drop-folder');
+    if (fEl.classList.contains('collapsed')) {
+      // no gap inside a closed folder: the header lights up, and nothing in the sidebar moves under the pointer
+      head.classList.add('drop-into');
+      d.target = { kind: 'folder', id: fEl.dataset.folder };
+      return true;
+    }
+    const box = $('.tfolder-tabs', fEl);
+    if (d.y <= hr.bottom) { moveSlot(box, box.firstElementChild); return true; } // on the header: first in the folder
+    // among its tabs (a split view inside is one block); below the last one: at the end
+    const kids = [...new Set($$('.tab[data-tab]:not(.drag-source)', box).map((el) => el.closest('.tsplit') || el))];
+    const next = kids.find((el) => { const kr = restingRect(el); return kr.top + kr.height / 2 > d.y; });
+    moveSlot(box, next || null);
+    return true;
+  }
+  return false;
+}
+
+// Lights up the folder the tab is headed for (after the marks were cleared for a new aim that keeps the gap).
+function markFolderTarget(d) {
+  if (d.target.kind === 'folder') {
+    const head = $(`[data-folder-head="${d.target.id}"]`);
+    head?.classList.add('drop-into');
+    head?.parentElement.classList.add('drop-folder');
+  } else d.slot.closest('.tfolder')?.classList.add('drop-folder');
+}
+
 function clearCardMarks() {
   if (TD.drag?.target?.kind !== 'split') showSplitDrop(null);
-  $$('.drop-before, .drop-after, .drop-into, .drop-target').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-target'));
+  $$('.drop-before, .drop-after, .drop-into, .drop-target, .drop-folder').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-target', 'drop-folder'));
 }
 
 // Moves the gap, sliding everything that shifts (FLIP: measure, move, then animate from the old spot).
 function moveSlot(parent, next) {
-  const slot = TD.drag.slot;
+  const d = TD.drag;
+  const slot = d.slot;
   if (slot.parentElement === parent && slot.nextElementSibling === (next || null)) return;
+  // moving the gap moves what's around it, so what's under a still pointer may now be something else: look again
+  // (a few times at most), rather than wait for the pointer to move
+  if ((d.settle || 0) < 3) { d.settle = (d.settle || 0) + 1; queueAim(d); }
   const els = $$('#sidebar .tab[data-tab]:not(.drag-source), #sidebar .pin[data-tab]:not(.drag-source), #sidebar .tfolder-head, #sidebar .drag-slot');
   const before = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
   if (next) parent.insertBefore(slot, next); else parent.append(slot);
@@ -278,7 +321,7 @@ function finishCardDrag(how) {
     // the row or folder that will follow it
     let n = d.slot.nextElementSibling;
     while (n && n.classList.contains('drag-source')) n = n.nextElementSibling;
-    folderMove = { before: n?.dataset.tab ? tabById(Number(n.dataset.tab)) : n?.classList.contains('tfolder') ? folderTabs(n.dataset.folder)[0] : null };
+    folderMove = { zone: LIST_ZONES[zoneEl.id], before: n?.dataset.tab ? tabById(Number(n.dataset.tab)) : n?.classList.contains('tfolder') ? folderTabs(n.dataset.folder)[0] : null };
   } else if (how === 'slot' && zoneEl) {
     // the tab that will follow it decides the index; the folder it sits in decides the folder
     const order = $$('[data-tab], .drag-slot', zoneEl);
@@ -297,11 +340,11 @@ function finishCardDrag(how) {
   $$('webview').forEach((w) => { w.style.pointerEvents = ''; });
   $$('#sidebar [style*="transform"]').forEach((el) => { el.style.transform = ''; el.style.transition = ''; });
   TD.drag = null;
-  if (folderMove) placeFolderBefore(d.folderId, folderMove.before);
+  if (folderMove) moveFolder(d.folderId, folderMove.zone, folderMove.before);
   if (arrange) arrangeSplit(arrange.id, arrange.order);
   const tab = d.folderId ? null : tabById(d.id);
   if (tab && move) {
-    tab.folderId = move.zone === 'normal' ? move.folder : undefined;
+    tab.folderId = move.zone !== 'essential' ? move.folder : undefined;
     tab.splitId = move.split;
     moveTab(tab.id, move.index, move.zone);
   } else if (tab && how === 'folder') addTabToFolder(tab, d.target.id);

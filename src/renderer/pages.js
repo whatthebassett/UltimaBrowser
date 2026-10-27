@@ -22,7 +22,9 @@ async function pageNewTab(root, tab) {
     <div class="clock" id="ntp-clock"></div>
     <div class="greet" id="ntp-greet"></div>
     <label class="ntp-search">${icon('search', 18)}<input id="ntp-q" placeholder="Search ${esc(engine.name)} or type a URL" spellcheck="false"></label>
-    <div class="tiles" id="ntp-tiles"></div>
+    ${tab.private ? `<div class="ntp-private">${icon('incognito', 20)}<div><b>${B.private ? 'Private window' : 'Private tab'}</b>
+      <span>Pages you visit here aren’t saved to your history, and their cookies and site data are deleted when your last private tab closes. Downloads and bookmarks are kept. Extensions are off.</span></div></div>`
+    : '<div class="tiles" id="ntp-tiles"></div>'}
     ${keysFor('palette')[0] ? `<div class="ntp-hint">Press ${kbdHtml(keysFor('palette')[0])} anywhere to open the Control Palette</div>` : ''}
   </div>`;
   const tick = () => {

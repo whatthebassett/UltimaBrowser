@@ -5,6 +5,9 @@ const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 contextBridge.exposeInMainWorld('ultima', {
   getState: invoke('state:get'),
   saveSession: invoke('session:save'),
+  newWindow: invoke('window:new'),
+  closeWindow: invoke('window:close'),
+  quit: invoke('app:quit'),
   setSettings: invoke('settings:set'),
   resetPermissions: invoke('permissions:reset'),
   setKeyRecording: invoke('keys:recording'),
@@ -24,6 +27,11 @@ contextBridge.exposeInMainWorld('ultima', {
   siteDefault: invoke('site:default'),
   siteData: invoke('site:data'),
   siteClearData: invoke('site:clear-data'),
+  blockerStatus: invoke('blocker:status'),
+  blockerUpdate: invoke('blocker:update'),
+  blockerSite: invoke('blocker:site'),
+  blockerSetSite: invoke('blocker:set-site'),
+  watchGlance: invoke('glance:watch'),
   downloadDir: invoke('downloads:dir'),
   chooseDownloadDir: invoke('downloads:choose-dir'),
   resetDownloadDir: invoke('downloads:reset-dir'),
@@ -79,7 +87,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked'];
+    const allowed = ['command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

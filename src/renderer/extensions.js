@@ -193,7 +193,7 @@ function renderUrlMenu() {
   const downloading = [...B.downloads.values()].filter((d) => d.state === 'progressing').length;
   const tile = (act, ic, label, cmd, extra = '') => `<button class="um-tile" data-act="${act}" title="${esc(withKey(label, cmd))}">${icon(ic, 20)}<span>${label}</span>${extra}</button>`;
   const storeId = storeIdOf(activeTab()?.url);
-  const exts = EXT.list.filter((e) => e.enabled);
+  const exts = B.private ? [] : EXT.list.filter((e) => e.enabled); // extensions don't run in private windows
   el.innerHTML = `
     ${urlMenuSiteRow()}
     <div class="um-tiles">
@@ -228,8 +228,7 @@ async function onUrlMenuClick(e) {
   else if (act === 'downloads') runCommand('open-downloads');
   else if (act === 'extensions') runCommand('open-extensions');
   else if (act === 'store') createTab({ url: STORE_HOME });
-  else if (act === 'install') installFromStore(activeTab().url);
-}
+  else if (act === 'install') installFromStore(activeTab().url);}
 
 function initExtensionsUi() {
   $('#ext-actions').addEventListener('click', (e) => {
@@ -253,7 +252,7 @@ function initExtensionsUi() {
   $('#btn-cws').addEventListener('click', () => installFromStore(activeTab().url));
   // clicks anywhere else close the menu and popup
   document.addEventListener('mousedown', (e) => {
-    if (EXT.menu && !EXT.menu.contains(e.target) && !e.target.closest('#btn-url-menu, .ctx-layer, .dlg-backdrop')) closeUrlMenu();
+    if (EXT.menu && !EXT.menu.contains(e.target) && !e.target.closest('#btn-url-menu, #btn-shield, .ctx-layer, .dd-layer, .dlg-backdrop')) closeUrlMenu();
     if (EXT.popup && !EXT.popup.contains(e.target) && !e.target.closest('.ext-btn, .um-ext')) closeExtensionPopup();
   }, true);
   window.ultima.on('extensions-changed', refreshExtensions);

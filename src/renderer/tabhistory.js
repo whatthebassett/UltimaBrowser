@@ -118,7 +118,7 @@ function onTabHistoryClick(e) {
 function initTabHistory() {
   // a click anywhere else in Ultima closes it (a click in a page does too: see the webview focus handler)
   document.addEventListener('mousedown', (e) => {
-    if (TH.panel && !TH.panel.contains(e.target) && !e.target.closest(`#${sidebarButtonId('tab-history')}, .ctx-layer`)) closeTabHistory();
+    if (TH.panel && !TH.panel.contains(e.target) && !e.target.closest(`#${sidebarButtonId('tab-history')}, .ctx-layer, .dd-layer`)) closeTabHistory();
   }, true);
   window.addEventListener('resize', () => { if (TH.panel) placeTabHistory(); });
 }

@@ -21,7 +21,7 @@ const openInternal = (name) => {
 function zoom(tab, delta) {
   if (!ready(tab)) return;
   tab.zoom = delta === 0 ? 0 : Math.max(-5, Math.min(5, tab.zoom + delta));
-  tab.webview.setZoomLevel(tab.zoom);
+  tab.webview.setZoomLevel(baseZoomLevel() + tab.zoom); // on top of the default zoom (accessibility.js)
   updateChrome();
 }
 
@@ -58,12 +58,22 @@ function runCommand(cmd) {
   switch (cmd) {
     case 'palette': return $('#palette-backdrop').hidden ? openPalette('any') : closePalette();
     case 'new-tab': return openPalette('new');
+    case 'new-window': return openNewWindow();
+    case 'new-private-window': return openNewWindow(true);
+    case 'new-private-tab': return newPrivateTab();
+    case 'quit': return window.ultima.quit();
     case 'edit-url': return openPalette('current', tab && !(tab.url === NEWTAB) ? tab.url : '');
-    case 'close-tab': return tab && closeTab(tab.id);
+    case 'close-tab': if (GL.open) return closeGlance(); return windowIsEmpty() ? window.ultima.closeWindow() : tab && closeTab(tab.id);
     case 'reopen-tab': return reopenClosedTab();
     case 'duplicate-tab': return duplicateTab(tab);
     case 'pin-tab': return togglePin(tab);
     case 'essential-tab': return toggleEssential(tab);
+    case 'caret-browsing': {
+      const on = !B.settings.caretBrowsing;
+      applySettings({ caretBrowsing: on });
+      rerenderIfShowing('settings');
+      return toast(on ? 'Caret browsing on: move through pages with the arrow keys' : 'Caret browsing off');
+    }
     case 'unload-tab': return unloadTab(tab);
     case 'reset-tab': return resetToPinnedPage(tab);
     case 'edit-pinned-link': return tab && isKept(tab) ? editPinnedLink(tab) : toast('Only pinned tabs and Essentials have a pinned link');
@@ -177,16 +187,18 @@ const updateChrome = debounce(async () => {
   const secure = tab.url.startsWith('https://');
   setUrlbarLoading(B.settings.loadingIndicator !== false && tab.loading && !internal);
   updateStoreButton();
+  updateShield();
   $('.url-icon').innerHTML = icon(internal ? 'sparkle' : secure ? 'lock' : tab.url.startsWith('http://') ? 'unlock' : 'search', 14);
   $('.url-icon').classList.toggle('secure', secure);
   $('.url-text').textContent = internal ? 'Search or enter address' : (hostname(tab.url) || tab.url) + (tab.url.startsWith('http://') ? ' — not secure' : '');
+  if (tab.private && !B.private) $('.url-text').insertAdjacentHTML('afterbegin', '<span class="url-private">Private</span>'); // among normal tabs
   $('#page-title').textContent = internal ? '' : tab.title;
   $('#btn-back').disabled = !(wv?.canGoBack() || (internal && tab.webview));
   $('#btn-forward').disabled = !wv?.canGoForward();
   $('#btn-reload').innerHTML = icon(tab.loading ? 'stop' : 'reload', 16);
   $('#btn-star').hidden = internal;
   $('#btn-find').hidden = internal;
-  const zoomPct = Math.round(1.2 ** tab.zoom * 100);
+  const zoomPct = Math.round(1.2 ** (baseZoomLevel() + tab.zoom) * 100);
   $('#zoom-pill').hidden = !wv || tab.zoom === 0;
   $('#zoom-pill').textContent = `${zoomPct}%`;
   if (!internal) {
@@ -284,7 +296,7 @@ async function onAsk({ id, kind, payload }) {
 async function onUiContextMenu(e) {
   if (e.defaultPrevented) return;
   e.preventDefault();
-  if (e.target.closest('.ctx-layer, .dlg-backdrop')) return;
+  if (e.target.closest('.ctx-layer, .dd-layer, .dlg-backdrop')) return;
   const field = e.target.closest('textarea, [contenteditable="true"], input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color])');
   const selected = window.getSelection().toString().trim();
   const mod = KEYS.platform === 'darwin' ? 'Cmd' : 'Ctrl';
@@ -361,8 +373,10 @@ function applyTheme() {
   const dark = effectiveDark(); // the active space's theme can force light or dark
   const rootEl = document.documentElement;
   rootEl.dataset.theme = dark ? 'dark' : 'light';
-  rootEl.style.setProperty('--accent', s.accent);
+  rootEl.style.setProperty('--accent', B.private ? PRIVATE_ACCENT : s.accent);
+  rootEl.style.setProperty('--on-accent', inkOn(s.accent)); // the shield's checkmark
   applySpaceVars();
+  applyAccessibility();
   window.ultima.setNativeTheme(themeMode());
   // Glass tint over the system blur: higher = smokier, so bright windows behind don't glare through.
   const tint = Math.max(0, Math.min(90, s.glassTint ?? 45)) / 100;
@@ -370,8 +384,12 @@ function applyTheme() {
   rootEl.style.setProperty('--sidebar-w', `${s.sidebarWidth}px`);
   rootEl.style.setProperty('--ess-height', `${Math.max(36, Math.min(72, s.essentialsHeight ?? 44))}px`);
   document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed));
+  const wasHidden = document.body.classList.contains('sb-hidden');
+  const wasPeeking = document.body.classList.contains('sb-peek');
   document.body.classList.toggle('sb-hidden', Boolean(s.sidebarHidden));
   if (!s.sidebarHidden) document.body.classList.remove('sb-peek');
+  // kept open again: it slides in from the left edge (unless it was already out, peeking)
+  if (wasHidden && !s.sidebarHidden && !wasPeeking) slideSidebarIn();
   document.body.classList.toggle('acrylic', Boolean(B.backdrops) && s.windowMaterial === 'acrylic');
   if (document.body.classList.contains('bm-bar-center') !== Boolean(s.centerBookmarksBar)) {
     document.body.classList.toggle('bm-bar-center', Boolean(s.centerBookmarksBar));
@@ -397,9 +415,11 @@ function applySettings(patch) {
 function onDownload(d) {
   const prev = B.downloads.get(d.id);
   B.downloads.set(d.id, d);
-  if (!prev) toast(`Downloading ${d.filename}`, { label: 'Show', run: () => runCommand('open-downloads') });
-  else if (prev.state !== 'completed' && d.state === 'completed') toast(`${d.filename} downloaded`, { label: 'Open', run: () => window.ultima.openDownload(d.id) });
-  else if (d.state === 'interrupted' || d.state === 'cancelled') toast(`${d.filename} failed to download`);
+  // every window lists it; only the window it started in announces it
+  const here = !d.windowId || d.windowId === B.windowId;
+  if (here && !prev) toast(`Downloading ${d.filename}`, { label: 'Show', run: () => runCommand('open-downloads') });
+  else if (here && prev.state !== 'completed' && d.state === 'completed') toast(`${d.filename} downloaded`, { label: 'Open', run: () => window.ultima.openDownload(d.id) });
+  else if (here && (d.state === 'interrupted' || d.state === 'cancelled')) toast(`${d.filename} failed to download`);
   $('.dl-badge').hidden = ![...B.downloads.values()].some((x) => x.state === 'progressing');
   rerenderIfShowing('downloads');
 }
@@ -407,6 +427,7 @@ function onDownload(d) {
 // ---------- boot ----------
 async function boot() {
   const state = await window.ultima.getState();
+  initWindows(state); // private or not decides much of what follows
   B.settings = state.settings;
   B.versions = state.versions;
   B.dataFolder = state.dataFolder;
@@ -418,7 +439,7 @@ async function boot() {
   document.body.classList.toggle('glass', state.glass);
   applyTheme();
 
-  $('#brand').innerHTML = `${LOGO}<span>Ultima</span>`;
+  $('#brand').innerHTML = `${LOGO}<span>Ultima</span>${B.private ? `<span class="private-badge" title="Pages you visit here aren’t saved">${icon('incognito', 13)} Private</span>` : ''}`;
   // the sidebar's customizable buttons are set up in sidebarbuttons.js
   const buttons = {
     'btn-collapse': ['sidebar', 'toggle-sidebar'], 'btn-star': ['star', 'bookmark'], 'btn-find': ['find', 'find'], 'btn-key': ['key', 'fill-login'],
@@ -433,9 +454,10 @@ async function boot() {
   $('.nt-icon').innerHTML = icon('plus', 16);
   $('#btn-newtab').onclick = () => openPalette('new');
   $('#urlbar').onclick = (e) => runCommand(e.target.closest('#btn-url-menu') ? 'url-menu' : 'edit-url');
-  $('#btn-url-menu').innerHTML = icon('more', 16);
+  $('#btn-url-menu').innerHTML = icon('sliders', 16);
   initExtensionsUi();
   initSiteSettings();
+  initBlocking();
   initTabHistory();
   $('#zoom-pill').onclick = () => zoom(activeTab(), 0);
 
@@ -445,6 +467,9 @@ async function boot() {
   initTabRename();
   initTabCardDrag();
   initSplitView();
+  initGlance();
+  initDropdowns();
+  initAccessibility();
   initSpaceUi();
   initResizer();
   initSidebarHide();
@@ -457,14 +482,14 @@ async function boot() {
     if (cmd !== 'palette' && cmd !== 'new-tab' && cmd !== 'edit-url') closePalette();
     runCommand(cmd);
   });
-  window.ultima.on('open-url', async ({ url, search, background, pickSpace }) => {
+  window.ultima.on('open-url', async ({ url, search, background, pickSpace, private: priv }) => {
     const target = search ? searchUrl(search, B.settings.searchEngine) : url;
     if (pickSpace) {
       const spaceId = await showMenu(B.spaces.map((s) => ({ id: s.id, label: `${s.icon}  ${s.name}`, enabled: s.id !== B.activeSpaceId })));
       if (spaceId) createTab({ url: target, spaceId });
       return;
     }
-    createTab({ url: target, activate: !background, opener: activeTab() || undefined });
+    createTab({ url: target, activate: !background, opener: activeTab() || undefined, private: priv });
   });
   window.ultima.on('page-menu', onPageMenu);
   window.ultima.on('ask', onAsk);
@@ -494,24 +519,26 @@ async function boot() {
     if (!$('#palette-backdrop').hidden) closePalette(); else closeFind();
   });
 
-  // restore spaces, then tabs (tabs from before spaces existed land in the first space)
-  initSpaces(state.session?.spaces, state.session?.activeSpaceId);
-  initTabFolders(state.session?.folders);
-  initSplits(state.session?.splits);
-  const saved = state.session?.tabs || [];
-  if (B.settings.restoreSession && saved.length) {
-    for (const t of saved) {
-      // pinned tabs and Essentials come back on their pinned link, wherever they had wandered to
-      const home = t.zone && t.zone !== 'normal' && t.homeUrl && t.url !== t.homeUrl
-        ? { url: t.homeUrl, title: t.homeTitle || hostname(t.homeUrl) || t.homeUrl, favicon: t.homeFavicon || '' } : {};
-      createTab({ ...t, ...home, activate: false, lazy: true });
+  // restore the sidebar every window shares (spaces, then pinned tabs and Essentials, which come back on their pinned
+  // link), then this window's own tabs (main leaves those out when "Restore tabs" is off); tabs from before spaces
+  // existed land in the first space
+  const own = state.window;
+  initSpaces(state.sidebar?.spaces, own?.activeSpaceId);
+  initTabFolders([...(own?.folders || []), ...(state.sidebar?.folders || []).map((f) => ({ ...f, zone: 'pinned' }))]);
+  initSplits(own?.splits);
+  const restored = withFoldersHeld(() => withSplitsHeld(() => {
+    for (const k of state.sidebar?.kept || []) {
+      createTab({ ...k, url: k.homeUrl, title: k.homeTitle || hostname(k.homeUrl) || k.homeUrl, favicon: k.homeFavicon || '', activate: false, lazy: true });
     }
-    const active = B.tabs[Math.min(state.session.activeIndex || 0, B.tabs.length - 1)];
-    activateTab(active.id);
-    if (state.launchUrl) createTab({ url: state.launchUrl });
-  } else {
-    createTab({ url: state.launchUrl || (B.settings.onboarded ? NEWTAB : 'ultima://import') });
-  }
+    return (own?.tabs || []).map((t) => createTab({ ...t, zone: 'normal', activate: false, lazy: true }));
+  }));
+  const active = (own?.active?.key && B.tabs.find((t) => t.key === own.active.key)) || restored[own?.active?.normal] || null;
+  if (state.launchUrl) createTab({ url: state.launchUrl });
+  else if (active) activateTab(active.id);
+  else if (restored.length) activateTab(restored[0].id);
+  else createTab({ url: B.settings.onboarded || B.private ? NEWTAB : 'ultima://import' });
+  markSidebarSaved();
+  B.restored = true; // from now on the window saves its tabs (saveSession)
   // Settings shows whether Ultima is the default browser; that changes outside Ultima (in Windows Settings)
   window.addEventListener('focus', () => { if (B.defaultBrowser) refreshDefaultBrowser(); });
   if (!B.settings.onboarded) {

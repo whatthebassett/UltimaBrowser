@@ -55,12 +55,50 @@ function urlMenuSiteRow() {
     </button>`;
 }
 
+// ---------- clearing a site's cache, cookies and data, in every space ----------
+const SITE_CLEAR = {
+  cache: { what: { cache: true }, done: 'Cache' },
+  cookies: {
+    what: { cookies: true }, done: 'Cookies', ok: 'Delete cookies',
+    title: (host) => `Delete cookies for ${host}?`, confirm: 'You’ll be signed out of it in every space.',
+  },
+  all: {
+    what: { cache: true, cookies: true, storage: true }, done: 'Data', ok: 'Clear data',
+    title: (host) => `Clear data for ${host}?`, confirm: 'You’ll be signed out of it in every space, and its cache and anything it saved on this computer are deleted.',
+  },
+};
+
+// Asks first for cookies and everything (they sign you out); resolves whether it was cleared
+async function clearSiteData(origin, kind) {
+  const k = SITE_CLEAR[kind];
+  if (k.confirm && !await confirmDialog(k.confirm, { title: k.title(siteHost(origin)), ok: k.ok, danger: true })) return false;
+  await window.ultima.siteClearData({ origin, ...k.what });
+  toast(`${k.done} for ${siteHost(origin)} cleared`);
+  return true;
+}
+
+// From the site view: the menu closes (the reloading page takes focus, which would close it anyway) and the page
+// reloads so it starts fresh. After clearing the cache it skips the page's in-memory copies too, which a plain reload
+// would still use.
+async function clearSiteFromPanel(kind) {
+  const { origin } = SITE.panel;
+  if (!await clearSiteData(origin, kind)) return;
+  closeUrlMenu();
+  const tab = activeTab();
+  if (!ready(tab) || siteOrigin(tab.url) !== origin) return;
+  if (SITE_CLEAR[kind].what.cache) tab.webview.reloadIgnoringCache();
+  else tab.webview.reload();
+}
+
 async function openSitePanel() {
   const tab = activeTab();
   const origin = siteOrigin(tab?.url);
   if (!origin) return;
-  const [site, data] = await Promise.all([window.ultima.siteGet(origin), window.ultima.siteData({ origin, partition: tab.webview?.partition })]);
-  SITE.panel = { origin, record: site.record, defaults: site.defaults, cookies: data?.cookies ?? 0, reload: SITE.panel?.origin === origin && SITE.panel.reload };
+  const [site, data, blocking] = await Promise.all([window.ultima.siteGet(origin), window.ultima.siteData({ origin, partition: tab.webview?.partition }), window.ultima.blockerSite(tab.url)]);
+  SITE.panel = {
+    origin, record: site.record, defaults: site.defaults, cookies: data?.cookies ?? 0, blockingOff: blocking.off,
+    reload: SITE.panel?.origin === origin && SITE.panel.reload,
+  };
   renderUrlMenu();
 }
 
@@ -77,14 +115,19 @@ function sitePanelHtml() {
         <span class="um-site-sub">${secure ? 'Connection is secure' : 'Connection isn’t secure: don’t enter passwords or card details'}</span></span>
     </div>
     ${reload ? `<div class="site-reload">${icon('reload', 14)}<span>Reload the page to use the new settings</span><button class="btn small" data-act="site-reload">Reload</button></div>` : ''}
-    <div class="um-head">Permissions</div>
-    <div class="site-rows">${siteRowsHtml(origin, record, defaults)}</div>
+    ${siteBlockingHtml()}
     <div class="um-head">Cookies and site data</div>
     <div class="site-row">
       <span class="site-ic">${icon('cookie', 16)}</span>
       <span class="site-label">${cookies === 1 ? '1 cookie' : `${cookies} cookies`} in this space</span>
-      <button class="btn small" data-act="site-clear">Clear data</button>
     </div>
+    <div class="site-clear">
+      <button class="btn small" data-act="site-clear-cache" title="Saved copies of its pages and images">Clear cache</button>
+      <button class="btn small" data-act="site-clear-cookies" title="Signs you out of it in every space">Delete cookies</button>
+      <button class="btn small danger" data-act="site-clear-all" title="Its cache, cookies and everything else it saved">Clear all data</button>
+    </div>
+    <div class="um-head">Permissions</div>
+    <div class="site-rows">${siteRowsHtml(origin, record, defaults)}</div>
     <div class="site-foot">
       <button class="um-link" data-act="site-reset" ${Object.keys(record).length ? '' : 'disabled'}>${icon('eraser', 14)} Reset permissions</button>
       <button class="um-link" data-act="site-all">${icon('settings', 14)} All site settings</button>
@@ -95,6 +138,8 @@ function sitePanelHtml() {
 async function onSitePanelAction(act) {
   const { origin } = SITE.panel;
   if (act === 'site-back') { closeSitePanel(); renderUrlMenu(); }
+  else if (act === 'site-blocking') toggleSiteBlocking(); // blocking.js
+  else if (act === 'site-blocking-settings') { closeUrlMenu(); openSettingsTab('privacy'); }
   else if (act === 'site-reload') { SITE.panel.reload = false; activeTab()?.webview?.reload(); renderUrlMenu(); }
   else if (act === 'site-reset') {
     await window.ultima.siteReset(origin);
@@ -102,13 +147,8 @@ async function onSitePanelAction(act) {
     SITE.panel.reload = true;
     toast(`Permissions for ${siteHost(origin)} reset`);
     openSitePanel();
-  } else if (act === 'site-clear') {
-    if (!await confirmDialog('You’ll be signed out of it in every space, and anything it saved on this computer is deleted.', { title: `Clear data for ${siteHost(origin)}?`, ok: 'Clear data', danger: true })) return;
-    await window.ultima.siteClearData(origin);
-    toast(`Data for ${siteHost(origin)} cleared`);
-    SITE.panel.reload = true;
-    openSitePanel();
-  } else if (act === 'site-all') { closeUrlMenu(); openSettingsTab('sites'); }
+  } else if (act.startsWith('site-clear-')) clearSiteFromPanel(act.slice('site-clear-'.length));
+  else if (act === 'site-all') { closeUrlMenu(); openSettingsTab('sites'); }
 }
 
 async function onSitePanelChange(select) {
