@@ -30,7 +30,7 @@ function defaultBrowserRow() {
   if (!B.defaultBrowser) refreshDefaultBrowser();
   const d = B.defaultBrowser;
   return sRow('Default browser',
-    d?.isDefault ? 'Links you open from other apps, like email and chat, open in Ultima.' : 'Make Ultima open the links you click in other apps, like email and chat.',
+    d?.isDefault ? 'Links from other apps open in Ultima.' : 'Open links from other apps in Ultima.',
     !d ? '<span class="s-value">Checking…</span>'
       : d.isDefault ? `<span class="s-value s-ok">${icon('check', 14)} Ultima is your default browser</span>`
         : `<button class="btn primary" data-run="make-default-browser">Make default</button>`);
@@ -44,8 +44,8 @@ const modeOverride = () => { const sp = activeSpace(); return MODE_NAMES[sp?.the
 function modeRow() {
   const sp = modeOverride();
   return sRow('Mode', sp
-    ? `<span class="s-warn">${esc(sp.icon)} ${esc(sp.name)} uses its own ${MODE_NAMES[sp.theme.mode]} mode, so this doesn’t change it.</span> Spaces set to Auto in their theme follow this.`
-    : 'Each space can override this with its own light or dark mode in its theme.',
+    ? `<span class="s-warn">${esc(sp.icon)} ${esc(sp.name)} uses its own ${MODE_NAMES[sp.theme.mode]} mode.</span> Spaces set to Auto follow this.`
+    : 'Spaces can set their own in their theme.',
   `${sp ? `<button class="btn" data-space-follow="${esc(sp.id)}">Follow this setting</button>` : ''}${sSeg('theme', [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System']])}`);
 }
 
@@ -118,20 +118,49 @@ function performanceRows() {
   const used = B.gpu ? GPU_FEATURES.filter(([k]) => String(B.gpu[k] || '').startsWith('enabled')).map(([, label]) => label) : [];
   const now = !B.gpu ? 'Checking…'
     : used.length ? `Your graphics card draws ${used.length > 1 ? `${used.slice(0, -1).join(', ')} and ${used[used.length - 1]}` : used[0]}.`
-      : B.hardwareAcceleration ? 'Your graphics card isn’t available (its driver may be blocked or have crashed), so the processor draws everything.'
+      : B.hardwareAcceleration ? 'Your graphics card isn’t available, so the processor draws everything.'
         : 'Hardware acceleration is off, so the processor draws everything.';
   return [
-    sRow('Use hardware acceleration when available', 'Your graphics card draws pages, scrolling, video and 3D, which is smoother and leaves the processor free. Turn it off if pages flicker, go black or show garbled patches, or video stutters.', sSwitch('hardwareAcceleration')),
-    want !== B.hardwareAcceleration && sRow(`Restart to turn it ${want ? 'on' : 'off'}`, 'Ultima only picks this up as it starts. Your windows and tabs come back; private ones close.',
+    sRow('Hardware acceleration', 'Smoother pages and video. Turn it off if pages flicker or look garbled.', sSwitch('hardwareAcceleration')),
+    want !== B.hardwareAcceleration && sRow(`Restart to turn it ${want ? 'on' : 'off'}`, 'Your tabs come back after the restart. Private ones close.',
       '<button class="btn primary" data-relaunch>Restart Ultima</button>'),
     sRow('Right now', now, ''),
-    sRow('Task manager', `What each tab, extension and process uses: memory, processor and graphics card. End one to free it up.${keyText('task-manager') ? ` Open it any time with ${esc(keyText('task-manager'))}.` : ''}`,
+    sRow('Task manager', `See what each tab uses, and end the ones you don’t need.${keyText('task-manager') ? ` Shortcut: ${esc(keyText('task-manager'))}.` : ''}`,
       `<button class="btn" data-run="task-manager">${icon('activity', 14)} Open task manager</button>`),
   ];
 }
 
 // what opens a link in a glance (glance-preload.js asks main, which reads settings.glanceTrigger)
 const GLANCE_TRIGGERS = [['any', 'Alt+click, Shift+click or click and hold'], ['alt', 'Alt+click'], ['shift', 'Shift+click'], ['hold', 'Click and hold'], ['off', 'Off']];
+
+// The two tab layouts as little pictures of Ultima, in your colors: clicking one switches to it (tablayout.js)
+function tabLayoutCards() {
+  const current = tabsAcross() ? 'horizontal' : 'vertical';
+  const tabs = (n, active) => Array.from({ length: n }, (_, i) => `<i class="${i === active ? 'on' : ''}"></i>`).join('');
+  const card = (mode, label, sub, art) => `<button class="tl-card ${current === mode ? 'on' : ''}" data-tab-layout="${mode}" role="radio" aria-checked="${current === mode}">
+    <span class="tl-art tl-${mode}" aria-hidden="true">${art}</span>
+    <span class="tl-text"><span class="tl-label">${label}${current === mode ? ` ${icon('check', 13)}` : ''}</span><span class="tl-sub">${sub}</span></span></button>`;
+  return `<div class="tl-cards" role="radiogroup" aria-label="Tab layout">
+    ${card('vertical', 'Vertical', 'Tabs down the side',
+      `<span class="tl-side"><span class="tl-url"></span><span class="tl-ess"><b></b><b></b><b></b></span><span class="tl-list">${tabs(5, 1)}</span></span><span class="tl-page"><span class="tl-hero"></span></span>`)}
+    ${card('horizontal', 'Horizontal', 'Tabs across the top',
+      `<span class="tl-strip"><span class="tl-ess"><b></b><b></b></span><span class="tl-list">${tabs(4, 1)}</span></span><span class="tl-bar"><span class="tl-url"></span></span><span class="tl-page"><span class="tl-hero"></span></span>`)}
+  </div>`;
+}
+
+// The three kinds of address bar as little pictures (palette.js): clicking one picks it
+function addressModeCards() {
+  const current = addressMode();
+  const rows = (n) => '<i></i>'.repeat(n);
+  const card = (mode, label, sub, art) => `<button class="tl-card ${current === mode ? 'on' : ''}" data-address-mode="${mode}" role="radio" aria-checked="${current === mode}">
+    <span class="tl-art ab-art ab-${mode}" aria-hidden="true"><span class="ab-top"><span class="ab-url"></span></span><span class="tl-page"><span class="tl-hero"></span></span>${art}</span>
+    <span class="tl-text"><span class="tl-label">${label}${current === mode ? ` ${icon('check', 13)}` : ''}</span><span class="tl-sub">${sub}</span></span></button>`;
+  return `<div class="tl-cards three" role="radiogroup" aria-label="Address bar">
+    ${card('palette', 'Control Palette', 'Opens in the middle of the window', `<span class="ab-dim"></span><span class="ab-pal"><b></b>${rows(3)}</span>`)}
+    ${card('extended', 'Extended address bar', 'Opens from the address bar', `<span class="ab-pal"><b></b>${rows(3)}</span>`)}
+    ${card('classic', 'Traditional', 'Type in the bar, with suggestions below', `<span class="ab-caret"></span><span class="ab-drop">${rows(3)}</span>`)}
+  </div>`;
+}
 
 // ---------- tabs ----------
 const SETTINGS_TABS = [
@@ -143,7 +172,7 @@ const SETTINGS_TABS = [
         sRow('Restore tabs from last time', 'Tabs come back unloaded and load when you open them.', sSwitch('restoreSession')),
       ]),
       sGroup('Glance', [
-        sRow('Open links in a glance with', 'A preview over the page you can use, then close, open as a tab or put in split view. Click and hold means pressing on a link for half a second without moving.',
+        sRow('Open links in a glance with', 'Preview a link over the page without leaving it.',
           `<select class="field" data-setting="glanceTrigger">${GLANCE_TRIGGERS.map(([v, label]) => `<option value="${v}" ${(B.settings.glanceTrigger || 'any') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`),
       ]),
       sGroup('Downloads', downloadRows()),
@@ -155,7 +184,7 @@ const SETTINGS_TABS = [
     ].join(''),
   },
   {
-    id: 'appearance', title: 'Appearance', icon: 'sun', desc: 'How Ultima looks: theme, window, Waypoints bar and sidebar.',
+    id: 'appearance', title: 'Appearance', icon: 'sun', desc: 'Theme, window, tabs, Waypoints bar and sidebar.',
     // the sidebar buttons editor (sidebarbuttons.js) is mounted into its place after the rest is drawn
     mount: (body) => { const m = $('.sbe-mount', body); if (m) pageSidebarButtons(m); },
     jumps: [['Sidebar buttons', 'sidebar-buttons', 'customize add remove reorder toolbar top bottom']],
@@ -169,22 +198,29 @@ const SETTINGS_TABS = [
           sRow('Accent color', 'Buttons, highlights and selections.', `<div class="swatches">${ACCENTS.map((c) => `<button class="swatch ${s.accent === c ? 'on' : ''}" data-accent="${c}" style="background:${c}" title="${c}"></button>`).join('')}</div>`),
         ]),
         B.backdrops ? sGroup('Window', [
-          sRow('Window material', 'Acrylic shows a frosted blur of whatever is behind the window. Mica tints it with your wallpaper.', sSeg('windowMaterial', [['acrylic', 'Acrylic'], ['mica', 'Mica']])),
-          s.windowMaterial === 'acrylic' ? sRow('Glass tint', 'How smoky the see-through sidebar is. Raise it if bright windows behind Ultima glare through.',
+          sRow('Window material', 'Acrylic blurs what’s behind the window. Mica tints it with your wallpaper.', sSeg('windowMaterial', [['acrylic', 'Acrylic'], ['mica', 'Mica']])),
+          s.windowMaterial === 'acrylic' ? sRow('Glass tint', 'How smoky the sidebar’s glass is.',
             `<input type="range" data-setting="glassTint" data-number min="0" max="90" step="5" value="${s.glassTint ?? 45}">`) : '',
         ]) : '',
+        sGroup('Tabs', [
+          sRow('Tab layout', `Click one to switch.${keyText('toggle-tab-layout') ? ` Shortcut: ${esc(keyText('toggle-tab-layout'))}.` : ''}`,
+            tabLayoutCards(), 'data-stack'),
+        ]),
         sGroup('Waypoints bar', [
-          sRow('Show Waypoints bar', `Your Waypoints (Ultima’s bookmarks) and folders under the toolbar, like Chrome’s bookmarks bar. The star adds pages to it.${keyText('toggle-bookmarks-bar') ? ` Toggle it with ${esc(keyText('toggle-bookmarks-bar'))}.` : ''}`, sSwitch('showBookmarksBar')),
-          sRow('Center Waypoints', 'Lines up the bar’s Waypoints in the middle instead of on the left.', sSwitch('centerBookmarksBar')),
-          sRow('Import a bookmarks bar', 'Copies the bookmarks and folders on the bookmarks bar of Chrome, Edge, Brave or Vivaldi onto your Waypoints bar.',
+          sRow('Show Waypoints bar', `Your Waypoints under the toolbar.${keyText('toggle-bookmarks-bar') ? ` Shortcut: ${esc(keyText('toggle-bookmarks-bar'))}.` : ''}`, sSwitch('showBookmarksBar')),
+          sRow('Center Waypoints', 'Put them in the middle of the bar.', sSwitch('centerBookmarksBar')),
+          sRow('Import a bookmarks bar', 'Copy the bookmarks bar from Chrome, Edge, Brave or Vivaldi.',
             `<button class="btn" data-run="import-bookmarks-bar">${icon('import', 14)} Import…</button>`),
         ]),
-        sGroup('Sidebar', [
+        sGroup(tabsAcross() ? 'Tabs and toolbar' : 'Sidebar', [
           ...style,
-          sRow('Essentials size', 'How tall the Essentials tiles at the top of the sidebar are. They always share the sidebar’s width, up to 4 a row.',
+          sRow('Waypoints, History and Downloads', 'Open them as a dropdown or a full page.',
+            sSeg('widgetOpen', [['dropdown', 'Dropdown'], ['page', 'Page']])),
+          // (sizes and modes of the sidebar itself, which horizontal tabs don't have)
+          !tabsAcross() && sRow('Essentials size', 'How tall the Essentials tiles are.',
             `<input type="range" data-setting="essentialsHeight" data-number min="36" max="72" step="4" value="${s.essentialsHeight ?? 44}">`),
-          sRow('Compact sidebar', `Show only icons.${keyText('toggle-sidebar') ? ` Toggle any time with ${esc(keyText('toggle-sidebar'))}.` : ''}`, sSwitch('sidebarCollapsed')),
-          sRow('Hide sidebar', `The page uses the whole window. Point at the left edge of the window to slide the sidebar in.${keyText('toggle-sidebar-hidden') ? ` Toggle any time with ${esc(keyText('toggle-sidebar-hidden'))}.` : ''}`, sSwitch('sidebarHidden')),
+          !tabsAcross() && sRow('Compact sidebar', `Show only icons.${keyText('toggle-sidebar') ? ` Shortcut: ${esc(keyText('toggle-sidebar'))}.` : ''}`, sSwitch('sidebarCollapsed')),
+          !tabsAcross() && sRow('Hide sidebar', `Point at the left edge to bring it back.${keyText('toggle-sidebar-hidden') ? ` Shortcut: ${esc(keyText('toggle-sidebar-hidden'))}.` : ''}`, sSwitch('sidebarHidden')),
           resetStyle,
         ]),
         '<div class="sbe-mount" data-anchor="sidebar-buttons"></div>',
@@ -196,11 +232,11 @@ const SETTINGS_TABS = [
     render: () => {
       const on = Boolean(B.settings.autoGroup);
       return sGroup('Automatic tab groups', [
-        sRow('Group tabs automatically', 'Tabs from the same work app or website gather in a folder named for it, in each space. Rename a folder and it keeps your name; take a tab out and it stays out.', sSwitch('autoGroup')),
-        on && sRow('Group when there are at least', 'Tabs of one app or site in a space.', sPick('autoGroupMin', [[2, '2 tabs'], [3, '3 tabs'], [4, '4 tabs'], [5, '5 tabs']], 2)),
-        on && sRow('Work apps', 'Google Docs, Sheets and Drive, Word, Excel and Teams, Jira, Confluence, Slack, Notion, Figma, GitHub and more each get a folder, or one for each suite: Google Workspace, Microsoft 365 and Atlassian.',
+        sRow('Group tabs automatically', 'Tabs from the same app or site gather in a folder.', sSwitch('autoGroup')),
+        on && sRow('Group when there are at least', 'Tabs from one app or site.', sPick('autoGroupMin', [[2, '2 tabs'], [3, '3 tabs'], [4, '4 tabs'], [5, '5 tabs']], 2)),
+        on && sRow('Work apps', 'A folder for each app, or one for each suite like Google Workspace or Microsoft 365.',
           sPick('autoGroupWork', [['app', 'A folder for each app'], ['suite', 'A folder for each suite']], 'app')),
-        on && sRow('Other websites too', 'Groups tabs from the same website, named after it, not only work apps.', sSwitch('autoGroupSites')),
+        on && sRow('Other websites too', 'Group tabs from any site, not just work apps.', sSwitch('autoGroupSites')),
         on && sRow('Group open tabs now', 'Puts the tabs you already have into groups.', '<button class="btn" data-autogroup-now>Group tabs</button>'),
       ]);
     },
@@ -212,24 +248,24 @@ const SETTINGS_TABS = [
       const colorsChanged = (s.pageContrast ?? 100) !== 100 || (s.pageBrightness ?? 100) !== 100 || (s.colorFilter || 'none') !== 'none';
       return [
         sGroup('Zoom and text', [
-          sRow('Page zoom', `How big pages are, unless you zoom one yourself${keyText('zoom-in') ? ` (${esc(keyText('zoom-in'))} and ${esc(keyText('zoom-out'))})` : ''}.`, sPick('pageZoom', PAGE_ZOOMS, 100)),
-          sRow('Text size', 'The size of text on pages that don’t set their own. For pages opened from now on.', sPick('textSize', TEXT_SIZES, 16)),
-          sRow('Minimum text size', 'Text on pages is never smaller than this. For pages opened from now on.', sPick('minFontSize', MIN_FONT_SIZES, 0)),
+          sRow('Page zoom', 'The default size of pages.', sPick('pageZoom', PAGE_ZOOMS, 100)),
+          sRow('Text size', 'For pages that don’t set their own.', sPick('textSize', TEXT_SIZES, 16)),
+          sRow('Minimum text size', 'Text on pages is never smaller than this.', sPick('minFontSize', MIN_FONT_SIZES, 0)),
         ]),
         sGroup('Page colors', [
-          sRow('Contrast', 'Makes the difference between light and dark parts of pages stronger, or softer.', sPercent('pageContrast', 50, 200, 10)),
+          sRow('Contrast', 'Stronger or softer contrast on pages.', sPercent('pageContrast', 50, 200, 10)),
           sRow('Brightness', 'Makes pages lighter or darker.', sPercent('pageBrightness', 40, 150, 5)),
-          sRow('Color filter', 'Grayscale, inverted colors, or colors shifted so they’re easier to tell apart with color blindness.', sPick('colorFilter', COLOR_FILTERS, 'none')),
+          sRow('Color filter', 'Grayscale, inverted, or filters for color blindness.', sPick('colorFilter', COLOR_FILTERS, 'none')),
           colorsChanged && sRow('Back to normal colors', '', '<button class="btn" data-a11y-reset>Reset page colors</button>'),
         ]),
         sGroup('Focus and links', [
-          sRow('Highlight the focused item', 'A thick outline in your accent color around the link, button or field the keyboard is on, in pages and in Ultima.', sSwitch('focusHighlight')),
-          sRow('Underline links', 'Links on pages are always underlined, so they don’t depend on color alone.', sSwitch('underlineLinks')),
-          sRow('Navigate pages with a text cursor', `Caret browsing: move a cursor through a page’s text with the arrow keys (Ctrl to go by word), select with Shift, and press Enter on a link to follow it.${keyText('caret-browsing') ? ` Turn it on or off with ${esc(keyText('caret-browsing'))}.` : ''}`, sSwitch('caretBrowsing')),
+          sRow('Highlight the focused item', 'A thick outline around whatever the keyboard is on.', sSwitch('focusHighlight')),
+          sRow('Underline links', 'Always underline links on pages.', sSwitch('underlineLinks')),
+          sRow('Caret browsing', `Move through pages with a text cursor and the arrow keys.${keyText('caret-browsing') ? ` Shortcut: ${esc(keyText('caret-browsing'))}.` : ''}`, sSwitch('caretBrowsing')),
         ]),
         sGroup('Ultima', [
-          sRow('Increase contrast', 'Stronger text and edges and less see-through glass in Ultima itself.', sSwitch('uiContrast')),
-          sRow('Reduce motion', 'Turns off Ultima’s animations. Always on while animation effects are off in Windows.', sSwitch('reduceMotion')),
+          sRow('Increase contrast', 'Stronger text and edges, and less glass, in Ultima.', sSwitch('uiContrast')),
+          sRow('Reduce motion', 'Turn off Ultima’s animations. Always on if Windows animations are off.', sSwitch('reduceMotion')),
         ]),
       ].join('');
     },
@@ -246,25 +282,29 @@ const SETTINGS_TABS = [
       ))),
       `<div class="s-actions"><button class="btn" data-run="new-space">${icon('plus', 14)} New space</button></div>`,
       sGroup('Sign-ins', [
-        ...B.spaces.map((sp) => sRow(`Separate sign-ins for ${sp.icon} ${esc(sp.name)}`, 'Its own cookies and logins, so you can use different accounts there.',
+        ...B.spaces.map((sp) => sRow(`Separate sign-ins for ${sp.icon} ${esc(sp.name)}`, 'Use different accounts in this space.',
           `<button class="switch ${sp.separate ? 'on' : ''}" data-space-separate="${sp.id}" role="switch"></button>`)),
       ]),
       sGroup('Essentials', [
-        ...B.spaces.map((sp) => sRow(`Own Essentials for ${sp.icon} ${esc(sp.name)}`, 'Essentials of its own instead of the ones your other spaces share. Turning this off keeps them as pinned tabs there.',
+        ...B.spaces.map((sp) => sRow(`Own Essentials for ${sp.icon} ${esc(sp.name)}`, 'Give this space its own Essentials.',
           `<button class="switch ${sp.ownEssentials ? 'on' : ''}" data-space-essentials="${sp.id}" role="switch"></button>`)),
       ]),
     ].join(''),
   },
   {
-    id: 'address-bar', title: 'Address bar', icon: 'search', desc: 'The address bar and its loading animation.',
+    id: 'address-bar', title: 'Address bar', icon: 'search', desc: 'The address bar and the loading animation.',
     render: () => {
       const s = B.settings;
-      return sGroup('Loading animation', [
-        sRow('Show while pages load', 'A moving gradient inside the address bar until the page has loaded.', sSwitch('loadingIndicator')),
-        sRow('Colors', '“Space” follows each space’s theme. “Custom” uses colors you pick. Click one to preview it in the address bar.',
+      return sGroup('When you click the address bar', [
+        sRow('Address bar', `Click one to choose. ${keyText('palette') ? `${esc(keyText('palette'))} always opens the Control Palette.` : ''}`, addressModeCards(), 'data-stack'),
+      ]) + sGroup('Loading animation', [
+        sRow('Show while pages load', 'A moving gradient until the page has loaded.', sSwitch('loadingIndicator')),
+        s.loadingIndicator !== false && sRow('Style', 'In the address bar, or a line under the toolbar.',
+          sSeg('loadingStyle', [['bar', 'Address bar'], ['line', 'Line']])),
+        sRow('Colors', 'Match each space, or pick your own. Click one to preview.',
           `<div class="loader-swatches ${s.loadingIndicator === false ? 'off' : ''}">${Object.entries(LOADER_THEMES).map(([k, t]) => `<button class="loader-swatch ${(s.loadingTheme || 'space') === k ? 'on' : ''}" data-loader="${k}"><span style="--sw:${loaderBackground(loaderColors(k))}"></span>${esc(t.name)}</button>`).join('')}</div>`,
           'data-stack'),
-        s.loadingTheme === 'custom' && s.loadingIndicator !== false && sRow('Custom colors', 'Pick 2 to 5 colors. The gradient runs through them in order.', loaderCustomEditor(), 'data-stack'),
+        s.loadingTheme === 'custom' && s.loadingIndicator !== false && sRow('Custom colors', 'Pick 2 to 5 colors.', loaderCustomEditor(), 'data-stack'),
       ]);
     },
   },
@@ -280,23 +320,23 @@ const SETTINGS_TABS = [
          <button class="switch ${e.enabled ? 'on' : ''}" data-ext-toggle="${esc(e.id)}" role="switch" title="${e.enabled ? 'Turn off' : 'Turn on'}"></button>`,
       )) : [sRow('No extensions yet', 'Add one from the Chrome Web Store below.', '')]),
       sGroup('Add extensions', [
-        sRow('From the Chrome Web Store', 'Paste a link to an extension’s page, or its ID. On a store page you can also use “Add to Ultima” in the toolbar.',
+        sRow('From the Chrome Web Store', 'Paste an extension’s link or ID.',
           '<input class="field s-ext-input" data-ext-input placeholder="chromewebstore.google.com/detail/…" spellcheck="false"><button class="btn primary" data-ext-install>Install</button>', 'data-stack'),
         sRow('Browse the Chrome Web Store', '', '<button class="btn" data-ext-store>Open store</button>'),
-        sRow('Load unpacked', 'For extensions you are developing. Ultima loads them straight from the folder you choose.', '<button class="btn" data-ext-unpacked>Choose folder…</button>'),
+        sRow('Load unpacked', 'Load an extension from a folder, for developers.', '<button class="btn" data-ext-unpacked>Choose folder…</button>'),
       ]),
       sGroup('Troubleshooting', [
-        sRow('Extension log', 'Errors and warnings from your extensions, saved only on this computer. Open it when an extension misbehaves.', '<button class="btn" data-ext-log>Open log</button>'),
+        sRow('Extension log', 'Errors and warnings from your extensions.', '<button class="btn" data-ext-log>Open log</button>'),
       ]),
       sGroup('Compatibility', [
-        sRow('What works', 'Extensions that change pages (content scripts), use storage, background scripts, scripting or webRequest work. Ones that rely on Chrome-only features — Chrome sync, declarativeNetRequest blocking rules, context menus, side panels — may only partly work.', ''),
+        sRow('What works', 'Most extensions work. Ones that need Chrome-only features, like sync or side panels, may only partly work.', ''),
       ]),
     ].join(''),
   },
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'command', desc: 'Change, add or remove any shortcut in Ultima.', embed: (el, tab) => pageShortcuts(el, tab) },
   { id: 'passwords', title: 'Passwords', icon: 'key', desc: 'Saved logins, encrypted with your Windows account.', embed: (el, tab) => pagePasswords(el, tab) },
   {
-    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'Ads and trackers, what Ultima keeps on this computer, and what sites may do.',
+    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'Ads, trackers, browsing data and site permissions.',
     render: () => [
       blockerSettingsGroups(), // blocking.js
       sGroup('Clear browsing data', [
@@ -305,11 +345,11 @@ const SETTINGS_TABS = [
         sRow('Cookies and site data', 'Signs you out of websites in every space.', '<button class="btn danger" data-clear="cookies">Delete</button>'),
       ]),
       sGroup('Site permissions', [
-        sRow('Site settings', 'What each site may do: location, camera, microphone, notifications, pop-ups, sound and more.', '<button class="btn" data-tab="sites">Open site settings</button>'),
+        sRow('Site settings', 'Choose what each site can do.', '<button class="btn" data-tab="sites">Open site settings</button>'),
       ]),
     ].join(''),
   },
-  { id: 'sites', title: 'Site settings', icon: 'globe', desc: 'What sites may do. Change one site from the address bar menu, or every site here.', embed: (el) => pageSiteSettings(el) },
+  { id: 'sites', title: 'Site settings', icon: 'globe', desc: 'Choose what sites can do.', embed: (el) => pageSiteSettings(el) },
   { id: 'import', title: 'Import', icon: 'import', desc: 'Bring bookmarks, history, tabs and passwords from other browsers.', embed: (el) => pageImport(el) },
   {
     id: 'about', title: 'About', icon: 'sparkle', desc: '',
@@ -320,7 +360,7 @@ const SETTINGS_TABS = [
         sRow('Electron', '', `<span class="s-value">${esc(B.versions.electron)}</span>`),
         sRow('Node.js', '', `<span class="s-value">${esc(B.versions.node)}</span>`),
         sRow('Data folder', 'Settings, history, Waypoints and session.', `<span class="s-value">${esc(B.dataFolder || '')}</span>`),
-        sRow('Welcome', 'Watch the welcome again, and pick colors, your space and Essentials from popular sites.', `<button class="btn" data-run="welcome">${icon('sparkle', 14)} Replay welcome</button>`),
+        sRow('Welcome', 'Watch the welcome and setup again.', `<button class="btn" data-run="welcome">${icon('sparkle', 14)} Replay welcome</button>`),
       ])}
       <section class="s-group"><h3 class="s-group-title">Patch notes</h3><div class="s-card pn">${patchNotesHtml(B.versions.app)}</div></section>`,
   },
@@ -434,10 +474,13 @@ function pageSettings(root, tab) {
     else if (t.hasAttribute('data-a11y-reset')) applySettings({ pageContrast: 100, pageBrightness: 100, colorFilter: 'none' });
     else if (d.v && t.parentElement.dataset.key) {
       applySettings({ [t.parentElement.dataset.key]: d.v });
+      if (t.parentElement.dataset.key === 'loadingStyle') previewLoader(); // shows the new style at once
       const sp = t.parentElement.dataset.key === 'theme' && modeOverride();
       if (sp) toast(`${sp.name} keeps its own ${MODE_NAMES[sp.theme.mode]} mode`, { label: 'Follow this setting', run: () => followAppMode(sp) });
     } else if (d.spaceFollow) { followAppMode(spaceById(d.spaceFollow)); return; }
     else if (d.accent) applySettings({ accent: d.accent });
+    else if (d.tabLayout) applySettings({ tabLayout: d.tabLayout });
+    else if (d.addressMode) { applySettings({ addressBarMode: d.addressMode }); updateChrome(); }
     else if (d.loader) { applySettings({ loadingTheme: d.loader }); previewLoader(); }
     else if (t.hasAttribute('data-lc-add')) {
       const colors = customLoaderColors();

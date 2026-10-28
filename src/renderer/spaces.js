@@ -267,6 +267,7 @@ function initSpaceUi() {
   let swipe = 0;
   let lockedUntil = 0;
   $('#sidebar').addEventListener('wheel', (e) => {
+    if (tabsAcross()) return; // (across the top, sideways scrolls the tabs)
     if (Math.abs(e.deltaX) <= Math.abs(e.deltaY) || Date.now() < lockedUntil) return;
     swipe += e.deltaX;
     if (Math.abs(swipe) > 90) {

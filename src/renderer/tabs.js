@@ -184,6 +184,7 @@ function ensureWebview(tab, adopt = null) {
     closeMenu(null);
     closeUrlMenu();
     closeTabHistory();
+    closeWidget();
     closeExtensionPopup({ fromPage: true });
   });
 
@@ -293,10 +294,17 @@ function navigate(tab, url) {
   saveSession();
 }
 
-// Where to go when `tab` stops being the active one: stay in the current space and prefer the opener,
-// then the neighbor in the sidebar, then the most recently used tab.
-// Never wakes an unloaded pinned tab or Essential: with nothing else open, you get a new tab.
+// Where to go when `tab` stops being the active one: in a folder, the tab above it there (below, if it was the top
+// one), loading it if need be. Otherwise stay in the current space and prefer the opener, then the neighbor in the
+// sidebar, then the most recently used tab.
+// Never wakes an unloaded pinned tab or Essential outside its folder: with nothing else open, you get a new tab.
 function pickNextTab(tab) {
+  if (tab.folderId) {
+    const folder = spaceTabs().filter((t) => t.folderId === tab.folderId);
+    const i = folder.indexOf(tab);
+    const sibling = i >= 0 && (folder[i - 1] || folder[i + 1]);
+    if (sibling) return sibling;
+  }
   const all = spaceTabs().filter((t) => t === tab || !isUnloaded(t));
   const visible = all.filter((t) => t !== tab);
   if (!visible.length) return null;
@@ -560,6 +568,7 @@ function renderTabs() {
   layoutEssentials();
   $('#pinned-list').innerHTML = tabListHtml(visible.filter((t) => t.zone === 'pinned'));
   $('#tabs').innerHTML = tabListHtml(visible.filter((t) => t.zone === 'normal'));
+  sizeStripFolders();
   document.title = `${tabLabel(activeTab()) || 'Ultima'} — Ultima Browser`;
   restoreTabRename();
   syncPanes();

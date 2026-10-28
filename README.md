@@ -23,7 +23,7 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 ## Your tabs, standing tall
 
-Tabs live down the side, where long titles fit and dozens of tabs stay readable. The sites you use every day sit at the top as **Essentials**, one click away in every space. **Pinned tabs** stay put, folders keep projects together, and Ultima can even **group tabs for you**: your Google Docs, Jira tickets or Slack channels gather in their own named folder on their own.
+Tabs live down the side, where long titles fit and dozens of tabs stay readable. Prefer them across the top? Switch to **horizontal tabs** in a click. The sites you use every day sit at the top as **Essentials**, one click away in every space. **Pinned tabs** stay put, folders keep projects together, and Ultima can even **group tabs for you**: your Google Docs, Jira tickets or Slack channels gather in their own named folder on their own.
 
 ## A space for everything
 

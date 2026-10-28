@@ -1,6 +1,6 @@
 // Runs in every web page's isolated world (pages can't see or change it). It tells Ultima whether you are typing,
 // so single-key shortcuts never steal letters from text boxes, and whether the pointer is near the top of the page,
-// where a split view pane shows its controls.
+// where a split view pane shows its controls. It also passes on the mouse's back and forward buttons.
 const { ipcRenderer } = require('electron');
 
 const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'file', 'image', 'hidden', 'color']);
@@ -47,3 +47,10 @@ const setNearTop = (on) => {
 window.addEventListener('mousemove', (e) => setNearTop(e.clientY < 64), { capture: true, passive: true });
 document.addEventListener('mouseleave', () => setNearTop(false), true);
 window.addEventListener('blur', () => setNearTop(false));
+
+// The mouse's back and forward buttons (4 and 5) go back or forward in this page (main.js does it: Electron doesn't)
+window.addEventListener('mouseup', (e) => {
+  if (e.button !== 3 && e.button !== 4) return;
+  e.preventDefault();
+  ipcRenderer.send('ultima:mouse-nav', e.button === 3 ? 'back' : 'forward');
+}, true);

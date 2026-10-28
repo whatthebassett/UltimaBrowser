@@ -124,7 +124,7 @@ function openImportedTabs(tabs) {
 
 async function pageImport(root) {
   root.innerHTML = `<div class="page"><h1>Bring your stuff to Ultima</h1>
-    <p class="sub">Ultima reads bookmarks, history, open &amp; pinned tabs and logins straight from your other browsers. Nothing leaves this computer. Imported tabs and cookies go into your current space, ${esc(activeSpace().icon)} ${esc(activeSpace().name)}.</p>
+    <p class="sub">Bring bookmarks, history, tabs and logins from your other browsers. Nothing leaves this computer. Tabs and cookies go into ${esc(activeSpace().icon)} ${esc(activeSpace().name)}.</p>
     <div class="toolbar"><span style="flex:1;color:var(--text-3)" id="imp-status">Looking for browsers…</span>
     <button class="btn primary" id="imp-all" disabled>${icon('import')} Import everything</button></div>
     <div class="grid" id="imp-grid"></div>
@@ -218,7 +218,7 @@ async function pageImport(root) {
 
 // ---------- passwords ----------
 async function pagePasswords(root, tab) {
-  root.innerHTML = `<div class="page"><h1>Passwords</h1><p class="sub">Encrypted with your operating-system account. Right-click a login field and choose “Fill saved login”, or use the key button in the toolbar.</p>
+  root.innerHTML = `<div class="page"><h1>Passwords</h1><p class="sub">Encrypted with your computer account. To fill one in, right-click a login field or use the key button in the toolbar.</p>
     <div class="toolbar"><input class="field" id="pq" placeholder="Search logins" spellcheck="false"><button class="btn" id="pimport">${icon('import')} Import CSV</button></div>
     <div id="plist" class="list"></div></div>`;
   let all = await window.ultima.listPasswords();

@@ -2,7 +2,9 @@
 // window's left edge (a thin strip there stays above the page to notice), then slides away once the pointer leaves —
 // unless something started from the sidebar still needs it (a menu, a rename, a tab being dragged…).
 const SBH = { timer: null };
-const sidebarHidden = () => Boolean(B.settings.sidebarHidden);
+// (hidden by the setting, which is for vertical tabs, or by F11's full screen: app.js; with horizontal tabs the bars
+// then slide down from the top edge instead: styles.css)
+const sidebarHidden = () => Boolean(B.immersive || (B.settings.sidebarHidden && !tabsAcross()));
 const sidebarPeeking = () => document.body.classList.contains('sb-peek');
 
 function sidebarPeek(on) {
@@ -46,7 +48,8 @@ function sidebarShowForCommand() {
 }
 
 function toggleSidebarHidden() {
-  const hidden = !sidebarHidden();
+  if (tabsAcross()) { toast('Hiding the sidebar is for vertical tabs'); return; }
+  const hidden = !B.settings.sidebarHidden;
   applySettings({ sidebarHidden: hidden });
   rerenderIfShowing('settings');
   const key = keyText('toggle-sidebar-hidden');

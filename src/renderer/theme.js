@@ -162,10 +162,10 @@ function applyLoaderVars() {
 
 // Plays the animation for a moment so a new choice can be seen without loading a page.
 function previewLoader() {
-  const bar = $('#urlbar');
-  bar.classList.add('loading');
+  const els = [$('#urlbar'), $('#load-line')]; // (whichever style is on shows it)
+  for (const el of els) el.classList.add('loading');
   clearTimeout(previewLoader.timer);
-  previewLoader.timer = setTimeout(() => { bar.classList.remove('loading'); updateChrome(); }, 1800);
+  previewLoader.timer = setTimeout(() => { for (const el of els) el.classList.remove('loading'); updateChrome(); }, 1800);
 }
 
 // ---------- editor ----------

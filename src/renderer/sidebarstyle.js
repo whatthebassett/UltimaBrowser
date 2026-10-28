@@ -58,10 +58,10 @@ function sidebarStyleRows() {
   const s = B.settings;
   const changed = (s.sidebarFont || 'inter') !== 'inter' || (Number(s.sidebarTextSize) || 13) !== 13 || (s.sidebarDensity || 'default') !== 'default';
   return [
-    sRow('Font', 'The typeface of tab names, folders and the rest of the sidebar: a built-in one, or any font installed on your computer.',
+    sRow('Font', 'Built-in, or any font on your computer.',
       `<select class="field" data-setting="sidebarFont" data-sb-font>${sidebarFontOptions()}</select>`),
     sRow('Text size', 'How big the sidebar’s text is.', sPick('sidebarTextSize', SIDEBAR_TEXT_SIZES, 13)),
-    sRow('Tab height', 'How tall tabs, folders and the New Tab row are. Compact fits more tabs; Roomy is easier to click.',
+    sRow('Tab height', 'Compact fits more tabs. Roomy is easier to click.',
       sSeg('sidebarDensity', [['compact', 'Compact'], ['default', 'Default'], ['roomy', 'Roomy']])),
     changed && sRow('Back to the default style', '', '<button class="btn" data-sb-style-reset>Reset sidebar style</button>'),
   ];

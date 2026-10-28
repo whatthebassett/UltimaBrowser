@@ -96,7 +96,8 @@ function runCommand(cmd) {
       return toast(on ? 'Loading animation on' : 'Loading animation off');
     }
     case 'space-options': {
-      const r = $('#space-head').getBoundingClientRect();
+      // (with horizontal tabs the space's name row is hidden: the menu hangs from its icon in the tab strip)
+      const r = (tabsAcross() ? $('#space-bar .space-chip.on') : $('#space-head')).getBoundingClientRect();
       return spaceMenu(activeSpace(), { x: r.left + 8, y: r.bottom + 4 });
     }
     case 'toggle-space-separate': return setSpaceSeparate(activeSpace(), !activeSpace().separate);
@@ -120,14 +121,18 @@ function runCommand(cmd) {
     case 'zoom-in': return zoom(tab, 0.5);
     case 'zoom-out': return zoom(tab, -0.5);
     case 'zoom-reset': return zoom(tab, 0);
-    case 'toggle-sidebar': return applySettings({ sidebarCollapsed: !B.settings.sidebarCollapsed });
+    case 'toggle-sidebar':
+      if (tabsAcross()) return toast('The compact sidebar is for vertical tabs');
+      return applySettings({ sidebarCollapsed: !B.settings.sidebarCollapsed });
+    case 'toggle-tab-layout': return toggleTabLayout();
     case 'toggle-sidebar-hidden': return toggleSidebarHidden();
+    case 'toggle-fullscreen': return window.ultima.toggleFullscreen();
     case 'open-import': return openInternal('settings#import');
     case 'make-default-browser': return makeDefaultBrowser();
     case 'open-extensions': return openInternal('settings#extensions');
     case 'url-menu': return openUrlMenu();
     case 'open-bookmarks': return openInternal('waypoints');
-    case 'task-manager': return openInternal('tasks');
+    case 'task-manager': return openTaskManager(); // its own window (taskwindow.js)
     case 'welcome': return startWelcome({ replay: true });
     case 'open-history': return openInternal('history');
     case 'tab-history': return toggleTabHistory();
@@ -169,14 +174,15 @@ async function toggleBookmark() {
 
 // ---------- toolbar / URL bar ----------
 // The gradient keeps moving while it fades out, so a finished load eases away instead of freezing.
+// (the address bar and the line under the toolbar both carry it; Settings → Address bar picks which one shows)
 function setUrlbarLoading(loading) {
-  const bar = $('#urlbar');
-  const was = bar.classList.contains('loading');
-  bar.classList.toggle('loading', loading);
+  const els = [$('#urlbar'), $('#load-line')];
+  const was = els[0].classList.contains('loading');
+  for (const el of els) el.classList.toggle('loading', loading);
   if (was && !loading) {
-    bar.classList.add('finishing');
+    for (const el of els) el.classList.add('finishing');
     clearTimeout(setUrlbarLoading.timer);
-    setUrlbarLoading.timer = setTimeout(() => bar.classList.remove('finishing'), 600);
+    setUrlbarLoading.timer = setTimeout(() => { for (const el of els) el.classList.remove('finishing'); }, 600);
   }
 }
 
@@ -192,7 +198,9 @@ const updateChrome = debounce(async () => {
   updateShield();
   $('.url-icon').innerHTML = icon(internal ? 'sparkle' : secure ? 'lock' : tab.url.startsWith('http://') ? 'unlock' : 'search', 14);
   $('.url-icon').classList.toggle('secure', secure);
-  $('.url-text').textContent = internal ? 'Search or enter address' : (hostname(tab.url) || tab.url) + (tab.url.startsWith('http://') ? ' — not secure' : '');
+  // (the whole address in a traditional address bar: Settings → Address bar)
+  const shown = addressMode() === 'classic' ? tab.url.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '') : hostname(tab.url) || tab.url;
+  $('.url-text').textContent = internal ? 'Search or enter address' : shown + (tab.url.startsWith('http://') ? ' — not secure' : '');
   if (tab.private && !B.private) $('.url-text').insertAdjacentHTML('afterbegin', '<span class="url-private">Private</span>'); // among normal tabs
   $('#page-title').textContent = internal ? '' : tab.title;
   $('#btn-back').disabled = !(wv?.canGoBack() || (internal && tab.webview));
@@ -324,18 +332,24 @@ async function onUiContextMenu(e) {
       { id: 'ui-search', label: `Search for “${selected.length > 28 ? `${selected.slice(0, 28)}…` : selected}”`, icon: 'search' },
     ];
   } else if (e.target.closest('#sidebar')) {
+    // (the sidebar, or with horizontal tabs the tab strip and toolbar: tablayout.js)
     const sbb = e.target.closest('[data-sbb]')?.dataset.sbb;
+    const across = tabsAcross();
     items = [
-      ...(sbb ? [{ id: 'sbb-remove', label: `Remove “${SIDEBAR_BUTTONS[sbb].label}” from the sidebar`, icon: 'minus' },
-        { id: 'customize-sidebar', label: 'Customize sidebar buttons…', icon: 'sidebar', shortcut: 'customize-sidebar' }, sep] : []),
+      ...(sbb ? [{ id: 'sbb-remove', label: `Remove “${SIDEBAR_BUTTONS[sbb].label}” from the ${across ? 'toolbar' : 'sidebar'}`, icon: 'minus' },
+        { id: 'customize-sidebar', label: `Customize ${across ? 'toolbar' : 'sidebar'} buttons…`, icon: 'sidebar', shortcut: 'customize-sidebar' }, sep] : []),
       { id: 'new-tab', label: 'New tab', icon: 'plus', shortcut: 'new-tab' },
       { id: 'new-space', label: 'New space', icon: 'layers', shortcut: 'new-space' },
       { id: 'reopen-tab', label: 'Reopen closed tab', icon: 'history', shortcut: 'reopen-tab' },
       sep,
       { id: 'space-theme', label: `Edit ${activeSpace().name} theme…`, icon: 'palette', shortcut: 'space-theme' },
-      { id: 'toggle-sidebar', label: B.settings.sidebarCollapsed ? 'Expand sidebar' : 'Compact sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar' },
-      { id: 'toggle-sidebar-hidden', label: B.settings.sidebarHidden ? 'Keep sidebar open' : 'Hide sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar-hidden' },
-      ...(sbb ? [] : [{ id: 'customize-sidebar', label: 'Customize sidebar buttons…', icon: 'sidebar', shortcut: 'customize-sidebar' }]),
+      // vertical tabs on (the sidebar) or off (a tab strip across the top)
+      { id: 'toggle-tab-layout', label: 'Vertical tabs', type: 'checkbox', checked: !across, shortcut: 'toggle-tab-layout' },
+      ...(across ? [] : [
+        { id: 'toggle-sidebar', label: B.settings.sidebarCollapsed ? 'Expand sidebar' : 'Compact sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar' },
+        { id: 'toggle-sidebar-hidden', label: B.settings.sidebarHidden ? 'Keep sidebar open' : 'Hide sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar-hidden' },
+      ]),
+      ...(sbb ? [] : [{ id: 'customize-sidebar', label: `Customize ${across ? 'toolbar' : 'sidebar'} buttons…`, icon: 'sidebar', shortcut: 'customize-sidebar' }]),
       { id: 'open-shortcuts', label: 'Keyboard shortcuts', icon: 'command', shortcut: 'open-shortcuts' },
       { id: 'open-settings', label: 'Settings', icon: 'settings', shortcut: 'open-settings' },
     ];
@@ -386,13 +400,16 @@ function applyTheme() {
   rootEl.style.setProperty('--sidebar-w', `${s.sidebarWidth}px`);
   rootEl.style.setProperty('--ess-height', `${Math.max(36, Math.min(72, s.essentialsHeight ?? 44))}px`);
   applySidebarStyle(); // font, text size and tab height (sidebarstyle.js)
-  document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed));
+  applyTabLayout(); // vertical or horizontal tabs (tablayout.js)
+  document.body.classList.toggle('loader-line', s.loadingStyle === 'line');
+  document.body.classList.toggle('addr-classic', addressMode() === 'classic'); // a text cursor over the address bar // the loading animation as a line under the toolbar
+  document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed) && !tabsAcross()); // (a compact sidebar is a vertical-tabs thing)
   const wasHidden = document.body.classList.contains('sb-hidden');
   const wasPeeking = document.body.classList.contains('sb-peek');
-  document.body.classList.toggle('sb-hidden', Boolean(s.sidebarHidden));
-  if (!s.sidebarHidden) document.body.classList.remove('sb-peek');
+  document.body.classList.toggle('sb-hidden', sidebarHidden());
+  if (!sidebarHidden()) document.body.classList.remove('sb-peek');
   // kept open again: it slides in from the left edge (unless it was already out, peeking)
-  if (wasHidden && !s.sidebarHidden && !wasPeeking) slideSidebarIn();
+  if (wasHidden && !sidebarHidden() && !wasPeeking) slideSidebarIn();
   document.body.classList.toggle('acrylic', Boolean(B.backdrops) && s.windowMaterial === 'acrylic');
   if (document.body.classList.contains('bm-bar-center') !== Boolean(s.centerBookmarksBar)) {
     document.body.classList.toggle('bm-bar-center', Boolean(s.centerBookmarksBar));
@@ -414,6 +431,45 @@ function applySettings(patch) {
   applyTheme();
 }
 
+// ---------- full screen ----------
+// A page going full screen (a video) or coming back out cuts to black and fades up, like a film, so the window's jump
+// in size is never seen. The window has already switched when Ultima hears of it (the <webview> becomes this
+// document's full-screen element), so the black is a popover: shown after the page, it's in the top layer above it.
+// It never takes the pointer, so the video's controls work during the fade.
+const FS = { veil: null, timer: 0, fade: null };
+function fullscreenFade() {
+  if (document.body.classList.contains('reduce-motion')) return;
+  if (!FS.veil) {
+    FS.veil = h('<div class="fs-veil" popover="manual" aria-hidden="true"></div>');
+    document.body.append(FS.veil);
+  }
+  const v = FS.veil;
+  clearTimeout(FS.timer);
+  FS.fade?.cancel();
+  if (v.matches(':popover-open')) v.hidePopover();
+  v.showPopover(); // (again: the newest in the top layer is the one on top)
+  v.style.opacity = '1';
+  // a moment for the page to lay itself out at its new size, then up out of black
+  FS.timer = setTimeout(() => {
+    FS.fade = v.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 460, easing: 'cubic-bezier(0.4, 0, 0.2, 1)' });
+    FS.fade.finished.then(() => { v.style.opacity = '0'; v.hidePopover(); }, () => {});
+  }, 140);
+}
+
+// F11: Ultima's own full screen. The page fills the screen with no toolbar or Waypoints bar, and the sidebar tucks away,
+// sliding in from the left edge (as when it's hidden: sidebarhide.js), all through the same fade as a video.
+function onWindowFullscreen({ on, immersive }) {
+  if (!on) document.body.classList.remove('fullscreen'); // a page's full screen ended with the window's
+  const was = Boolean(B.immersive);
+  B.immersive = Boolean(on && immersive);
+  if (B.immersive === was) return;
+  document.body.classList.toggle('immersive', B.immersive);
+  fullscreenFade();
+  applyTheme();
+  const key = keyText('toggle-fullscreen');
+  if (B.immersive) toast(key ? `Press ${key} to leave full screen` : 'Full screen');
+}
+
 // ---------- downloads ----------
 function onDownload(d) {
   const prev = B.downloads.get(d.id);
@@ -425,6 +481,7 @@ function onDownload(d) {
   else if (here && (d.state === 'interrupted' || d.state === 'cancelled')) toast(`${d.filename} failed to download`);
   $('.dl-badge').hidden = ![...B.downloads.values()].some((x) => x.state === 'progressing');
   rerenderIfShowing('downloads');
+  if (WG.kind === 'downloads') renderWidget(); // the Downloads dropdown follows along (widgets.js)
 }
 
 // ---------- boot ----------
@@ -440,6 +497,15 @@ async function boot() {
   loadKeys(B.settings.keybindings, state.platform);
   for (const d of state.downloads) B.downloads.set(d.id, d);
   document.body.classList.toggle('mac', state.platform === 'darwin');
+  // the mouse's back and forward buttons over Ultima itself (a built-in page) act on the tab in front; over the
+  // vertical sidebar they switch to the previous or next space. Web pages pass theirs on themselves (webview-preload.js)
+  window.addEventListener('mouseup', (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    e.preventDefault();
+    const back = e.button === 3;
+    if (e.target.closest?.('#sidebar') && !tabsAcross() && !B.private && B.spaces.length > 1) runCommand(back ? 'prev-space' : 'next-space');
+    else runCommand(back ? 'back' : 'forward');
+  });
   document.body.classList.toggle('glass', state.glass);
   applyTheme();
 
@@ -463,6 +529,7 @@ async function boot() {
   initSiteSettings();
   initBlocking();
   initTabHistory();
+  initWidgets();
   $('#zoom-pill').onclick = () => zoom(activeTab(), 0);
 
   initTabStrip();
@@ -478,6 +545,7 @@ async function boot() {
   initSpaceUi();
   initResizer();
   initSidebarHide();
+  initTabLayout();
   initPalette();
   initFind();
   refreshKeyHints();
@@ -501,7 +569,8 @@ async function boot() {
   document.addEventListener('contextmenu', onUiContextMenu);
   window.ultima.on('download', onDownload);
   window.ultima.on('system-theme', (dark) => { B.systemDark = dark; applyTheme(); });
-  window.ultima.on('window-fullscreen', (on) => { if (!on) document.body.classList.remove('fullscreen'); });
+  window.ultima.on('window-fullscreen', onWindowFullscreen);
+  document.addEventListener('fullscreenchange', fullscreenFade);
 
   // Toolbar buttons shouldn't take focus from the page on click (that also triggered stray focus rings).
   document.addEventListener('mousedown', (e) => { if (e.target.closest('.icon-btn, .urlbar, .newtab-row')) e.preventDefault(); });

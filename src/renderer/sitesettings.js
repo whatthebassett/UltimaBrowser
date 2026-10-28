@@ -197,7 +197,7 @@ async function pageSiteSettings(el) {
               </div>
             </div>
             ${open.has(s.origin) ? `<div class="site-rows site-edit">${siteRowsHtml(s.origin, s.record, defaults)}</div>` : ''}
-          </div>`).join('') : sRow(sites.length ? 'No matching sites' : 'No sites yet', sites.length ? '' : 'When you allow or block something for a site, it shows up here.', '')}
+          </div>`).join('') : sRow(sites.length ? 'No matching sites' : 'No sites yet', sites.length ? '' : 'Sites you allow or block show up here.', '')}
         </div>
       </section>`,
       sites.length ? `<div class="s-actions"><button class="btn danger" data-site-reset-all>Reset all sites</button></div>` : '',

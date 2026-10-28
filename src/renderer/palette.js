@@ -28,6 +28,8 @@ const COMMANDS = [
   { id: 'zoom-out', title: 'Zoom out', icon: 'zoomOut' },
   { id: 'zoom-reset', title: 'Reset zoom', icon: 'search' },
   { id: 'toggle-sidebar', title: 'Toggle sidebar', icon: 'sidebar' },
+  { id: 'toggle-tab-layout', title: 'Vertical / horizontal tabs', icon: 'tab', words: 'horizontal vertical tab strip top layout chrome tabs bar sidebar' },
+  { id: 'toggle-fullscreen', title: 'Full screen', icon: 'monitor', words: 'f11 fullscreen immersive maximize whole screen kiosk' },
   { id: 'toggle-sidebar-hidden', title: 'Hide / show sidebar', icon: 'sidebar', words: 'auto-hide autohide full screen focus zen arc distraction' },
   { id: 'open-import', title: 'Import data from Chrome, Edge, Firefox, Zen…', icon: 'import', words: 'migrate transfer chrome edge firefox zen brave vivaldi' },
   { id: 'open-bookmarks', title: 'Open Waypoints', icon: 'bookmark', words: 'bookmarks favorites saved manager' },
@@ -85,15 +87,49 @@ function spaceCommands() {
 
 const MODE_LABEL = { new: 'New tab', current: 'Current tab', any: 'Control Palette' };
 
+// Where the address bar (and the new-tab button) opens the palette: Settings → Address bar (addressBarMode)
+//   palette:  the Control Palette, in the middle of the window
+//   extended: the same palette hanging from the address bar, its search box over the bar
+//   classic:  a traditional address bar: you type in the bar itself, and places to go drop down under it
+// The Control Palette's own shortcut (Ctrl+K) always opens it in the middle.
+const ADDRESS_MODES = ['palette', 'extended', 'classic'];
+const addressMode = () => (ADDRESS_MODES.includes(B.settings.addressBarMode) ? B.settings.addressBarMode : 'palette');
+
 function openPalette(mode = 'any', prefill = '') {
   P.mode = mode;
+  P.at = mode === 'any' ? 'palette' : addressMode();
+  // (an address bar that's off screen, in a hidden sidebar, has nothing to hang from: the middle it is)
+  const bar = $('#urlbar').getBoundingClientRect();
+  if (P.at !== 'palette' && (bar.right <= 0 || bar.width < 24)) P.at = 'palette';
+  const backdrop = $('#palette-backdrop');
+  backdrop.classList.toggle('p-extended', P.at === 'extended');
+  backdrop.classList.toggle('p-classic', P.at === 'classic');
+  $('.pi-icon').innerHTML = P.at === 'classic' ? icon('search', 14) : icon('command', 18);
   const input = $('#palette-input');
-  $('#palette-backdrop').hidden = false;
+  input.placeholder = P.at === 'classic' ? 'Search or type a web address' : 'Search tabs, Waypoints, history, commands — or type a URL';
+  backdrop.hidden = false;
+  if (P.at !== 'palette') placePaletteAtBar();
   $('#palette-mode').textContent = MODE_LABEL[mode];
   input.value = prefill;
   input.focus();
   input.select();
   updatePalette();
+}
+
+// Lines the palette up with the address bar: the extended one a little bigger all round, so its search box sits over
+// the bar, at least wide enough to read; the traditional one's box exactly on the bar, its list at least as wide.
+function placePaletteAtBar() {
+  const bar = $('#urlbar').getBoundingClientRect();
+  const pal = $('#palette');
+  const W = window.innerWidth;
+  const classic = P.at === 'classic';
+  const width = Math.min(W - 16, classic ? Math.max(bar.width, 460) : Math.min(Math.max(bar.width + 12, 560), 760));
+  const left = Math.max(8, Math.min(bar.left - (classic ? 0 : 6), W - width - 8));
+  pal.style.setProperty('--px', `${left}px`);
+  pal.style.setProperty('--py', `${bar.top - (classic ? 0 : 6)}px`);
+  pal.style.setProperty('--pw', `${width}px`);
+  pal.style.setProperty('--bar-w', `${bar.width}px`);
+  pal.style.setProperty('--bar-h', `${bar.height}px`);
 }
 
 function closePalette(refocus = true) {
@@ -130,7 +166,8 @@ async function updatePalette() {
     else items.push({ group: '', kind: 'url', icon: 'search', title: q, sub: `Search ${engine.name}`, url });
   }
 
-  if (!commandsOnly) {
+  const classic = P.at === 'classic';
+  if (!commandsOnly && (q || !classic)) {
     const tabs = B.tabs
       .filter((t) => (t.id !== B.activeId && t.spaceId === B.activeSpaceId) || q)
       .map((t) => ({ t, s: q ? Math.max(fuzzyScore(q, tabLabel(t)), fuzzyScore(q, t.title), fuzzyScore(q, t.url) * 0.8) : 1 }))
@@ -147,7 +184,7 @@ async function updatePalette() {
     }
   }
 
-  const cmds = [...COMMANDS, ...spaceCommands()]
+  const cmds = classic && !commandsOnly ? [] : [...COMMANDS, ...spaceCommands()]
     .map((c) => ({ c, s: Math.max(fuzzyScore(q, c.title), c.words ? fuzzyScore(q, c.words) * 0.7 : 0) }))
     .filter((x) => x.s > 0)
     .sort((a, b) => b.s - a.s)
@@ -182,7 +219,8 @@ function renderPalette(q) {
       <span class="p-text"><span class="p-title">${highlight(it.title, q)}</span><span class="p-sub">${it.sub ? highlight(it.sub, q) : ''}</span></span>
       <span class="p-hint">${keys || it.hint || ''}</span></div>`;
   }).join('');
-  $('#palette-results').innerHTML = html || '<div class="empty">Nothing matches</div>';
+  // (a traditional address bar shows no list until you type)
+  $('#palette-results').innerHTML = html || (P.at === 'classic' && !q ? '' : '<div class="empty">Nothing matches</div>');
 }
 
 function movePaletteSel(d) {
@@ -250,4 +288,5 @@ function initPalette() {
     if (el) choosePaletteItem(Number(el.dataset.i), e.ctrlKey || e.metaKey);
   });
   $('#palette-backdrop').addEventListener('mousedown', (e) => { if (e.target.id === 'palette-backdrop') closePalette(); });
+  window.addEventListener('resize', () => { if (!$('#palette-backdrop').hidden && P.at !== 'palette') placePaletteAtBar(); });
 }

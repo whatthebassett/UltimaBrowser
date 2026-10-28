@@ -196,9 +196,21 @@ body.card-dragging .pin::before { opacity: 0; }
 .newtab-row kbd { opacity: 0; transition: opacity 0.15s; }
 .newtab-row:hover kbd { opacity: 1; }
 
+/* scrollbars: a thin rounded thumb floating on the background (no track, no arrows) that widens a little under the
+   pointer and takes the accent while dragged. (The transparent border keeps it off the edges; padding-box clips the
+   color inside it.) */
+::-webkit-scrollbar { width: 12px; height: 12px; background: transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-thumb { min-height: 36px; min-width: 36px; border: 4px solid transparent; border-radius: 6px; background: color-mix(in srgb, var(--text) 20%, transparent) padding-box; }
+::-webkit-scrollbar-thumb:hover { border-width: 3px; background-color: color-mix(in srgb, var(--text) 34%, transparent); }
+::-webkit-scrollbar-thumb:active { border-width: 3px; background-color: color-mix(in srgb, var(--accent) 75%, transparent); }
+
 .tabs { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 2px; margin: 0 -4px; padding: 0 4px; }
-.tabs::-webkit-scrollbar { width: 6px; }
-.tabs::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+/* the sidebar is narrow: a slimmer one there */
+.tabs::-webkit-scrollbar { width: 8px; }
+.tabs::-webkit-scrollbar-thumb { border-width: 2px; }
+.tabs::-webkit-scrollbar-thumb:hover, .tabs::-webkit-scrollbar-thumb:active { border-width: 1px; }
 .tab {
   display: flex; align-items: center; gap: 10px; height: var(--sb-row); min-height: var(--sb-row); padding: 0 6px 0 10px;
   border-radius: 8px; color: var(--text-2); position: relative;
@@ -293,7 +305,13 @@ body.fullscreen #sb-hotzone { display: none !important; }
 }
 body.mac #topbar { padding: 0 8px; }
 body.mac.sb-hidden:not(.fullscreen) #topbar { padding-left: 80px; } /* clear of the window buttons */
-.page-title { grid-column: 2; min-width: 0; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12.5px; text-align: center; }
+/* the page's title, in a badge of the bar's glass (hidden on built-in pages, which have none) */
+.page-title {
+  grid-column: 2; justify-self: center; max-width: 100%; min-width: 0; padding: 4px 14px; border-radius: 999px;
+  background: var(--glass-chip); box-shadow: inset 0 0 0 1px var(--glass-edge), 0 1px 3px rgba(0, 0, 0, 0.12);
+  color: var(--text); font-size: 12.5px; font-weight: 650; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+}
+.page-title:empty { display: none; }
 .top-actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; }
 .pill { height: 24px; padding: 0 10px; border-radius: 12px; background: var(--accent-soft); color: var(--text); font-size: 12px; }
 
@@ -346,6 +364,13 @@ body.reduce-motion *, body.reduce-motion *::before, body.reduce-motion *::after 
 
 body.fullscreen #sidebar, body.fullscreen #topbar, body.fullscreen #bookmark-bar { display: none !important; }
 body.fullscreen #viewport { border-radius: 0; box-shadow: none; clip-path: none; }
+/* F11: the page fills the screen; the sidebar slides in from the left edge (body.sb-hidden) */
+body.immersive #topbar, body.immersive #bookmark-bar { display: none !important; }
+body.immersive #viewport { border-radius: 0; box-shadow: none; clip-path: none; }
+/* the black a video's full screen fades up out of, and back out to Ultima (fullscreenFade in app.js) */
+.fs-veil { position: fixed; inset: 0; width: 100vw; height: 100vh; max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
+  background: #000; pointer-events: none; opacity: 0; }
+.fs-veil::backdrop { display: none; }
 
 .status {
   position: absolute; left: 8px; bottom: 8px; max-width: 60%; padding: 4px 10px; border-radius: 7px; z-index: 4;
@@ -481,6 +506,17 @@ select.field.dd-open { background-image: var(--dd-chevron-up), linear-gradient(1
 .tm-row:hover .tm-end, .tm-end:focus-visible { opacity: 1; }
 .tm-end:hover { background: var(--danger); color: #fff; box-shadow: none; }
 .tm-body .empty { padding: 24px; }
+/* the task manager's own window (tasks.html): a title bar to drag it by, then the page */
+body.tw { display: flex; flex-direction: column; background: var(--chrome-solid); }
+body.tw.glass { background: color-mix(in srgb, var(--chrome-solid) 72%, transparent); }
+body.tw.acrylic { background: color-mix(in srgb, var(--chrome-solid) 82%, transparent); }
+.tw-bar { flex: none; display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 150px 0 16px; font-size: 13px; font-weight: 650; -webkit-app-region: drag; }
+body.tw.mac .tw-bar { padding: 0 16px 0 84px; }
+.tw-logo { display: grid; place-items: center; }
+.tw-logo .logo { width: 18px; height: 18px; }
+.tw-main { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 20px 20px; user-select: text; }
+.tw .page.tm-page { max-width: none; margin: 0; padding: 0; }
+.tw .tm-page .sub { margin-bottom: 16px; }
 .bm-page .toolbar { flex-wrap: wrap; }
 .bm-page .toolbar .field { min-width: 200px; }
 .bm-layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 24px; align-items: start; }
@@ -599,6 +635,28 @@ button.bmc:hover { background: var(--hover); color: var(--text); }
 .p-item mark { background: none; color: var(--accent); font-weight: 600; }
 .palette-foot { display: flex; gap: 16px; padding: 10px 18px; border-top: 1px solid var(--border); color: var(--text-3); font-size: 11.5px; flex: none; flex-wrap: wrap; }
 .palette-foot kbd { margin-right: 2px; }
+/* The palette at the address bar (Settings → Address bar: palette.js placePaletteAtBar), with no dimming behind it.
+   Extended: the whole palette hangs from the bar, a little bigger all round so its search box sits over the bar. */
+#palette-backdrop.p-extended, #palette-backdrop.p-classic { display: block; padding: 0; background: transparent; backdrop-filter: none; animation: none; }
+.p-extended #palette, .p-classic #palette { position: fixed; left: var(--px); top: var(--py); width: var(--pw); max-height: calc(100vh - var(--py) - 16px); }
+.p-extended #palette { transform-origin: top left; animation: bar-grow 0.17s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45), 0 0 0 1px var(--border); }
+@keyframes bar-grow { from { opacity: 0; transform: scale(0.97, 0.7); } }
+.p-extended .palette-input { height: calc(var(--bar-h) + 12px); padding: 0 14px; gap: 10px; }
+.p-extended #palette-input { font-size: 14.5px; }
+.p-extended .palette-foot { display: none; }
+/* Traditional: the box is the address bar itself (its size and place, in focus), the places to go drop down under it */
+.p-classic #palette { overflow: visible; border-radius: 0; background: none; box-shadow: none; animation: none; }
+.p-classic .palette-input { width: var(--bar-w); height: var(--bar-h); padding: 0 12px; gap: 8px; border: 0; border-radius: 10px; background: var(--surface);
+  box-shadow: inset 0 0 0 2px var(--accent), 0 6px 20px rgba(0, 0, 0, 0.28); }
+.p-classic .pi-icon { color: var(--text-3); }
+.p-classic #palette-input { font-size: 13px; }
+.p-classic .pi-mode, .p-classic .palette-foot { display: none; }
+.p-classic .palette-results { margin-top: 6px; max-height: 62vh; border-radius: 12px; background: var(--surface);
+  box-shadow: 0 16px 44px rgba(0, 0, 0, 0.42), 0 0 0 1px var(--border); animation: pop 0.12s ease; }
+.p-classic .palette-results:empty { display: none; }
+.p-classic .p-item { height: 36px; }
+body.addr-classic .urlbar { cursor: text; }
 
 /* ---------- toasts ---------- */
 #toasts { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
@@ -658,6 +716,8 @@ button.bmc:hover { background: var(--hover); color: var(--text); }
 .ctx-label { flex: 1; overflow: hidden; text-overflow: ellipsis; }
 .ctx-keys { display: flex; gap: 3px; align-items: center; color: var(--text-3); margin-left: 16px; }
 .ctx-keys kbd { padding: 2px 5px; }
+.ctx-note { font-size: 11.5px; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-item.sel .ctx-note { color: rgba(255, 255, 255, 0.8); }
 .ctx-sep { height: 1px; margin: 5px 8px; background: var(--border); }
 /* the row of quick actions at the top of a page's menu (Copy, Paste, Waypoints, Reload) */
 .ctx-actions { display: flex; gap: 2px; padding: 1px 1px 5px; margin-bottom: 5px; border-bottom: 1px solid var(--border); }
@@ -749,6 +809,18 @@ body.collapsed .theme-editor { left: 72px; }
 .urlbar.loading .url-text, .urlbar.loading .url-icon { color: var(--text); }
 @keyframes url-load { to { transform: translateX(-50%); } }
 @keyframes url-sheen { to { left: 100%; } }
+/* …or as a line along the top of the page (body.loader-line): right under the toolbar, or the Waypoints bar when it's
+   on. The same moving gradient, with a soft glow of itself under it, fading out as the page finishes. */
+body.loader-line .url-loader { display: none; }
+.load-line { display: none; }
+body.loader-line .load-line { display: block; position: absolute; top: 0; left: 0; right: 0; height: 3px; z-index: 9; overflow: visible; pointer-events: none; opacity: 0; transition: opacity 0.5s ease; }
+body.loader-line .load-line.loading { opacity: 1; transition-duration: 0.18s; }
+.load-line i { position: absolute; inset: 0; overflow: hidden; }
+.load-line i::before { content: ""; position: absolute; top: 0; bottom: 0; left: 0; width: 200%; background: var(--loader-bg); animation: url-load 1.6s linear infinite paused; }
+.load-line::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: var(--loader-bg); background-size: 200% 100%; filter: blur(5px); opacity: 0.7; }
+.load-line.loading i::before, .load-line.finishing i::before { animation-play-state: running; }
+body.fullscreen .load-line { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .load-line i::before { animation: none !important; } }
 @media (prefers-reduced-motion: reduce) {
   .url-loader::before, .url-loader::after, .loader-swatch span { animation: none !important; }
 }
@@ -814,6 +886,63 @@ body.collapsed .theme-editor { left: 72px; }
 .s-row { display: flex; align-items: center; gap: 20px; padding: 14px 18px; min-height: 58px; }
 .s-row + .s-row { border-top: 1px solid var(--border); }
 .s-row[data-stack] { flex-direction: column; align-items: stretch; gap: 12px; }
+/* Settings → Appearance → Tabs: each layout as a little window (settings.js: tabLayoutCards); click one to switch */
+.tl-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; }
+.tl-cards.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+/* Settings → Address bar: a toolbar with the address bar over a page, and what clicking it brings up */
+.ab-art { flex-direction: column; }
+.ab-top { display: flex; padding: 7px 8px 0; }
+.ab-url { flex: none; width: 62%; height: 11px; margin-left: 18%; }
+.ab-art .tl-page { margin-top: 6px; }
+.ab-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.35); border-radius: inherit; }
+.ab-pal { position: absolute; display: flex; flex-direction: column; gap: 4px; padding: 6px; border-radius: 6px; background: var(--surface);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border); }
+.ab-pal b { height: 9px; border-radius: 3px; background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.ab-pal i, .ab-drop i { height: 6px; border-radius: 3px; background: color-mix(in srgb, var(--text) 16%, transparent); }
+.ab-pal i:nth-child(3), .ab-drop i:nth-child(2) { width: 75%; }
+.ab-palette .ab-pal { left: 22%; right: 22%; top: 34%; }
+.ab-extended .ab-pal { left: calc(18% + 4px); width: 66%; top: 4px; }
+.ab-classic .ab-url { box-shadow: 0 0 0 1.5px var(--accent); background: var(--surface); }
+.ab-caret { position: absolute; top: 9px; left: calc(18% + 22%); width: 1.5px; height: 7px; background: var(--accent); animation: caret-blink 1s steps(2) infinite; }
+@keyframes caret-blink { 50% { opacity: 0; } }
+.ab-drop { position: absolute; left: calc(18% + 8px); width: calc(62% - 0px); top: 22px; display: flex; flex-direction: column; gap: 4px; padding: 6px;
+  border-radius: 5px; background: var(--surface); box-shadow: 0 6px 16px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--border); }
+@media (prefers-reduced-motion: reduce) { .ab-caret { animation: none; } }
+.tl-card { display: flex; flex-direction: column; gap: 10px; padding: 10px 10px 12px; border-radius: 14px; text-align: left; background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border); transition: box-shadow 0.18s, transform 0.18s cubic-bezier(0.2, 0, 0, 1), background 0.18s; }
+.tl-card:hover { transform: translateY(-2px); background: color-mix(in srgb, var(--surface-2) 70%, var(--hover)); }
+.tl-card.on { box-shadow: inset 0 0 0 2px var(--accent), 0 10px 26px -14px var(--accent); }
+.tl-text { display: flex; flex-direction: column; gap: 2px; padding: 0 2px; }
+.tl-label { display: inline-flex; align-items: center; gap: 6px; font-weight: 650; }
+.tl-label .ic { color: var(--accent); }
+.tl-sub { font-size: 12px; color: var(--text-3); }
+/* the little window: the space's colors behind Ultima's parts, a white-ish page */
+.tl-art { position: relative; display: flex; height: 118px; border-radius: 9px; overflow: hidden; background-color: var(--chrome-solid); background-image: var(--space-bg);
+  box-shadow: inset 0 0 0 1px var(--border); }
+.tl-art i, .tl-art b, .tl-url { display: block; border-radius: 3px; background: color-mix(in srgb, var(--text) 18%, transparent); }
+.tl-art i.on { background: var(--accent); box-shadow: 0 2px 8px -2px var(--accent); }
+.tl-page { flex: 1; margin: 6px; border-radius: 6px; background: var(--surface); box-shadow: 0 0 0 1px var(--border); padding: 8px; }
+.tl-hero { display: block; height: 38%; border-radius: 4px; background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 30%, transparent), transparent 75%); }
+/* vertical: a sidebar of address bar, Essentials and tabs beside the page */
+.tl-vertical { flex-direction: row; }
+.tl-side { width: 30%; display: flex; flex-direction: column; gap: 5px; padding: 7px 0 7px 7px; }
+.tl-vertical .tl-url { height: 9px; }
+.tl-vertical .tl-ess { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; }
+.tl-vertical .tl-ess b { height: 11px; }
+.tl-vertical .tl-list { display: flex; flex-direction: column; gap: 4px; margin-top: 2px; }
+.tl-vertical .tl-list i { height: 8px; }
+.tl-vertical .tl-list i:nth-child(3) { width: 80%; } .tl-vertical .tl-list i:nth-child(5) { width: 65%; }
+.tl-vertical .tl-page { margin-left: 6px; }
+/* horizontal: a tab strip, then the address bar row, then the page */
+.tl-horizontal { flex-direction: column; }
+.tl-strip { display: flex; align-items: center; gap: 4px; padding: 6px 7px 3px; }
+.tl-horizontal .tl-ess { display: flex; gap: 3px; flex: none; }
+.tl-horizontal .tl-ess b { width: 12px; height: 9px; }
+.tl-horizontal .tl-list { flex: 1; display: flex; gap: 3px; }
+.tl-horizontal .tl-list i { flex: 0 1 26%; height: 9px; }
+.tl-bar { padding: 3px 7px 0; }
+.tl-horizontal .tl-url { height: 9px; }
+.tl-horizontal .tl-page { margin-top: 5px; }
 .s-text { flex: 1; min-width: 0; }
 .s-title { font-weight: 500; display: flex; align-items: center; gap: 8px; }
 .s-desc { color: var(--text-3); font-size: 12px; margin-top: 2px; line-height: 1.45; }
@@ -950,6 +1079,34 @@ body.collapsed .url-shield { display: none; }
 .th-host { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--text-3); }
 .th-note { padding: 4px 8px 4px 24px; font-size: 11.5px; color: var(--text-3); }
 .th-list > .th-note { padding: 18px 8px; text-align: center; }
+/* Waypoints, History and Downloads dropdowns (widgets.js): the Tab History panel's look, a row per item */
+.widget-panel { width: 360px; }
+.wg-top-acts { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+.wg-top-acts .icon-btn { width: 28px; height: 28px; }
+.wg-list { gap: 1px; }
+.widget-panel .wg-row { flex: none; padding: 0 8px; height: 32px; }
+.wg-head { flex: none; padding: 10px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-3); }
+.wg-head:first-child { padding-top: 2px; }
+.wg-icon { width: 16px; display: grid; place-items: center; flex: none; color: var(--text-2); }
+.wg-chev { display: grid; place-items: center; color: var(--text-3); flex: none; }
+.wg-tag { display: grid; place-items: center; color: var(--text-3); flex: none; }
+.wg-back { flex: none; display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 8px; border-radius: 7px; color: var(--text-2); font-size: 12px; text-align: left; }
+.wg-back:hover { background: var(--hover); color: var(--text); }
+.wg-foot { flex: none; display: flex; justify-content: center; padding-top: 6px; border-top: 1px solid var(--border); }
+.wg-link { height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12.5px; font-weight: 600; color: var(--accent); }
+.wg-link:hover { background: var(--accent-soft); }
+.wg-clear { height: 26px; padding: 0 10px; border-radius: 7px; font-size: 12px; font-weight: 500; color: var(--text-2); }
+.wg-clear:hover { background: var(--hover); color: var(--text); }
+.wg-dl { flex: none; display: flex; align-items: center; gap: 10px; padding: 7px 6px 7px 8px; border-radius: 8px; cursor: default; }
+.wg-dl:hover { background: var(--hover); }
+.wg-dl.completed { cursor: pointer; }
+.wg-dl .icon-btn { width: 28px; height: 28px; opacity: 0; }
+.wg-dl:hover .icon-btn, .wg-dl .icon-btn:focus-visible { opacity: 1; }
+.wg-dl-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wg-dl-sub { font-size: 11.5px; color: var(--text-3); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.wg-dl.interrupted .wg-dl-sub, .wg-dl.cancelled .wg-dl-sub { color: var(--danger); }
+.wg-progress { height: 4px; margin-top: 3px; border-radius: 2px; background: var(--hover); overflow: hidden; }
+.wg-progress i { display: block; height: 100%; border-radius: 2px; background: var(--accent); transition: width 0.3s ease; }
 .um-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .um-pin { width: 26px; height: 26px; opacity: 0.5; }
 .um-pin.on { opacity: 1; color: var(--accent); }
@@ -1303,3 +1460,88 @@ body.collapsed .tfolder-add, body.card-dragging .tfolder-add { display: none; }
   .sound-bars i { animation: none; }
   .sound-bars i:nth-child(odd) { transform: scaleY(0.55); }
 }
+
+/* ---------- horizontal tabs (tablayout.js: body.htabs) ----------
+   The sidebar's parts in two rows across the top: the tab strip (#hstrip: spaces, Essentials, pinned tabs, then your
+   tabs and the + button) and the toolbar under it (#htoolbar: back, forward and reload, the address bar, the page's
+   buttons, then your bottom sidebar buttons). The page title bar isn't needed: each tab says what it is. */
+body.htabs #app { flex-direction: column; }
+body.htabs #sidebar {
+  width: auto; flex: none; flex-direction: column; gap: 0; padding: 0; transition: none;
+  box-shadow: inset 0 -1px 0 var(--glass-edge);
+}
+body.htabs #sidebar > :not(#hstrip):not(#htoolbar) { display: none !important; } /* the head, space name, resizer… */
+body.htabs #topbar { display: none; }
+
+/* the tab strip: room on the right for Windows' window buttons, on the left for a Mac's */
+.hstrip { display: flex; align-items: center; gap: 4px; height: var(--topbar-h); padding: 0 150px 0 8px; min-width: 0; }
+body.mac .hstrip { padding: 0 8px 0 80px; }
+.hstrip > * { -webkit-app-region: no-drag; }
+/* the strip's empty stretch moves the window, as Chrome's does (but never while a tab is being dragged across it) */
+.hstrip #tabs { -webkit-app-region: drag; }
+.hstrip #tabs > * { -webkit-app-region: no-drag; }
+body.card-dragging .hstrip, body.card-dragging .hstrip * { -webkit-app-region: no-drag !important; }
+
+.hstrip .space-bar { flex: none; flex-wrap: nowrap; padding: 0; gap: 2px; }
+.hstrip .space-chip { width: 28px; height: 26px; font-size: 14px; }
+.hstrip .space-chip.add { display: none; }
+.hstrip .essentials { display: flex; flex: none; gap: 3px; --ess-h: 28px; --ess-icon: 16px; }
+.hstrip .essentials .pin { width: 34px; height: 28px; border-radius: 8px; }
+.hstrip .drag-slot.pin-slot { width: 34px; height: 28px; border-radius: 8px; flex: none; }
+/* pinned tabs: just their icons, as in Chrome */
+.hstrip .pinned-list { flex: none; flex-direction: row; align-items: center; gap: 2px; max-height: none; overflow: visible; margin: 0; padding: 0; }
+.hstrip .pinned-list .tab { width: 36px; min-width: 36px; flex: none; padding: 0; justify-content: center; }
+.hstrip .pinned-list .tab > :not(.fav):not(.fav-letter):not(.spinner):not(.private-fav) { display: none; }
+.hstrip .pinned-list .drag-slot.tab-slot { width: 36px; flex: none; }
+.hstrip .zone-sep { width: 1px; height: 18px; margin: 0 3px; }
+
+/* your tabs share the strip, narrowing as more open; a narrow one keeps just its icon */
+.hstrip .tabs { flex: 1 1 auto; flex-direction: row; align-items: center; min-width: 0; height: 100%; margin: 0; padding: 0 2px; gap: 2px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.hstrip .tabs::-webkit-scrollbar { display: none; }
+.hstrip .tab { flex: 0 1 220px; min-width: 40px; height: 32px; min-height: 32px; padding: 0 4px 0 10px; gap: 8px; container-type: inline-size; }
+@container (max-width: 76px) {
+  .hstrip .tab .title { display: none; }
+  .hstrip .tab:not(.active) .tab-close { display: none; }
+}
+.hstrip .drag-slot.tab-slot { flex: none; width: 140px; height: 32px; min-height: 32px; }
+
+/* folders: a colored label, then their tabs, underlined in the folder's color */
+/* (its tabs are as wide as that many tabs, so it narrows with the rest of the strip, not more: --n and --s are set by
+   tabfolders.js; left to their content, shrinking tabs count as tiny and the folder gets squeezed first) */
+.hstrip .tfolder { flex: 0 1 auto; min-width: 0; flex-direction: row; align-items: center; gap: 2px; }
+.hstrip .tfolder-head { flex: none; height: 26px; min-height: 26px; padding: 0 6px 0 8px; gap: 6px; border-radius: 7px; max-width: 170px;
+  background: color-mix(in srgb, var(--fc) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--fc) 45%, transparent); }
+.hstrip .tfolder-head:hover { background: color-mix(in srgb, var(--fc) 32%, transparent); }
+.hstrip .tfolder-chev { display: none; }
+.hstrip .tfolder-add { display: none; }
+.hstrip .tfolder-tabs { flex: 0 1 auto; width: calc(var(--n, 0) * 222px + var(--s, 0) * 242px - 2px); flex-direction: row; align-items: center; min-width: 0; margin: 0; padding: 0 0 1px; gap: 2px; border-left: 0; border-bottom: 2px solid var(--fc); border-radius: 0 0 2px 2px; }
+.hstrip .tfolder-tabs:empty { display: none; }
+/* a pinned folder holds icons, which don't shrink: it's as wide as they are */
+.hstrip .pinned-list .tfolder { flex: none; }
+.hstrip .pinned-list .tfolder-tabs { flex: none; width: auto; }
+.hstrip .tfolder.drop-folder .tfolder-tabs { border-bottom-color: var(--fc); }
+/* split views: one joined tab */
+.hstrip .tsplit { flex: 0 1 240px; min-width: 76px; height: 32px; }
+.hstrip .tsplit .tab.split-part { flex: 1 1 0; min-width: 0; height: 28px; min-height: 28px; container-type: normal; }
+/* the + after the tabs */
+.hstrip .newtab-row { flex: none; width: 30px; height: 30px; padding: 0; gap: 0; justify-content: center; border-radius: 8px; }
+.hstrip .newtab-row .label, .hstrip .newtab-row .kbds { display: none; }
+
+/* the toolbar: back, forward, reload, the address bar, the page's buttons, your buttons */
+.htoolbar { display: flex; align-items: center; gap: 6px; height: 42px; padding: 0 8px 6px; min-width: 0; }
+.htoolbar .nav { display: flex; flex: none; gap: 2px; }
+.htoolbar .urlbar { flex: 1 1 auto; min-width: 120px; height: 34px; }
+.htoolbar .top-actions { display: flex; flex: none; align-items: center; gap: 2px; }
+.htoolbar .sb-foot { flex: none; flex-direction: row; padding: 0; border: 0; gap: 2px; }
+.htoolbar .sb-foot .spacer, .htoolbar #btn-collapse { display: none; }
+
+/* the page sits under both rows */
+body.htabs #viewport { clip-path: inset(0 0 0 0); }
+
+/* F11 with horizontal tabs: both rows slide down from the top edge instead of in from the left */
+body.htabs.sb-hidden #sidebar { position: fixed; top: 0; left: 0; right: 0; bottom: auto; width: auto; transform: translateY(calc(-100% - 20px)); z-index: 45; box-shadow: var(--shadow); }
+body.htabs.sb-hidden.sb-peek #sidebar { transform: none; }
+body.htabs.sb-hidden #sb-hotzone { left: 0; right: 0; top: 0; bottom: auto; width: auto; height: 6px; }
+
+/* switching tab layouts (tablayout.js switchTabLayout): the bar slides out, then the new one in; no clicks meanwhile */
+body.tl-switching #sidebar { pointer-events: none; }

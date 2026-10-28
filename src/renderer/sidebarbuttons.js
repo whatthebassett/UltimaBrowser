@@ -34,6 +34,7 @@ const SIDEBAR_BUTTONS = {
   'clear-data': { icon: 'eraser', cmd: 'clear-data', label: 'Clear browsing data' },
   shortcuts: { icon: 'keyboard', cmd: 'open-shortcuts', label: 'Keyboard shortcuts' },
   'hide-sidebar': { icon: 'sidebar', cmd: 'toggle-sidebar-hidden', label: 'Hide sidebar' },
+  'tab-layout': { icon: 'tab', cmd: 'toggle-tab-layout', label: 'Vertical / horizontal tabs' },
   settings: { icon: 'settings', cmd: 'open-settings', label: 'Settings' },
 };
 const SIDEBAR_DEFAULT = { head: ['back', 'forward', 'reload'], foot: ['palette', 'bookmarks', 'history', 'tab-history', 'downloads', 'import', 'settings'] };
@@ -67,6 +68,7 @@ function initSidebarButtons() {
     el.insertAdjacentHTML('afterbegin', icon(b.icon, 16));
     el.addEventListener('click', () => {
       if (key === 'reload' && activeTab()?.loading) return activeTab().webview?.stop();
+      if (WIDGETS[key] && widgetDropdowns()) return toggleWidget(key); // Waypoints, History, Downloads: a dropdown (widgets.js)
       return runCommand(b.cmd);
     });
   }
@@ -75,7 +77,7 @@ function initSidebarButtons() {
 
 function renderSidebarButtons() {
   const layout = sidebarLayout();
-  const nav = $('.sb-head .nav');
+  const nav = $('#sidebar .nav'); // (in the sidebar's head, or with horizontal tabs, the toolbar: tablayout.js)
   const spacer = $('.sb-foot .spacer');
   const pool = $('#sb-pool');
   const used = new Set([...layout.head, ...layout.foot]);
@@ -224,7 +226,7 @@ function renderSidebarEditor(ed) {
             <span class="sbe-chip locked" title="Compact sidebar — always here">${icon('sidebar', 16)}</span>
           </div>
         </div>
-        <p class="sbe-hint">Drag buttons to reorder them, or between the top and the bottom. Right-click one for more, or drag it down to the list below to remove it. The top holds up to ${SIDEBAR_HEAD_MAX}.</p>
+        <p class="sbe-hint">Drag to reorder. Drag a button to the list below to remove it. The top holds up to ${SIDEBAR_HEAD_MAX}.</p>
       </div>
     </section>
     <section class="s-group"><h3 class="s-group-title">Add buttons</h3>

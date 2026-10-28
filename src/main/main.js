@@ -2,7 +2,7 @@ const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const {
-  app, BrowserWindow, ipcMain, session, Menu, clipboard, dialog, shell, webContents, webFrameMain, nativeTheme, net,
+  app, BrowserWindow, ipcMain, session, Menu, clipboard, dialog, shell, webContents, webFrameMain, nativeTheme, net, screen,
 } = require('electron');
 const { JsonStore } = require('./store');
 const { BrowserData, hostOf } = require('./data');
@@ -56,6 +56,8 @@ const DEFAULT_SETTINGS = {
   glassTint: 45,
   loadingIndicator: true,
   loadingTheme: 'space',
+  addressBarMode: 'palette', // what clicking the address bar opens: palette, extended (palette at the bar) or classic
+  loadingStyle: 'bar', // the loading animation: in the address bar (bar), or a line under the toolbar (line)
   showBookmarksBar: true,
   centerBookmarksBar: false,
   searchEngine: 'google',
@@ -67,6 +69,8 @@ const DEFAULT_SETTINGS = {
   sidebarHidden: false,
   essentialsHeight: 44,
   // sidebar style, in every space and window (renderer/sidebarstyle.js)
+  widgetOpen: 'dropdown', // what the Waypoints, History and Downloads buttons open: a dropdown, or the page (widgets.js)
+  tabLayout: 'vertical', // vertical (the sidebar) or horizontal (a tab strip across the top): renderer/tablayout.js
   sidebarFont: 'inter', // inter, system, serif, mono, or "font:<family>" for an installed font
   sidebarTextSize: 13, // px
   sidebarDensity: 'default', // tab height: compact, default or roomy
@@ -100,6 +104,7 @@ const DEFAULT_SETTINGS = {
   uiContrast: false,
   reduceMotion: false,
   hardwareAcceleration: true, // read at startup (HARDWARE_ACCELERATION above); a change applies after a restart
+  taskManagerWindow: null, // where the task manager's window was last: { x, y, width, height }
   window:{ width: 1440, height: 900, maximized: false },
 };
 
@@ -164,6 +169,8 @@ function shortcutFor(input, wc) {
 
 // Pages open in a glance (glance.js): Esc there closes the glance, as it does in the UI
 const glancePages = new Set(); // webContents ids
+// each page's favicon, for the task manager's window (which has no tabs of its own to ask)
+const pageFavicons = new Map(); // webContents id → favicon URL
 
 function hookShortcuts(wc) {
   const id = wc.id;
@@ -178,6 +185,16 @@ function hookShortcuts(wc) {
     if (cmd) { event.preventDefault(); sendTo(windowOf(wc), 'command', cmd); }
   });
 }
+
+// ---- the mouse's back and forward buttons ----
+// Electron leaves these to the app, and Chromium hands them to the page as mouse buttons 4 and 5 on every system
+// (Windows' app commands never arrive for them). webview-preload.js sends a page's here, and it goes back or forward in
+// that page, wherever it is: a tab, a split pane or a glance. Over Ultima itself, app.js handles them.
+ipcMain.on('ultima:mouse-nav', (e, dir) => {
+  const nav = e.sender.navigationHistory;
+  if (dir === 'back' && nav.canGoBack()) nav.goBack();
+  else if (dir === 'forward' && nav.canGoForward()) nav.goForward();
+});
 
 // ---- right-click menu for web pages ----
 // The menu is drawn by Ultima's UI (not a native menu); main keeps the actions, keyed by item id.
@@ -1118,14 +1135,15 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
   };
   win.on('resize', rememberBounds);
   win.on('move', rememberBounds);
-  win.on('enter-full-screen', () => sendTo(w, 'window-fullscreen', true));
+  // `immersive`: Ultima's own full screen (F11), not a page's (a video), which the UI handles itself
+  win.on('enter-full-screen', () => sendTo(w, 'window-fullscreen', { on: true, immersive: Boolean(w.immersive) }));
   win.on('focus', () => {
     lastFocusedId = win.id;
     dispatchExtEvent('windows.onFocusChanged', [priv ? -1 : 0]);
     if (!priv) announceActiveTab(w); // to extensions, the window you're in is "the" window, so its tab is the active one
   });
   win.on('blur', () => dispatchExtEvent('windows.onFocusChanged', [-1]));
-  win.on('leave-full-screen', () => sendTo(w, 'window-fullscreen', false));
+  win.on('leave-full-screen', () => { w.immersive = false; sendTo(w, 'window-fullscreen', { on: false, immersive: false }); });
 
   // Lock down every <webview> the UI creates.
   win.webContents.on('will-attach-webview', (_e, prefs, params) => {
@@ -1153,8 +1171,59 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
     windows.delete(win.id);
     if (lastFocusedId === win.id) lastFocusedId = null;
     if (!priv && !quitting && liveWindows().some((x) => !x.private)) forgetWindow(w.key);
+    if (!liveWindows().length) taskWindow()?.close(); // the task manager goes with the last window
   });
   return w;
+}
+
+// The task manager (Shift+Esc) has a window of its own: one at a time, where it was last, closing with the last
+// Ultima window. It isn't one of `windows`: it has no tabs and isn't kept for next time.
+let taskWin = null;
+const taskWindow = () => (taskWin && !taskWin.isDestroyed() ? taskWin : null);
+const toTaskWindow = (channel, payload) => taskWindow()?.webContents.send(channel, payload);
+
+function openTaskManager() {
+  const open = taskWindow();
+  if (open) {
+    if (open.isMinimized()) open.restore();
+    open.focus();
+    return;
+  }
+  // where it was, if that's still on a screen
+  const b = settings.data.taskManagerWindow;
+  const onScreen = b && screen.getAllDisplays().some(({ workArea: a }) => b.x < a.x + a.width - 80 && b.x + b.width > a.x + 80 && b.y >= a.y - 8 && b.y < a.y + a.height - 40);
+  const win = new BrowserWindow({
+    width: b?.width || 960,
+    height: b?.height || 640,
+    x: onScreen ? b.x : undefined,
+    y: onScreen ? b.y : undefined,
+    minWidth: 620,
+    minHeight: 400,
+    title: 'Task manager',
+    icon: APP_ICON,
+    backgroundColor: GLASS ? CLEAR : '#111114',
+    backgroundMaterial: BACKDROPS ? settings.data.windowMaterial : undefined,
+    vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
+    visualEffectState: 'active',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: process.platform === 'darwin' ? true : { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height: 40 },
+    trafficLightPosition: { x: 14, y: 13 },
+    show: false,
+    webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true },
+  });
+  taskWin = win;
+  win.once('ready-to-show', () => win.show());
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'tasks.html'));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  const remember = () => {
+    if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
+    settings.data.taskManagerWindow = win.getBounds();
+    settings.save();
+  };
+  win.on('resize', remember);
+  win.on('move', remember);
+  win.on('closed', () => { if (taskWin === win) taskWin = null; });
 }
 
 function announceActiveTab(w) {
@@ -1174,7 +1243,8 @@ app.on('web-contents-created', (_e, wc) => {
   // extension pages (popups, extension tabs) keep their extension's background alive until they close or leave
   const id = wc.id;
   wc.on('did-finish-load', () => { try { holdWorkerFor(wc); } catch { /* never break page loads */ } });
-  wc.once('destroyed', () => releaseWorkerFor(id));
+  wc.once('destroyed', () => { releaseWorkerFor(id); pageFavicons.delete(id); });
+  wc.on('page-favicon-updated', (_ev, favicons) => { if (favicons?.[0]) pageFavicons.set(id, favicons[0]); });
   const priv = isPrivate(wc);
   if (priv) wc.once('destroyed', () => setTimeout(endPrivateBrowsingIfUnused, 0));
   hookShortcuts(wc);
@@ -1256,13 +1326,26 @@ function registerIpc() {
   });
   // the task manager (taskmanager.js): Ultima's processes, and ending one. The windows showing pages from an ended
   // process are told first, so they unload those tabs instead of showing them as crashed.
-  handle('tasks:list', () => taskManager.collect({ isPrivate }));
+  handle('tasks:list', () => taskManager.collect({
+    isPrivate,
+    describe: (wc) => ({ glance: glancePages.has(wc.id), favicon: pageFavicons.get(wc.id) || '', taskManager: wc === taskWindow()?.webContents }),
+  }));
   handle('tasks:end', (pid) => {
     const r = taskManager.endProcess(Number(pid));
     if (!r.ok) return { ok: false };
     broadcast('tasks-ended', r.contents);
     setTimeout(r.kill, 100);
     return { ok: true, pages: r.contents.length };
+  });
+  handle('tasks:open', () => openTaskManager());
+  // a tab's row in the task manager: its window comes forward, showing that tab
+  handle('tasks:show', (id) => {
+    const wc = webContents.fromId(Number(id));
+    const w = wc && windowOf(wc);
+    if (!w || wc === w.win.webContents) return;
+    if (w.win.isMinimized()) w.win.restore();
+    w.win.focus();
+    sendTo(w, 'show-contents', wc.id);
   });
   // what the graphics card is doing right now: Chromium also turns parts off itself, for drivers it knows are broken
   // or after the graphics process crashed
@@ -1272,15 +1355,24 @@ function registerIpc() {
     createWindow({ private: Boolean(opts?.private), url });
   });
   handleFrom('window:close', (e) => parentOf(e)?.close()); // Ctrl+W with no tabs left
+  // F11: the window fills the screen, or comes back (see enter-full-screen in createWindow)
+  handleFrom('window:fullscreen', (e) => {
+    const w = windowOf(e.sender);
+    if (!w) return;
+    const on = !w.win.isFullScreen();
+    w.immersive = on;
+    w.win.setFullScreen(on);
+  });
   handleFrom('settings:set', (e, patch) => {
     Object.assign(settings.data, patch);
     settings.save();
     if (patch.keybindings) rebuildKeymap();
-    if (patch.windowMaterial && BACKDROPS) for (const w of liveWindows()) w.win.setBackgroundMaterial(patch.windowMaterial);
+    if (patch.windowMaterial && BACKDROPS) for (const win of [...liveWindows().map((w) => w.win), taskWindow()].filter(Boolean)) win.setBackgroundMaterial(patch.windowMaterial);
     if ('globalPrivacyControl' in patch) siteSessions().forEach(applyGpcPreload);
     // caret browsing on or off in the pages already open
     if ('caretBrowsing' in patch) for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('ultima:caret', Boolean(patch.caretBrowsing));
     broadcast('settings-changed', patch, { except: windowOf(e.sender) });
+    toTaskWindow('settings-changed', patch);
     return settings.data;
   });
   // The UI decides light/dark (a space can override the app setting); Acrylic/Mica and web pages follow it.
@@ -1679,7 +1771,7 @@ app.whenReady().then(async () => {
   else createWindow({ url: launchUrl });
   launchUrl = null;
   defaultBrowser.refreshRegistration();
-  nativeTheme.on('updated', () => broadcast('system-theme', nativeTheme.shouldUseDarkColors));
+  nativeTheme.on('updated', () => { broadcast('system-theme', nativeTheme.shouldUseDarkColors); toTaskWindow('system-theme', nativeTheme.shouldUseDarkColors); });
   // macOS: clicking the Dock icon with every window closed brings back the last one
   app.on('activate', () => { if (!liveWindows().length) createWindow({ restore: savedWindows()[0] }); });
 });

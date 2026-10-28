@@ -23,8 +23,7 @@ function pageShortcuts(root, tab) {
   };
 
   root.innerHTML = `<div class="page"><h1>Keyboard shortcuts</h1>
-    <p class="sub">Every shortcut in Ultima lives here. Click <b>+</b> to record a new one and × to remove one — commands without a shortcut can be given one too.
-    Single keys like <kbd>K</kbd> work too: they fire whenever you’re not typing in a text box, so they never get in the way of typing.</p>
+    <p class="sub">Click <b>+</b> to add a shortcut and × to remove one. Single keys like <kbd>K</kbd> work when you’re not typing.</p>
     <div class="toolbar"><input class="field" id="kq" placeholder="Search by name or keys, e.g. “tab” or “Ctrl+T”" spellcheck="false">
     <button class="btn" id="kreset">Reset all</button></div><div id="klist"></div></div>`;
 

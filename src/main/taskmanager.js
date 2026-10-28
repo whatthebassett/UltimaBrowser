@@ -115,7 +115,7 @@ function extensionName(wc, url) {
 }
 
 // What runs in each renderer process: the webContents it hosts (Ultima's windows, pages, extension pages).
-function contentsByPid(isPrivate) {
+function contentsByPid(isPrivate, describe) {
   const map = new Map();
   for (const wc of webContents.getAllWebContents()) {
     if (wc.isDestroyed()) continue;
@@ -133,15 +133,16 @@ function contentsByPid(isPrivate) {
       private: isPrivate(wc),
       host: wc.hostWebContents?.id ?? null, // the Ultima window showing it
       audible: wc.isCurrentlyAudible(),
+      ...(describe ? describe(wc) : {}), // what only Ultima knows (a glance, a favicon, the task manager itself)
     });
     map.set(pid, list);
   }
   return map;
 }
 
-async function collect({ isPrivate }) {
+async function collect({ isPrivate, describe }) {
   const metrics = app.getAppMetrics();
-  const contents = contentsByPid(isPrivate);
+  const contents = contentsByPid(isPrivate, describe);
   const cores = os.cpus().length || 1;
   const gpuNow = await gpu.sample(metrics.map((m) => m.pid)).catch(() => null);
   const processes = metrics.map((m) => ({

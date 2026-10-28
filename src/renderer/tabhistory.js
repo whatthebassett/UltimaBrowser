@@ -12,6 +12,7 @@ function closeTabHistory() {
 
 function toggleTabHistory() {
   if (TH.panel) { closeTabHistory(); return; }
+  closeWidget();
   closeUrlMenu();
   closeMenu(null);
   const el = h(`<div class="tab-history" role="dialog" aria-label="Tab History" tabindex="-1">
@@ -29,18 +30,15 @@ function toggleTabHistory() {
   renderTabHistoryPanel();
 }
 
-// Beside its sidebar button when that's showing (the panel opens out of the sidebar), else under the address bar.
+// Beside its button when that's showing (out of the sidebar, or under it in the toolbar with horizontal tabs:
+// placeByButton in widgets.js), else under the address bar.
 function placeTabHistory() {
   const el = TH.panel;
   const btn = document.getElementById(sidebarButtonId('tab-history'));
   const shown = btn && !btn.closest('#sb-pool') && btn.getClientRects().length && $('#sidebar').getBoundingClientRect().right > 0;
   const r = el.getBoundingClientRect();
-  if (shown) {
-    const b = btn.getBoundingClientRect();
-    const side = $('#sidebar').getBoundingClientRect();
-    el.style.left = `${Math.min(side.right + 8, window.innerWidth - r.width - 8)}px`;
-    el.style.top = `${Math.max(8, Math.min(b.bottom - r.height, window.innerHeight - r.height - 8))}px`;
-  } else {
+  if (shown) placeByButton(el, btn);
+  else {
     const u = $('#urlbar').getBoundingClientRect();
     el.style.left = `${Math.max(8, Math.min(u.left, window.innerWidth - r.width - 8))}px`;
     el.style.top = `${Math.min(u.bottom + 6, window.innerHeight - r.height - 8)}px`;
@@ -115,7 +113,57 @@ function onTabHistoryClick(e) {
   if (page && !page.classList.contains('current') && ready(tab)) window.ultima.tabHistoryGo(tab.webview.getWebContentsId(), Number(page.dataset.i));
 }
 
+// ---------- press and hold Back / Forward ----------
+// Holding the Back or Forward button (as in Chrome) lists the pages that way in the tab you're on, nearest first;
+// choosing one jumps straight to it. A quick click still goes one page.
+const NAV_HOLD_MS = 450;
+const NH = { timer: 0, held: false };
+
+async function showNavHistory(dir, btn) {
+  const tab = activeTab();
+  if (!tab || !ready(tab) || isInternal(tab.url)) return;
+  const hist = await window.ultima.tabHistory(tab.webview.getWebContentsId()).catch(() => null);
+  if (!hist?.entries.length) return;
+  const steps = [];
+  if (dir === 'back') for (let i = hist.active - 1; i >= 0 && steps.length < 15; i -= 1) steps.push(i);
+  else for (let i = hist.active + 1; i < hist.entries.length && steps.length < 15; i += 1) steps.push(i);
+  if (!steps.length) return;
+  // pages with the same title (a site's pages often share one) also show their address, to tell them apart
+  const titles = steps.map((i) => hist.entries[i].title || hist.entries[i].url);
+  const short = (url) => { const u = url.replace(/^https?:\/\/(www\.)?/, ''); return u.length > 34 ? `${u.slice(0, 33)}…` : u; };
+  const items = steps.map((i, n) => ({
+    id: `nav:${i}`, label: titles[n], leadHtml: favHtml('', hist.entries[i].url, hist.entries[i].title),
+    note: titles.indexOf(titles[n]) !== titles.lastIndexOf(titles[n]) ? short(hist.entries[i].url) : undefined,
+  }));
+  items.push({ type: 'separator' }, { id: 'nav:all', label: 'Show all history', icon: 'history', shortcut: 'open-history' });
+  const r = btn.getBoundingClientRect();
+  const choice = await showMenu(items, { x: r.left, y: r.bottom + 4 });
+  NH.held = false; // (the press ended over the menu, so its click never reaches the button)
+  if (choice === 'nav:all') runCommand('open-history');
+  else if (choice && ready(tab)) window.ultima.tabHistoryGo(tab.webview.getWebContentsId(), Number(choice.slice(4)));
+}
+
+function initNavHold() {
+  for (const dir of ['back', 'forward']) {
+    const btn = document.getElementById(sidebarButtonId(dir));
+    btn.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;
+      clearTimeout(NH.timer);
+      NH.timer = setTimeout(() => { NH.held = true; showNavHistory(dir, btn); }, NAV_HOLD_MS);
+    });
+    for (const type of ['pointerup', 'pointerleave', 'pointercancel']) btn.addEventListener(type, () => clearTimeout(NH.timer));
+    // the click that ends a hold mustn't also go one page (it runs before the button's own click)
+    btn.addEventListener('click', (e) => {
+      if (!NH.held) return;
+      NH.held = false;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }, true);
+  }
+}
+
 function initTabHistory() {
+  initNavHold();
   // a click anywhere else in Ultima closes it (a click in a page does too: see the webview focus handler)
   document.addEventListener('mousedown', (e) => {
     if (TH.panel && !TH.panel.contains(e.target) && !e.target.closest(`#${sidebarButtonId('tab-history')}, .ctx-layer, .dd-layer`)) closeTabHistory();

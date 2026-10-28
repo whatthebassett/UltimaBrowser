@@ -17,7 +17,7 @@
     { key: 'midiSysex', label: 'MIDI devices', icon: 'music', kind: 'ask', what: 'control MIDI devices' },
     { key: 'window-management', label: 'Window management', icon: 'app-window', kind: 'ask', what: 'manage windows on your displays' },
     { key: 'idle-detection', label: 'Idle detection', icon: 'clock', kind: 'ask', what: 'know when you are idle' },
-    { key: 'popups', label: 'Pop-ups', icon: 'layers', kind: 'allow', note: 'Windows a site opens, like sign-in and payment windows. Links you open in new tabs aren’t affected.' },
+    { key: 'popups', label: 'Pop-ups', icon: 'layers', kind: 'allow', note: 'Windows a site opens, like sign-in windows.' },
     { key: 'sound', label: 'Sound', icon: 'volume', kind: 'allow' },
     { key: 'images', label: 'Images', icon: 'image', kind: 'allow', reload: true },
     { key: 'javascript', label: 'JavaScript', icon: 'braces', kind: 'allow', reload: true, note: 'Most sites need it to work.' },

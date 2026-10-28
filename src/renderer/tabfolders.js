@@ -70,7 +70,10 @@ function tabListHtml(tabs) {
     // collapsed, it still shows the tab that's open (and the rest of its split view)
     const open = tabById(B.activeId);
     const shown = f.collapsed ? inside.filter((x) => x === open || (open?.splitId && x.splitId === open.splitId)) : inside;
-    html += `<div class="tfolder ${f.collapsed ? 'collapsed' : ''}" data-folder="${f.id}" style="--fc:${folderColor(f.color)}">
+    // (--n and --s: how many lone tabs and split views it shows, which size it in the horizontal tab strip)
+    const splits = new Set(shown.filter((x) => x.splitId).map((x) => x.splitId)).size;
+    const lone = shown.filter((x) => !x.splitId).length;
+    html += `<div class="tfolder ${f.collapsed ? 'collapsed' : ''}" data-folder="${f.id}" style="--fc:${folderColor(f.color)}; --n:${lone}; --s:${splits}">
       <div class="tfolder-head" data-folder-head="${f.id}" title="${esc(f.name || 'Folder')} — ${inside.length} tab${inside.length === 1 ? '' : 's'}\n${f.collapsed ? 'Click to expand' : 'Click to collapse'}, right-click for more">
         <span class="tfolder-chev">${icon('forward', 12)}</span>
         <span class="tfolder-icon">${icon('folder', 15)}</span>
@@ -82,6 +85,19 @@ function tabListHtml(tabs) {
     </div>`;
   }
   return html;
+}
+
+// In the horizontal tab strip a folder's label never shrinks, so left alone its tabs would give up the whole folder's
+// share when the strip runs out of room. Each folder shrinks at the rate its tabs alone would, so they narrow like the
+// rest.
+function sizeStripFolders() {
+  if (!document.body.classList.contains('htabs')) return;
+  for (const f of $$('#tabs .tfolder')) {
+    // the tabs' full width, as styles.css sizes .tfolder-tabs
+    const tabs = Number(f.style.getPropertyValue('--n')) * 222 + Number(f.style.getPropertyValue('--s')) * 242 - 2;
+    const label = $('.tfolder-head', f).offsetWidth + 2;
+    f.style.flexShrink = tabs > 0 ? (tabs / (tabs + label)).toFixed(3) : '';
+  }
 }
 
 function nextFolderColor(spaceId) {
@@ -135,9 +151,76 @@ function removeTabFromFolder(tab) {
 function toggleFolder(id) {
   const f = folderById(id);
   if (!f) return;
+  const box = () => $(`.tfolder[data-folder="${id}"] .tfolder-tabs`);
+  const before = box();
+  const closing = folderSlides.get(id); // clicked again while it was closing: it opens from what's staying
+  folderSlides.delete(id);
+  const was = { size: before ? sizeAcross(before) : 0, tabs: closing?.kept || new Set(before ? $$('.tab[data-tab]', before).map((el) => el.dataset.tab) : []) };
   f.collapsed = !f.collapsed;
-  renderTabs();
   saveSession();
+  if (f.collapsed && before) slideFolderClosed(f, before);
+  else { renderTabs(); if (box()) slideFolderOpen(box(), was); }
+}
+
+// Opening or closing a folder slides its tabs in or out instead of jumping: each tab that appears grows from nothing
+// and fades in, each that goes shrinks away (closing redraws the sidebar once they're gone). Down the sidebar they
+// grow taller; in the horizontal tab strip, wider, and the folder's underline with them.
+const FOLDER_SLIDE = { duration: 200, easing: 'cubic-bezier(0.2, 0, 0, 1)' };
+const folderSlides = new Map(); // folder id → its closing slide, until it redraws
+const sizeAcross = (el) => (tabsAcross() ? el.getBoundingClientRect().width : el.getBoundingClientRect().height);
+// the blocks of a folder's tabs: a tab, or a split view (which comes and goes as one)
+const folderBlocks = (box) => [...new Set($$('.tab[data-tab]', box).map((el) => el.closest('.tsplit') || el))];
+const blockTabs = (el) => (el.matches('.tab') ? [el.dataset.tab] : $$('.tab[data-tab]', el).map((t) => t.dataset.tab));
+
+// (r: its size where it ends up, or starts from; measured before anything around it starts moving)
+function slideBlock(el, appearing, r = el.getBoundingClientRect()) {
+  const across = tabsAcross();
+  const gone = across
+    ? { flexBasis: '0px', width: '0px', minWidth: '0px', paddingLeft: '0px', paddingRight: '0px', marginRight: '-2px', opacity: 0 }
+    : { height: '0px', minHeight: '0px', paddingTop: '0px', paddingBottom: '0px', marginBottom: '-2px', opacity: 0 };
+  const full = across ? { flexBasis: `${r.width}px`, width: `${r.width}px`, minWidth: `${r.width}px`, opacity: 1 } : { height: `${r.height}px`, minHeight: `${r.height}px`, opacity: 1 };
+  el.style.overflow = 'hidden';
+  el.style.flexShrink = '0';
+  const a = el.animate(appearing ? [gone, full] : [full, gone], { ...FOLDER_SLIDE, fill: appearing ? 'none' : 'forwards' });
+  if (appearing) a.onfinish = a.oncancel = () => { el.style.overflow = ''; el.style.flexShrink = ''; };
+  return a;
+}
+
+// in the tab strip the folder's tabs part has a set width (styles.css), so it's slid along with them
+function slideStripWidth(box, from, to, closing) {
+  if (!tabsAcross() || from === to) return null;
+  box.style.overflow = 'hidden';
+  const a = box.animate([{ width: `${from}px` }, { width: `${to}px` }], { ...FOLDER_SLIDE, fill: closing ? 'forwards' : 'none' });
+  if (!closing) a.onfinish = a.oncancel = () => { box.style.overflow = ''; }; // (closing, the redraw replaces it)
+  return a;
+}
+
+function slideFolderOpen(box, was) {
+  const blocks = folderBlocks(box).filter((el) => !blockTabs(el).some((t) => was.tabs.has(t)));
+  if (!blocks.length) return;
+  const sizes = blocks.map((el) => el.getBoundingClientRect());
+  slideStripWidth(box, was.size, sizeAcross(box));
+  blocks.forEach((el, i) => slideBlock(el, true, sizes[i]));
+}
+
+function slideFolderClosed(f, box) {
+  // what stays: the open tab, if it's in here (and the rest of its split view)
+  const open = tabById(B.activeId);
+  const stays = (el) => blockTabs(el).some((t) => Number(t) === open?.id || (open?.splitId && tabById(Number(t))?.splitId === open.splitId));
+  const blocks = folderBlocks(box);
+  const going = blocks.filter((el) => !stays(el));
+  const kept = blocks.filter(stays);
+  if (!going.length) { renderTabs(); return; }
+  box.parentElement.classList.add('collapsed'); // its chevron turns as they go
+  const to = kept.reduce((w, el) => w + el.getBoundingClientRect().width, 0) + Math.max(0, kept.length - 1) * 2;
+  const anims = [slideStripWidth(box, box.getBoundingClientRect().width, to, true), ...going.map((el) => slideBlock(el, false))].filter(Boolean);
+  const slide = { kept: new Set(kept.flatMap(blockTabs)) };
+  folderSlides.set(f.id, slide);
+  Promise.all(anims.map((a) => a.finished)).catch(() => {}).then(() => {
+    if (folderSlides.get(f.id) !== slide) return; // opened again meanwhile
+    folderSlides.delete(f.id);
+    renderTabs();
+  });
 }
 
 async function renameFolder(f) {

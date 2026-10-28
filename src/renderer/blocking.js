@@ -79,20 +79,20 @@ function blockerSettingsGroups() {
   const oldest = Math.min(...lists.map((l) => l.updated));
   const failed = lists.some((l) => l.error);
   const listsDesc = st?.updating ? 'Updating…'
-    : fetched ? `EasyList, EasyPrivacy and uBlock Origin’s lists, ${st.rules.toLocaleString()} rules. Updated ${timeAgo(oldest)}; they update by themselves.${failed ? ' The last update didn’t work.' : ''}`
-      : `Some of the lists ${failed ? 'couldn’t be downloaded' : 'haven’t downloaded yet'}, so ${lists.some((l) => l.updated) ? 'the others' : 'a short built-in list of the biggest ad and tracking networks'} are used until they are.`;
+    : fetched ? `${st.rules.toLocaleString()} rules, updated ${timeAgo(oldest)}.${failed ? ' The last update failed.' : ''}`
+      : `Some lists ${failed ? 'couldn’t be downloaded' : 'haven’t downloaded yet'}.`;
   const off = Object.keys(B.settings.blockingOff || {}).sort();
   return [
     sGroup('Ads and trackers', [
-      sRow('Block ads', 'Ads on web pages, and the empty boxes they would leave behind.', sSwitch('blockAds')),
-      sRow('Block trackers', 'Scripts and pixels that follow what you do from site to site.', sSwitch('blockTrackers')),
+      sRow('Block ads', 'Hide ads on web pages.', sSwitch('blockAds')),
+      sRow('Block trackers', 'Stop sites from following you around the web.', sSwitch('blockTrackers')),
       sRow('Filter lists', esc(listsDesc), `<button class="btn" data-blocker-update ${st?.updating ? 'disabled' : ''}>${icon('reload', 14)} Update now</button>`),
     ]),
     off.length ? sGroup('Sites where blocking is off', off.map((host) => sRow(esc(host), '', `<button class="btn" data-blocking-on="${esc(host)}">Turn on</button>`))) : '',
     sGroup('Tracking protection', [
-      sRow('Remove tracking from links', 'Takes tracking codes such as utm_source and fbclid out of the addresses of pages you open.', sSwitch('cleanLinks')),
-      sRow('Ask sites not to sell or share my data', 'Sends Global Privacy Control to every site. In some places, like California, sites must honor it.', sSwitch('globalPrivacyControl')),
-      sRow('Block third-party cookies', 'Other sites inside a page, like ad networks, can’t set or read their cookies there. Some sign-ins and embedded videos may stop working: turning blocking off for a site allows them on it.', sSwitch('blockThirdPartyCookies')),
+      sRow('Remove tracking from links', 'Strip tracking codes from links you open.', sSwitch('cleanLinks')),
+      sRow('Ask sites not to sell or share my data', 'Sends Global Privacy Control to every site.', sSwitch('globalPrivacyControl')),
+      sRow('Block third-party cookies', 'Some sign-ins and embedded videos may stop working.', sSwitch('blockThirdPartyCookies')),
     ]),
   ].join('');
 }

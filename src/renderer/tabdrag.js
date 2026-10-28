@@ -7,6 +7,11 @@
 const TD = { press: null, drag: null, dirty: false };
 const CARD_START = 5; // pixels the pointer moves before a press becomes a drag
 const LIST_ZONES = { essentials: 'essential', 'pinned-list': 'pinned', tabs: 'normal' };
+// Lists run down the sidebar, or across the tab strip with horizontal tabs (tablayout.js): "ahead of the pointer" and
+// "within a span" follow that axis, so every rule below works both ways.
+const isAhead = (r, d) => (tabsAcross() ? r.left + r.width / 2 > d.x : r.top + r.height / 2 > d.y);
+const along = (d) => (tabsAcross() ? d.x : d.y);
+const span = (r) => (tabsAcross() ? { start: r.left, end: r.right, size: r.width } : { start: r.top, end: r.bottom, size: r.height });
 
 function initTabCardDrag() {
   const side = $('#sidebar');
@@ -98,13 +103,19 @@ function cardFrame(now) {
   requestAnimationFrame(cardFrame);
 }
 
-// Near the top or bottom of the tab list, the list scrolls.
+// Near the top or bottom of the tab list (its ends, across the strip), the list scrolls.
 function autoScrollTabs(d) {
   const list = $('#tabs');
   const r = list.getBoundingClientRect();
+  const edge = 36;
+  if (tabsAcross()) {
+    if (d.y < r.top - 20 || d.y > r.bottom + 20) return;
+    const speed = d.x < r.left + edge ? -(r.left + edge - d.x) / 3 : d.x > r.right - edge ? (d.x - (r.right - edge)) / 3 : 0;
+    if (speed && d.x > r.left - 40 && d.x < r.right + 40) list.scrollLeft += Math.max(-14, Math.min(14, speed));
+    return;
+  }
   const side = $('#sidebar').getBoundingClientRect();
   if (d.x < side.left || d.x > side.right) return;
-  const edge = 36;
   const speed = d.y < r.top + edge ? -(r.top + edge - d.y) / 3 : d.y > r.bottom - edge ? (d.y - (r.bottom - edge)) / 3 : 0;
   if (speed && d.y > r.top - 40 && d.y < r.bottom + 40) list.scrollTop += Math.max(-14, Math.min(14, speed));
 }
@@ -159,9 +170,9 @@ function aimCard() {
   // list moves the row by that much, which would otherwise bounce the gap straight back out.
   const inRow = d.slot.parentElement.classList.contains('tsplit') ? d.slot.parentElement : null;
   const band = (el) => {
-    const r = restingRect(el);
+    const r = span(restingRect(el));
     const extra = el === inRow ? 38 : 0;
-    return d.y >= r.top - (extra && 6) && d.y <= r.bottom + extra;
+    return along(d) >= r.start - (extra && 6) && along(d) <= r.end + extra;
   };
   const row = canSplit(d.tab) && $$('.tsplit', zone).find(band);
   if (row && (row.dataset.split === d.tab.splitId || splitTabs(row.dataset.split).length < SPLIT_MAX)) {
@@ -173,7 +184,7 @@ function aimCard() {
   if (aimIntoFolder(d, zone)) return;
   // a list: before the first row (or folder header, or split view) whose middle is below the pointer
   const items = [...new Set($$('.tab[data-tab]:not(.drag-source), .tfolder-head', zone).map((el) => el.closest('.tsplit') || el))];
-  const next = items.find((el) => { const r = restingRect(el); return r.top + r.height / 2 > d.y; });
+  const next = items.find((el) => isAhead(restingRect(el), d));
   if (!next) moveSlot(zone, null);
   else if (next.classList.contains('tfolder-head')) moveSlot(next.parentElement.parentElement, next.parentElement); // just before the folder
   else if (next.classList.contains('tsplit')) moveSlot(next.parentElement, next); // a split view is one block
@@ -197,7 +208,7 @@ function aimFolderCard(d, at) {
   if (!zone) { d.target = { kind: 'none' }; moveSlot(d.home.parent, d.home.next); return; }
   d.target = { kind: 'list' };
   const items = [...zone.children].filter((el) => !el.classList.contains('drag-source') && !el.classList.contains('drag-slot'));
-  const next = items.find((el) => { const r = restingRect(el.classList.contains('tfolder') ? el.querySelector('.tfolder-head') : el); return r.top + r.height / 2 > d.y; });
+  const next = items.find((el) => isAhead(restingRect(el.classList.contains('tfolder') ? el.querySelector('.tfolder-head') : el), d));
   moveSlot(zone, next || null);
 }
 
@@ -217,11 +228,11 @@ const FOLDER_LIP = 14; // px below a folder's last tab that still count as "in t
 function aimIntoFolder(d, zone) {
   for (const fEl of $$('.tfolder', zone)) {
     if (fEl.classList.contains('drag-source')) continue;
-    const r = restingRect(fEl);
-    if (d.y < r.top || d.y > r.bottom + FOLDER_LIP) continue;
+    const r = span(restingRect(fEl));
+    if (along(d) < r.start || along(d) > r.end + FOLDER_LIP) continue;
     const head = $('.tfolder-head', fEl);
-    const hr = restingRect(head);
-    if (d.y < hr.top + hr.height * 0.3) { moveSlot(fEl.parentElement, fEl); return true; } // just above it
+    const hr = span(restingRect(head));
+    if (along(d) < hr.start + hr.size * 0.3) { moveSlot(fEl.parentElement, fEl); return true; } // just above (before) it
     fEl.classList.add('drop-folder');
     if (fEl.classList.contains('collapsed')) {
       // no gap inside a closed folder: the header lights up, and nothing in the sidebar moves under the pointer
@@ -230,10 +241,10 @@ function aimIntoFolder(d, zone) {
       return true;
     }
     const box = $('.tfolder-tabs', fEl);
-    if (d.y <= hr.bottom) { moveSlot(box, box.firstElementChild); return true; } // on the header: first in the folder
+    if (along(d) <= hr.end) { moveSlot(box, box.firstElementChild); return true; } // on the header: first in the folder
     // among its tabs (a split view inside is one block); below the last one: at the end
     const kids = [...new Set($$('.tab[data-tab]:not(.drag-source)', box).map((el) => el.closest('.tsplit') || el))];
-    const next = kids.find((el) => { const kr = restingRect(el); return kr.top + kr.height / 2 > d.y; });
+    const next = kids.find((el) => isAhead(restingRect(el), d));
     moveSlot(box, next || null);
     return true;
   }

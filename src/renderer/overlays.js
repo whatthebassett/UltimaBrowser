@@ -1,7 +1,8 @@
 // Ultima's own context menus, dialogs and tooltips, used instead of the native ones so everything
 // matches the UI (glass, Inter, your keybindings).
 //
-// Menu items: { id, label, icon?, leadHtml? (e.g. a site icon), shortcut? (command id), hint? (literal key text), enabled?,
+// Menu items: { id, label, icon?, leadHtml? (e.g. a site icon), shortcut? (command id), hint? (literal key text), note? (plain
+//               text on the right, e.g. an address), enabled?,
 //               type?: 'separator' | 'checkbox', checked?, danger?, submenu?: [items] }
 // or a row of icon buttons: { type: 'actions', buttons: [{ id, label, icon, enabled?, on?, shortcut?, hint? }] }
 
@@ -47,7 +48,8 @@ function menuItemHtml(it, i) {
     }).join('')}</div>`;
   }
   const keys = it.shortcut && keysFor(it.shortcut)[0] ? kbdHtml(keysFor(it.shortcut)[0])
-    : it.hint ? it.hint.split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('') : '';
+    : it.hint ? it.hint.split('+').map((k) => `<kbd>${esc(k)}</kbd>`).join('')
+      : it.note ? `<span class="ctx-note">${esc(it.note)}</span>` : '';
   const tick = it.type === 'checkbox' && it.checked ? icon('check', 14) : '';
   let lead;
   if (it.leadHtml) lead = `<span class="ctx-icon ctx-fav">${it.leadHtml}</span>`;
