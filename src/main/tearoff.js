@@ -252,6 +252,17 @@ function drop(from, tab, { openWindow, normalSize, privateDone }) {
   return true;
 }
 
+// Several tabs at once (chosen in the sidebar) into a new window, which opens where a new window does, on the one
+// that was open among them.
+function moveToNewWindow(from, tabs, { openWindow, privateDone }) {
+  const infos = tabs.filter((t) => t && typeof t === 'object').map((t) => ({ ...tabInfo(from, t), active: Boolean(t.active) }));
+  if (!infos.length) return false;
+  const moved = holdPrivate({ private: infos.some((t) => t.private) }, privateDone);
+  openWindow({ private: from.private, moved: infos });
+  setTimeout(moved, 3000);
+  return true;
+}
+
 // The ghost finished its last animation: out of the way until the next drag.
 function settled() {
   if (!drag && ghost && !ghost.isDestroyed()) ghost.hide();
@@ -283,4 +294,4 @@ function destroy() {
 
 const movingPrivate = () => privateMoves > 0;
 
-module.exports = { begin, out, over, cancel, drop, moveTo, settled, claim, restoreInto, destroy, movingPrivate };
+module.exports = { begin, out, over, cancel, drop, moveTo, moveToNewWindow, settled, claim, restoreInto, destroy, movingPrivate };

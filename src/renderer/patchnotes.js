@@ -1,7 +1,60 @@
 // Patch notes, newest first, shown in Settings → About. Add an entry for each release (version as in package.json).
 // The first release describes what Ultima is (intro + features, no labels); later ones list changes by section.
 // Each item is [what, one short plain sentence on it]; sections without items are left out.
+// A big feature can get its own area at the top of its release (`highlights`): { title, icon, text: a few plain
+// sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
+  {
+    version: '0.3.0',
+    date: '2026-10-29',
+    highlights: [
+      {
+        title: 'Chrome extensions, working properly',
+        icon: 'puzzle',
+        text: 'Far more Chrome extensions now work in Ultima, and they behave as they do in Chrome. Popups and options pages open every time instead of getting stuck loading, extensions that need Chrome-only features start up, and they run on every tab, including the ones Ultima reopens when it starts.',
+        items: [
+          ['Side panels', 'Extensions like Claude open their side panel next to the page.'],
+          ['Updates', 'Extensions from the Chrome Web Store keep themselves up to date.'],
+          ['Desktop apps', 'Extensions can talk to their desktop apps, like Bitwarden’s.'],
+          ['Shortcuts', 'Extensions’ keyboard shortcuts work, and you can change them in Settings.'],
+          ['Menu items', 'Extensions can add items to the right-click menu.'],
+        ],
+      },
+      {
+        title: 'A password manager, built in',
+        icon: 'key',
+        text: 'Ultima now saves your logins as you sign in, fills them in for you, and keeps them all in a vault you can search and organize. Nothing to install, and it works on every site.',
+        items: [
+          ['Password vault', 'See, search, add and edit every saved login, with folders and favorites.'],
+          ['Pick a login', 'Click a login field to choose from every login you saved for that site.'],
+          ['Save passwords', 'After you sign in, Ultima offers to save a new password or update a changed one.'],
+          ['Password generator', 'Make a strong password or passphrase, and use it right in a sign-up form.'],
+          ['Weak and reused passwords', 'The vault shows which passwords are weak or used on more than one site.'],
+        ],
+      },
+      {
+        title: 'Work with many tabs at once',
+        icon: 'layers',
+        text: 'Choose several tabs and act on them together. Ctrl+click tabs to add them one by one, or Shift+click to choose a whole run of them. Press Esc or click anywhere else to let them go.',
+        items: [
+          ['One menu for all of them', 'Right-click any of them to close, reload, unload, duplicate, pin or mute them all.'],
+          ['Keep them together', 'Put them in a new folder, another space, a split view, a new window or a folder of Waypoints.'],
+          ['Drag them together', 'Drag one and the rest come along, in the same order.'],
+        ],
+      },
+    ],
+    new: [
+      ['Sleeping tabs', 'Tabs you haven’t used in a while can go to sleep to save memory. Turn it on in Settings → General.'],
+    ],
+    improved: [
+      ['Page messages', 'Alerts and questions from pages and extensions look like the rest of Ultima.'],
+    ],
+    fixed: [
+      ['No more stray New Tabs', 'Closing your last tab closes the window, and an empty space shows the new tab page without adding a tab.'],
+      ['Closing a tab opens the next one', 'Your tabs come first, even asleep ones, then open pinned tabs, then open Essentials. Closing the last one closes the window.'],
+      ['Moving the window with horizontal tabs', 'There’s always room after the + button to drag the window, however many tabs are open.'],
+    ],
+  },
   {
     version: '0.2.3',
     date: '2026-10-29',
@@ -145,7 +198,11 @@ function patchNotesHtml(current) {
   const list = (items) => `<ul class="pn-list">${items.map(([what, more]) => `<li><b>${esc(what)}</b>${more ? ` — ${esc(more)}` : ''}</li>`).join('')}</ul>`;
   const head = (n) => `<div class="pn-head"><span class="pn-version">Version ${esc(n.version)}</span>${n.version === current ? '<span class="s-badge">Current</span>' : ''}
       <span class="pn-date">${esc(date(n.date))}</span></div>${n.title ? `<div class="pn-title">${esc(n.title)}</div>` : ''}`;
+  const highlight = (f) => `<div class="pn-highlight">
+      <div class="pn-hl-title">${f.icon ? `<span class="pn-hl-icon">${icon(f.icon, 16)}</span>` : ''}${esc(f.title)}</div>
+      ${f.text ? `<p class="pn-hl-text">${esc(f.text)}</p>` : ''}${f.items?.length ? list(f.items) : ''}</div>`;
   const body = (n) => (n.intro ? `<p class="pn-intro">${esc(n.intro)}</p>` : '')
+    + (n.highlights?.length ? `<div class="pn-highlights">${n.highlights.map(highlight).join('')}</div>` : '')
     + (n.features?.length ? `<div class="pn-section">${list(n.features)}</div>` : '')
     + PATCH_SECTIONS.filter(([k]) => n[k]?.length).map(([k, label]) => `<div class="pn-section">
       <div class="pn-label pn-${k}">${label}</div>${list(n[k])}</div>`).join('');

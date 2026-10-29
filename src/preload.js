@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('ultima', {
   tearCancel: invoke('tear:cancel'),
   tearDrop: invoke('tear:drop'),
   tearBack: invoke('tear:back'),
+  moveTabsToWindow: invoke('window:move-tabs'),
   dockOver: invoke('dock:over'),
   windowIsOpen: invoke('window:is-open'),
   toggleFullscreen: invoke('window:fullscreen'),
@@ -78,6 +79,19 @@ contextBridge.exposeInMainWorld('ultima', {
   copyPassword: invoke('passwords:copy'),
   fillPassword: invoke('passwords:fill'),
   deletePassword: invoke('passwords:delete'),
+  deleteAllPasswords: invoke('passwords:delete-all'),
+  getLogin: invoke('passwords:get'),
+  saveLogin: invoke('passwords:save'),
+  passwordHealth: invoke('passwords:health'),
+  passwordFolders: invoke('passwords:folders'),
+  addPasswordFolder: invoke('passwords:add-folder'),
+  renamePasswordFolder: invoke('passwords:rename-folder'),
+  deletePasswordFolder: invoke('passwords:delete-folder'),
+  exportPasswords: invoke('passwords:export'),
+  answerPasswordOffer: invoke('passwords:offer-answer'),
+  fillLoginField: invoke('passwords:field-fill'),
+  fillGeneratedPassword: invoke('passwords:field-generated'),
+  setLoginMenu: invoke('passwords:field-menu'),
 
   clearData: invoke('data:clear'),
   openDownload: invoke('download:open'),
@@ -95,12 +109,18 @@ contextBridge.exposeInMainWorld('ultima', {
   removeExtension: invoke('ext:remove'),
   extensionRuntimeId: invoke('ext:runtime-id'),
   popoutShown: (webContentsId) => ipcRenderer.send('ultima:popout-shown', Number(webContentsId)),
+  sidePanelShown: (webContentsId, open, tabId) => ipcRenderer.send('ultima:side-panel', Number(webContentsId), Boolean(open), Number.isInteger(tabId) ? tabId : null),
+  extensionAction: invoke('ext:action'),
+  checkExtensionUpdates: invoke('ext:check-updates'),
+  extensionActionMenu: invoke('ext:action-menu'),
+  chooseExtensionActionMenu: invoke('ext:action-menu-choose'),
+  setExtensionShortcut: invoke('ext:set-shortcut'),
   focusGuest: (webContentsId, point) => ipcRenderer.send('ultima:focus-guest', Number(webContentsId), point && { x: Number(point.x), y: Number(point.y) }),
   openExtensionLog: invoke('ext:open-log'),
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock'];
+    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

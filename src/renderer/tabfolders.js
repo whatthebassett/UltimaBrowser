@@ -124,12 +124,16 @@ function addTabToFolder(tab, id) {
   saveSession();
 }
 
-async function newTabFolder(tab) {
-  if (!tab || tab.zone === 'essential') return toast('Essentials can’t go in a folder');
-  // a pinned tab's folder is a pinned folder
-  const f = { id: `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, spaceId: tab.spaceId, name: 'New folder', color: nextFolderColor(tab.spaceId), collapsed: false, zone: tab.zone };
+// `tabs`: one tab, or several (chosen in the sidebar, tabselect.js) that go in together, in their order
+async function newTabFolder(tabs) {
+  tabs = [].concat(tabs).filter(Boolean);
+  const tab = tabs[0];
+  if (!tab || tabs.some((t) => t.zone === 'essential')) return toast('Essentials can’t go in a folder');
+  // pinned tabs' folder is a pinned folder (with any regular tab among them, a regular one)
+  const zone = tabs.every((t) => t.zone === 'pinned') ? 'pinned' : 'normal';
+  const f = { id: `f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, spaceId: tab.spaceId, name: 'New folder', color: nextFolderColor(tab.spaceId), collapsed: false, zone };
   B.folders.push(f);
-  addTabToFolder(tab, f.id);
+  for (const t of tabs) addTabToFolder(t, f.id);
   const v = await editDialog({ title: 'New tab folder', fields: [{ id: 'name', label: 'Name', value: f.name }], ok: 'Save' });
   if (v?.name.trim()) { f.name = v.name.trim(); renderTabs(); saveSession(); }
   return f;

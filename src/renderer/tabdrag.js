@@ -9,6 +9,9 @@
 // back to its pinned link.
 // A folder drags the same way by its header: the whole folder is the card, and it lands among the regular or pinned
 // tabs (which pins or unpins it).
+// Dragging one of the tabs you chose (tabselect.js) takes them all: the card shows how many, the others' rows step out
+// of the list, and they land together in its gap, in a folder or on the bookmarks bar (not in split view or a window
+// of their own).
 const TD = { press: null, drag: null, dirty: false };
 const CARD_START = 5; // pixels the pointer moves before a press becomes a drag
 const LIST_ZONES = { essentials: 'essential', 'pinned-list': 'pinned', tabs: 'normal' };
@@ -50,6 +53,7 @@ function startCardDrag(e) {
   TD.press = null;
   const tab = p.folderId ? null : tabById(p.id);
   if ((!tab && !folderById(p.folderId)) || !document.contains(p.el)) return;
+  const group = tab ? dragSelection(tab) : null; // the tabs you chose, when it's one of them
   const r = p.el.getBoundingClientRect();
   const list = $('#tabs').getBoundingClientRect(); // before the drag opens drop spots around it (a torn-off tab lands first in it)
   const isPin = p.el.classList.contains('pin');
@@ -60,20 +64,26 @@ function startCardDrag(e) {
     for (const a of ['data-tab', 'data-folder', 'data-folder-head', 'title', 'data-tip', 'id']) el.removeAttribute(a);
   }
   card.tabIndex = -1;
+  card.classList.remove('selected');
+  if (group) { card.classList.add('multi'); card.append(h(`<span class="drag-count">${group.length}</span>`)); }
   Object.assign(card.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
   document.body.append(card);
   const slot = h(`<div class="drag-slot ${isPin ? 'pin-slot' : 'tab-slot'}"></div>`);
   p.el.before(slot);
   p.el.classList.add('drag-source');
+  // the other chosen tabs leave the list while they're carried
+  const others = (group || []).filter((t) => t !== tab).map((t) => $(`#sidebar [data-tab="${t.id}"]`)).filter(Boolean);
+  for (const el of others) el.classList.add('drag-source');
+  layoutEssentials();
   TD.drag = {
-    id: p.id, folderId: p.folderId, tab, card, slot, source: p.el, home: { parent: slot.parentElement, next: p.el },
+    id: p.id, folderId: p.folderId, tab, group, others, card, slot, source: p.el, home: { parent: slot.parentElement, next: p.el },
     left: r.left, top: r.top, offX: p.x - r.left, offY: p.y - r.top, x: e.clientX, y: e.clientY,
     vx: 0, tilt: 0, t0: performance.now(), target: { kind: 'list' }, list,
   };
   document.body.classList.add('tab-dragging', 'card-dragging');
   $$('webview').forEach((w) => { w.style.pointerEvents = 'none'; }); // the page mustn't swallow the pointer
   try { document.body.setPointerCapture(p.pointerId); } catch { /* released already */ }
-  if (tab) beginTear(TD.drag);
+  if (tab && !group) beginTear(TD.drag);
   card.focus({ preventScroll: true }); // keys (Esc) come to Ultima, not the page
   // the click that ends this press must not open whatever is under the pointer (removed when the drag ends)
   TD.eatClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
@@ -153,6 +163,8 @@ function aimCard() {
     moveSlot(d.home.parent, d.home.next);
     return;
   }
+  // the tabs you chose don't go onto the page
+  if (d.group && at?.closest('#viewport')) { d.target = { kind: 'none' }; moveSlot(d.home.parent, d.home.next); return; }
   // onto the page: split view with the tab that's showing, on that side
   if (at?.closest('#viewport')) {
     const base = activeTab();
@@ -193,7 +205,7 @@ function aimCard() {
     const extra = el === inRow ? 38 : 0;
     return along(d) >= r.start - (extra && 6) && along(d) <= r.end + extra;
   };
-  const row = canSplit(d.tab) && $$('.tsplit', zone).find(band);
+  const row = !d.group && canSplit(d.tab) && $$('.tsplit', zone).find(band);
   if (row && (row.dataset.split === d.tab.splitId || splitTabs(row.dataset.split).length < SPLIT_MAX)) {
     const parts = $$('.tab[data-tab]:not(.drag-source)', row);
     const after = parts.find((p) => { const r = restingRect(p); return r.left + r.width / 2 > d.x; });
@@ -431,13 +443,11 @@ function detachTab(tab) {
   if (B.tabs.every((t) => t === tab || blank(t) || (isKept(t) && !t.webview))) { window.ultima.closeWindow(); return; }
   // a pinned tab or Essential stays (it's in every window's sidebar), back on its pinned link and unloaded
   if (isKept(tab)) { unloadTab(tab); return; }
-  if (B.activeId === tab.id) {
-    const next = pickNextTab(tab);
-    if (next) activateTab(next.id);
-    else { B.activeId = null; createTab(); }
-  }
+  const next = B.activeId === tab.id ? pickNextTab(tab) : undefined;
+  if (next) activateTab(next.id);
   dropWebview(tab);
   B.tabs = B.tabs.filter((t) => t !== tab);
+  if (next === null) leaveEmpty(); // (its space has nothing else open: tabs.js)
   renderTabs();
   saveSession();
 }
@@ -594,6 +604,7 @@ function finishCardDrag(how) {
     const order = $$('[data-tab], .drag-slot', zoneEl);
     const after = order.slice(order.indexOf(d.slot) + 1).find((el) => el.dataset.tab && !el.classList.contains('drag-source'));
     move = { zone: LIST_ZONES[zoneEl.id], index: after ? B.tabs.indexOf(tabById(Number(after.dataset.tab))) : B.tabs.length, folder: d.slot.closest('.tfolder')?.dataset.folder,
+      before: after ? tabById(Number(after.dataset.tab)) : null,
       // dropped back into its own split row it stays in the split; anywhere else it leaves it
       split: d.tab?.splitId && d.slot.closest(`.tsplit[data-split="${d.tab.splitId}"]`) ? d.tab.splitId : undefined };
   }
@@ -602,6 +613,7 @@ function finishCardDrag(how) {
   d.slot.remove();
   showSplitDrop(null);
   d.source.classList.remove('drag-source');
+  for (const el of d.others || []) el.classList.remove('drag-source');
   layoutEssentials();
   document.body.classList.remove('tab-dragging', 'card-dragging');
   if (d.incoming) sidebarLeave(500);
@@ -611,7 +623,8 @@ function finishCardDrag(how) {
   if (folderMove) moveFolder(d.folderId, folderMove.zone, folderMove.before);
   if (arrange) arrangeSplit(arrange.id, arrange.order);
   const tab = d.folderId ? null : tabById(d.id);
-  if (tab && move) {
+  if (tab && d.group) dropGroup(d, how, move);
+  else if (tab && move) {
     tab.folderId = move.zone !== 'essential' ? move.folder : undefined;
     tab.splitId = move.split;
     moveTab(tab.id, move.index, move.zone);
@@ -619,4 +632,26 @@ function finishCardDrag(how) {
   else if (tab && how === 'split') splitWith(activeTab(), tab, d.target.side);
   else if (tab && how === 'bar') window.ultima.addBookmark({ url: tab.url, title: tab.title, favicon: tab.favicon, parent: d.target.parent, index: d.target.index });
   if (TD.dirty || (!move && !folderMove && !arrange)) { TD.dirty = false; renderTabs(); }
+}
+
+// The tabs you chose, dropped together: into the gap (each before the tab that follows it, so they keep their order),
+// into a folder, or onto the bookmarks bar.
+function dropGroup(d, how, move) {
+  const tabs = d.group.filter((t) => B.tabs.includes(t));
+  if (move) {
+    const going = move.zone === 'normal' ? tabs : tabs.filter((t) => !t.private);
+    if (going.length < tabs.length) toast('Private tabs can’t be pinned or added to Essentials');
+    for (const t of going) {
+      t.folderId = move.zone !== 'essential' ? move.folder : undefined;
+      t.splitId = undefined;
+      moveTab(t.id, move.before && B.tabs.includes(move.before) ? B.tabs.indexOf(move.before) : B.tabs.length, move.zone);
+    }
+  } else if (how === 'folder') for (const t of tabs) addTabToFolder(t, d.target.id);
+  else if (how === 'bar') {
+    let index = d.target.index;
+    for (const t of tabs.filter((x) => !isInternal(x.url))) {
+      window.ultima.addBookmark({ url: t.url, title: t.title, favicon: t.favicon, parent: d.target.parent, index });
+      if (Number.isInteger(index)) index += 1;
+    }
+  }
 }

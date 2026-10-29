@@ -11,6 +11,7 @@ const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
 const taskManager = require('./taskmanager');
 const tearoff = require('./tearoff');
+const { initPasswords } = require('./passwords');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -48,6 +49,7 @@ let settings;
 let sessionStore;
 let data;
 let extensions;
+let passwords; // filling and saving logins in pages (passwords.js)
 const downloads = new Map();
 
 const DEFAULT_SETTINGS = {
@@ -64,6 +66,8 @@ const DEFAULT_SETTINGS = {
   centerBookmarksBar: false,
   searchEngine: 'google',
   restoreSession: true,
+  sleepTabs: false, // tabs in the background that long go to sleep (renderer/tabsleep.js)
+  sleepTabsAfter: 900, // seconds
   downloadDir: '', // '' = the system's Downloads folder
   askWhereToSave: false, // a Save As dialog for every download
   sidebarWidth: 264,
@@ -107,6 +111,11 @@ const DEFAULT_SETTINGS = {
   reduceMotion: false,
   hardwareAcceleration: true, // read at startup (HARDWARE_ACCELERATION above); a change applies after a restart
   taskManagerWindow: null, // where the task manager's window was last: { x, y, width, height }
+  // passwords (passwords.js, renderer/vault.js)
+  offerToSavePasswords: true, // "Save password?" after you sign in
+  passwordFieldMenu: true, // the menu of saved logins at login fields
+  passwordsNeverSave: [], // sites (base domains) never offered
+  passwordGenerator: {}, // the generator's last choices (renderer/pwgen.js)
   window:{ width: 1440, height: 900, maximized: false },
 };
 
@@ -153,6 +162,7 @@ function rebuildKeymap() {
     if (c.scope !== 'global') continue;
     for (const combo of bindings[c.id]) if (!globalKeys.has(combo)) globalKeys.set(combo, c.id);
   }
+  rebuildExtensionKeys(); // extensions get only the keys Ultima doesn't use
 }
 
 // Is the user typing in a text box right now? Reported per page by webview-preload.js and by the UI itself.
@@ -184,7 +194,9 @@ function hookShortcuts(wc) {
       return;
     }
     const cmd = shortcutFor(input, wc);
-    if (cmd) { event.preventDefault(); sendTo(windowOf(wc), 'command', cmd); }
+    if (cmd) { event.preventDefault(); sendTo(windowOf(wc), 'command', cmd); return; }
+    const fromExtension = extensionShortcutFor(input, wc); // an extension's shortcut (chrome.commands)
+    if (fromExtension) { event.preventDefault(); runExtensionCommand(fromExtension, wc); }
   });
 }
 
@@ -281,15 +293,21 @@ function pageContextMenu(wc, p) {
       item('Select all', () => wc.selectAll(), { enabled: f.canSelectAll, hint: `${MOD}+A` }),
       sep,
     );
-    const logins = data.passwordsFor(wc.getURL());
+    // the logins for the site of the frame clicked in (a sign-in form in a frame is that frame's site's)
+    const frame = p.frame && !p.frame.detached ? p.frame : wc.mainFrame;
+    const logins = /^https?:/i.test(frame.url) ? data.passwordsFor(frame.url) : [];
     if (logins.length) {
       t.push({
         id: 'logins',
         label: 'Fill saved login',
         icon: 'key',
-        submenu: logins.map((s) => item(s.username || '(no username)', () => fillLogin(wc, s.id))),
-      }, sep);
+        submenu: logins.map((s) => item(s.username || '(no username)', () => passwords.fillLogin(wc, s.id, frame), { note: s.name })),
+      });
     }
+    if (p.formControlType === 'input-password' && /^https?:/i.test(frame.url)) {
+      t.push(item('Suggest strong password…', () => send('pw-generate', { webContentsId: wc.id, frame: [frame.processId, frame.routingId], x: p.x, y: p.y }), { icon: 'sparkle' }));
+    }
+    if (logins.length || p.formControlType === 'input-password') t.push(sep);
   } else if (p.selectionText.trim()) {
     const sel = p.selectionText.trim();
     t.push(
@@ -311,6 +329,8 @@ function pageContextMenu(wc, p) {
       sep,
     );
   }
+  const fromExtensions = extensionMenuItems({ wc, params: p, item }); // their own items (chrome.contextMenus)
+  if (fromExtensions.length) t.push(...fromExtensions, sep);
   t.push(
     item('View page source', () => openTab(`view-source:${wc.getURL()}`, false), { icon: 'code' }),
     item('Inspect', () => wc.inspectElement(p.x, p.y), { icon: 'code', shortcut: 'devtools' }),
@@ -318,31 +338,6 @@ function pageContextMenu(wc, p) {
   pageMenuSeq += 1;
   pageMenu = { token: pageMenuSeq, actions };
   send('page-menu', { token: pageMenuSeq, webContentsId: wc.id, x: p.x, y: p.y, items: t });
-}
-
-// Fills the first visible password field (and the username field before it) without exposing secrets to the UI.
-async function fillLogin(wc, id) {
-  const cred = await data.getPassword(id);
-  if (!cred) return false;
-  const script = `(() => {
-    const cred = ${JSON.stringify(cred)};
-    const visible = (el) => el && el.offsetParent !== null && !el.disabled && !el.readOnly;
-    const set = (el, v) => {
-      const proto = Object.getPrototypeOf(el);
-      Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, v);
-      el.dispatchEvent(new Event('input', { bubbles: true }));
-      el.dispatchEvent(new Event('change', { bubbles: true }));
-    };
-    const pass = [...document.querySelectorAll('input[type=password]')].find(visible);
-    const fields = [...document.querySelectorAll('input:not([type=hidden]):not([type=password]):not([type=checkbox]):not([type=radio]):not([type=submit])')].filter(visible);
-    let user = null;
-    if (pass) user = fields.filter((f) => f.compareDocumentPosition(pass) & Node.DOCUMENT_POSITION_FOLLOWING).pop();
-    user = user || fields.find((f) => /user|email|login/i.test(f.name + f.id + f.autocomplete + f.type));
-    if (user && cred.username) set(user, cred.username);
-    if (pass) set(pass, cred.password);
-    return Boolean(pass || user);
-  })()`;
-  return wc.executeJavaScript(script, true).catch(() => false);
 }
 
 // ---- permissions: prompt once per origin, remember the answer ----
@@ -393,7 +388,7 @@ const cookieForHost = (cookie, host) => {
 const siteSessions = () => [...configuredSessions].map((name) => session.fromPartition(name));
 
 // Extensions open tabs through Ultima (Electron has no chrome.tabs.create). Web pages can't use this.
-const hookedWorkers = new Set(); // worker version ids
+const hookedWorkers = new WeakSet(); // running workers (ServiceWorkerMain), hooked once each
 function openTabForExtension(url) {
   if (typeof url === 'string' && /^(https?|chrome-extension):/i.test(url)) sendTo(currentWindow({ normal: true }), 'open-url', { url, background: false });
 }
@@ -460,6 +455,12 @@ ipcMain.handle('ultima:ext-alarms', (e, op, args) => {
   return extId ? extensionAlarms(e.sender.session, extId, op, Array.isArray(args) ? args : []) : null;
 });
 
+// An extension used an API Ultima only stands in for (see extension-compat.js): remembered for Settings → Extensions
+function noteUnsupported(extId, name) {
+  if (extId && typeof name === 'string' && extensions?.noteUnsupported(extId, name.slice(0, 80))) broadcast('extensions-changed');
+}
+ipcMain.on('ultima:ext-unsupported', (e, name) => noteUnsupported(extIdOf(e.senderFrame?.url), name));
+
 // An extension page wrote to storage: tell the extension's running background, which Electron doesn't (see
 // extension-compat.js). A background that isn't running reads storage fresh when it starts.
 ipcMain.on('ultima:ext-storage-changed', (e, changes, area) => {
@@ -507,12 +508,14 @@ function extensionContexts(extId, filter = {}) {
     let contextType;
     if (type === 'remote') contextType = 'OFFSCREEN_DOCUMENT';
     else if (type === 'backgroundPage') contextType = 'BACKGROUND';
+    else if (sidePanels.has(wc.id)) contextType = 'SIDE_PANEL';
     else if (type === 'webview') contextType = popupPath && new URL(url).pathname === popupPath && !popouts.has(wc.id) ? 'POPUP' : 'TAB';
     else continue;
-    const windowId = popouts.has(wc.id) ? POPOUT_WINDOW : contextType === 'TAB' || contextType === 'POPUP' ? 0 : -1;
+    const windowId = popouts.has(wc.id) ? POPOUT_WINDOW : contextType === 'BACKGROUND' || contextType === 'OFFSCREEN_DOCUMENT' ? -1 : 0;
+    const tabId = contextType === 'TAB' ? wc.id : contextType === 'SIDE_PANEL' ? sidePanels.get(wc.id).tabId ?? -1 : -1;
     out.push({
       contextId: `wc-${wc.id}`, contextType, documentId: `wc-${wc.id}`, documentOrigin: origin, documentUrl: url, frameId: 0,
-      incognito: false, tabId: contextType === 'TAB' ? wc.id : -1, windowId,
+      incognito: false, tabId, windowId,
     });
   }
   for (const name of configuredSessions) {
@@ -593,7 +596,7 @@ function tabDetails(wc) {
     id: wc.id, windowId: 0, index: 0, url: wc.getURL(), title: wc.getTitle(), status: wc.isLoading() ? 'loading' : 'complete',
     active, highlighted: active, selected: active, pinned: false,
     audible: wc.isCurrentlyAudible(), mutedInfo: { muted: wc.isAudioMuted() }, discarded: false, autoDiscardable: true,
-    incognito: false, groupId: -1,
+    incognito: false, groupId: groupOfTab.get(wc.id) ?? -1,
   };
 }
 // events worth waking a sleeping background worker for (others go only to workers already running)
@@ -659,8 +662,9 @@ function extensionWorkerStarted(extId) {
   broadcast('ext-worker-started', extId);
 }
 
-// Extension popups are webviews too, but in Chrome they aren't tabs
+// Extension popups (and side panels) are webviews too, but in Chrome they aren't tabs
 function isExtensionPopup(wc) {
+  if (sidePanels.has(wc.id)) return true;
   const extId = extIdOf(wc.getURL());
   if (!extId) return false;
   const entry = extensions?.list.find((e) => e.runtimeId === extId);
@@ -699,6 +703,7 @@ function hookTabEvents(wc) {
   on('page-title-updated', (_e, title) => emit('tabs.onUpdated', tabId, { title }, tabDetails(wc)));
   wc.once('destroyed', () => {
     for (const w of windows.values()) if (w.activeTab === tabId) w.activeTab = null;
+    ungroupTabs([tabId], { quiet: true });
     if (announced) dispatchExtEvent('tabs.onRemoved', [tabId, { windowId: 0, isWindowClosing: false }]);
   });
 }
@@ -755,9 +760,613 @@ function extensionFrames({ tabId, frameId } = {}) {
 }
 ipcMain.handle('ultima:ext-frames', (e, details) => (extIdOf(e.senderFrame?.url) ? extensionFrames(details) : null));
 
+// ---- APIs Electron lacks that Ultima provides itself: chrome.debugger, tabs.captureVisibleTab, tab groups, side panels ----
+// Extensions reach these through one channel, 'ultima:ext-call' (see extension-compat.js). Each checks the
+// permission Chrome asks for, so an extension gets no more here than it would in Chrome.
+const manifestOf = (ses, extId) => { try { return ses.extensions.getExtension(extId)?.manifest || {}; } catch { return {}; } };
+const asksFor = (manifest, permission) => [...(manifest.permissions || []), ...(manifest.optional_permissions || [])].includes(permission);
+const entryFor = (extId) => extensions?.list.find((e) => e.runtimeId === extId) || null;
+
+// Sends an event to one extension's pages and background (`wake`: start the background if it isn't running)
+async function sendToExtension(extId, name, args, { wake = false } = {}) {
+  for (const wc of webContents.getAllWebContents()) {
+    try { if (!wc.isDestroyed() && extIdOf(wc.getURL()) === extId) wc.send('ultima:ext-event', name, args); } catch { /* closing */ }
+  }
+  for (const sesName of configuredSessions) {
+    const workers = session.fromPartition(sesName).serviceWorkers;
+    const scope = `chrome-extension://${extId}/`;
+    const hit = Object.entries(workers.getAllRunning()).find(([, info]) => info.scope === scope);
+    let worker = null;
+    try { worker = hit ? workers.getWorkerFromVersionID(Number(hit[0])) : null; } catch { /* stopped meanwhile */ }
+    if (!worker && wake && sesName === PARTITION) { try { worker = await workers.startWorkerForScope(scope); } catch { worker = null; } }
+    try { worker?.send('ultima:ext-event', name, args); } catch { /* went away */ }
+  }
+}
+
+// chrome.debugger. Electron has no such API, but every page has a DevTools protocol client (webContents.debugger),
+// which is what Chrome's API drives. Extensions that ask for "debugger" (Claude's, which clicks and types for you)
+// may attach to web pages in tabs; not to Ultima's own pages, other extensions' pages or private tabs, as in Chrome.
+const debuggees = new Map(); // tab id -> { extId, end }
+function debuggeeTab(extId, target) {
+  const id = Number(target?.tabId ?? target?.targetId);
+  const wc = Number.isInteger(id) ? webContents.fromId(id) : null;
+  if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || isPrivate(wc) || !windowOf(wc) || isExtensionPopup(wc)) {
+    throw new Error(`No tab with given id ${target?.tabId ?? target?.targetId}.`);
+  }
+  const url = wc.getURL();
+  if (!/^(https?|file|data|blob|about):/i.test(url) && extIdOf(url) !== extId) throw new Error(`Cannot access contents of url "${url}".`);
+  return wc;
+}
+async function extensionDebugger(ses, extId, op, args) {
+  if (!asksFor(manifestOf(ses, extId), 'debugger')) throw new Error('This extension did not ask for the "debugger" permission.');
+  if (op === 'getTargets') {
+    return queryTabs({}).map((t) => ({ type: 'page', id: String(t.id), tabId: t.id, title: t.title, url: t.url, attached: debuggees.has(t.id) }));
+  }
+  const [target] = args;
+  const wc = debuggeeTab(extId, target);
+  const tabId = wc.id;
+  const held = debuggees.get(tabId);
+  if (op === 'attach') {
+    if (held) throw new Error(`Another debugger is already attached to the tab with id: ${tabId}.`);
+    wc.debugger.attach(typeof args[1] === 'string' ? args[1] : undefined);
+    const onMessage = (_e, method, params, sessionId) => sendToExtension(extId, 'debugger.onEvent', [sessionId ? { tabId, sessionId } : { tabId }, method, params]);
+    const end = () => { debuggees.delete(tabId); wc.debugger.removeListener('message', onMessage); wc.debugger.removeListener('detach', onDetach); };
+    // a closed tab, or DevTools opened over it: the extension hears why, as in Chrome
+    function onDetach(_e, reason) { end(); sendToExtension(extId, 'debugger.onDetach', [{ tabId }, /closed/i.test(String(reason)) ? 'target_closed' : 'canceled_by_user']); }
+    wc.debugger.on('message', onMessage);
+    wc.debugger.on('detach', onDetach);
+    debuggees.set(tabId, { extId, end });
+    return null;
+  }
+  if (!held || held.extId !== extId) throw new Error(`Debugger is not attached to the tab with id: ${tabId}.`);
+  if (op === 'detach') {
+    held.end();
+    try { wc.debugger.detach(); } catch { /* already gone */ }
+    return null;
+  }
+  if (op === 'sendCommand') {
+    const params = args[2] && typeof args[2] === 'object' ? args[2] : {};
+    // Page.reload through the protocol makes Electron replace a tab's page with a new one (and a new tab id), so the
+    // extension would lose its tab: the tab reloads itself instead
+    if (args[1] === 'Page.reload' && !target?.sessionId) {
+      if (params.ignoreCache) wc.reloadIgnoringCache(); else wc.reload();
+      return {};
+    }
+    return wc.debugger.sendCommand(String(args[1]), params, typeof target?.sessionId === 'string' ? target.sessionId : undefined);
+  }
+  throw new Error(`Unknown debugger call ${op}`);
+}
+// an extension turned off or removed lets go of the tabs it was debugging
+function releaseDebuggees(extId) {
+  for (const [tabId, held] of debuggees) {
+    if (held.extId !== extId) continue;
+    held.end();
+    try { webContents.fromId(tabId)?.debugger.detach(); } catch { /* already gone */ }
+  }
+}
+
+// tabs.captureVisibleTab: a picture of the tab you're looking at, for extensions allowed on it
+async function captureVisibleTab(ses, extId, op, [options]) {
+  const w = currentWindow({ normal: true });
+  const wc = w?.activeTab ? webContents.fromId(w.activeTab) : null;
+  if (!wc || wc.isDestroyed() || isPrivate(wc)) throw new Error('No active tab.');
+  const manifest = manifestOf(ses, extId);
+  const hosts = [...(manifest.host_permissions || []), ...(manifest.permissions || [])];
+  if (!hosts.includes('activeTab') && !hosts.some((h) => matchesPattern(h, wc.getURL()))) {
+    throw new Error("Either the '<all_urls>' or 'activeTab' permission is required.");
+  }
+  const image = await wc.capturePage();
+  if (options?.format === 'png') return image.toDataURL();
+  const quality = Number.isFinite(Number(options?.quality)) ? Math.max(0, Math.min(100, Number(options.quality))) : 92;
+  return `data:image/jpeg;base64,${image.toJPEG(quality).toString('base64')}`;
+}
+
+// Tab groups. Ultima has none, but extensions that keep their tabs in one (Claude's) need the calls to work, so
+// Ultima keeps the groups for them: tabs carry their group id and the group events fire. They aren't shown.
+const tabGroups = new Map(); // group id -> { id, title, color, collapsed, windowId, shared }
+const groupOfTab = new Map(); // tab id -> group id
+let nextGroupId = 1;
+const GROUP_COLORS = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
+function ungroupTabs(tabIds, { quiet = false } = {}) {
+  const touched = new Set();
+  for (const id of tabIds) {
+    const groupId = groupOfTab.get(id);
+    if (groupId === undefined) continue;
+    groupOfTab.delete(id);
+    touched.add(groupId);
+    const wc = webContents.fromId(id);
+    if (!quiet && wc && !wc.isDestroyed()) dispatchExtEvent('tabs.onUpdated', [id, { groupId: -1 }, tabDetails(wc)]);
+  }
+  for (const groupId of touched) {
+    if ([...groupOfTab.values()].includes(groupId)) continue;
+    const group = tabGroups.get(groupId);
+    tabGroups.delete(groupId);
+    if (group) dispatchExtEvent('tabGroups.onRemoved', [{ ...group }]);
+  }
+}
+function extensionTabGroups(ses, extId, op, args) {
+  // tabs.group and tabs.ungroup need no permission in Chrome; the tabGroups namespace does
+  if (op !== 'group' && op !== 'ungroup' && !asksFor(manifestOf(ses, extId), 'tabGroups')) throw new Error('This extension did not ask for the "tabGroups" permission.');
+  const groupOf = (id) => {
+    const group = tabGroups.get(Number(id));
+    if (!group) throw new Error(`No group with id: ${id}.`);
+    return group;
+  };
+  if (op === 'group') {
+    const opts = args[0] || {};
+    const ids = [].concat(opts.tabIds ?? []).map(Number).filter((id) => { const wc = webContents.fromId(id); return wc && !wc.isDestroyed() && !isPrivate(wc); });
+    if (!ids.length) throw new Error('No tabs to group.');
+    let group = opts.groupId !== undefined ? groupOf(opts.groupId) : null;
+    if (!group) {
+      group = { id: nextGroupId, title: '', color: GROUP_COLORS[(nextGroupId - 1) % GROUP_COLORS.length], collapsed: false, windowId: 0, shared: false };
+      nextGroupId += 1;
+      tabGroups.set(group.id, group);
+      dispatchExtEvent('tabGroups.onCreated', [{ ...group }]);
+    }
+    ungroupTabs(ids.filter((id) => groupOfTab.has(id) && groupOfTab.get(id) !== group.id), { quiet: true });
+    for (const id of ids) {
+      groupOfTab.set(id, group.id);
+      dispatchExtEvent('tabs.onUpdated', [id, { groupId: group.id }, tabDetails(webContents.fromId(id))]);
+    }
+    return group.id;
+  }
+  if (op === 'ungroup') { ungroupTabs([].concat(args[0] ?? []).map(Number)); return null; }
+  if (op === 'get') return { ...groupOf(args[0]) };
+  if (op === 'query') {
+    const q = args[0] || {};
+    const fits = (g) => ['collapsed', 'color', 'title', 'windowId', 'shared'].every((k) => q[k] === undefined || q[k] === g[k] || (k === 'windowId' && q[k] === -2));
+    return [...tabGroups.values()].filter(fits).map((g) => ({ ...g }));
+  }
+  if (op === 'update') {
+    const group = groupOf(args[0]);
+    const change = args[1] || {};
+    if (typeof change.title === 'string') group.title = change.title;
+    if (GROUP_COLORS.includes(change.color)) group.color = change.color;
+    if (typeof change.collapsed === 'boolean') group.collapsed = change.collapsed;
+    dispatchExtEvent('tabGroups.onUpdated', [{ ...group }]);
+    return { ...group };
+  }
+  if (op === 'move') return { ...groupOf(args[0]) }; // Ultima doesn't show groups, so there is nothing to move
+  throw new Error(`Unknown tab group call ${op}`);
+}
+
+// Side panels: an extension's page docked beside the page you're on, in the window you're using. Like Chrome, an
+// extension can have one for each tab (Claude's) or one for all of them; the UI shows the one for the tab in front.
+const sidePanels = new Map(); // side panel webContents id -> { extId, tabId }
+const sidePanelOptions = new Map(); // extension id -> { global: { path, enabled }, tabs: Map(tab id -> { path, enabled }) }
+function panelOptions(extId, manifest) {
+  if (!sidePanelOptions.has(extId)) sidePanelOptions.set(extId, { global: { path: manifest.side_panel?.default_path?.replace(/^\//, '') || null, enabled: true }, tabs: new Map() });
+  return sidePanelOptions.get(extId);
+}
+function showSidePanel(extId, { tabId = null, open = true } = {}) {
+  const entry = entryFor(extId);
+  if (!entry) return false;
+  const opts = panelOptions(extId, extensions.manifestOf(entry));
+  const forTab = tabId !== null && opts.tabs.has(tabId);
+  const chosen = forTab ? opts.tabs.get(tabId) : opts.global;
+  if (open && (!chosen.path || chosen.enabled === false)) return false;
+  sendTo(currentWindow({ normal: true }), 'ext-side-panel', { id: entry.id, path: chosen.path, tabId: forTab ? tabId : null, open });
+  return true;
+}
+function extensionSidePanel(ses, extId, op, args) {
+  const manifest = manifestOf(ses, extId);
+  if (!asksFor(manifest, 'sidePanel')) throw new Error('This extension did not ask for the "sidePanel" permission.');
+  const opts = panelOptions(extId, manifest);
+  const entry = entryFor(extId);
+  const tabOf = (o) => (Number.isInteger(o?.tabId) ? o.tabId : null);
+  if (op === 'setOptions') {
+    const o = args[0] || {};
+    const tabId = tabOf(o);
+    if (tabId !== null && !opts.tabs.has(tabId)) opts.tabs.set(tabId, { path: opts.global.path, enabled: true });
+    const target = tabId === null ? opts.global : opts.tabs.get(tabId);
+    if (typeof o.path === 'string') target.path = o.path.replace(/^\//, '');
+    if (typeof o.enabled === 'boolean') target.enabled = o.enabled;
+    if (target.enabled === false) showSidePanel(extId, { tabId, open: false });
+    return null;
+  }
+  if (op === 'getOptions') {
+    const tabId = tabOf(args[0]);
+    const o = (tabId !== null && opts.tabs.get(tabId)) || opts.global;
+    return { ...(o.path ? { path: o.path } : {}), enabled: o.enabled !== false, ...(tabId !== null ? { tabId } : {}) };
+  }
+  if (op === 'setPanelBehavior') {
+    if (entry && typeof args[0]?.openPanelOnActionClick === 'boolean') extensions.setSidePanelOnClick(entry, args[0].openPanelOnActionClick);
+    return null;
+  }
+  if (op === 'getPanelBehavior') return { openPanelOnActionClick: Boolean(entry?.sidePanelOnClick) };
+  if (op === 'open') {
+    if (!showSidePanel(extId, { tabId: tabOf(args[0]) })) throw new Error('No active side panel for this extension.');
+    return null;
+  }
+  if (op === 'close') { showSidePanel(extId, { tabId: tabOf(args[0]), open: false }); return null; }
+  if (op === 'getLayout') return { side: 'right' };
+  throw new Error(`Unknown side panel call ${op}`);
+}
+// The UI says a side panel opened or closed (its webContents id, and the tab it belongs to, if any): it stops counting
+// as a tab, shows in runtime.getContexts, and the extension hears sidePanel.onOpened / onClosed.
+ipcMain.on('ultima:side-panel', (e, id, open, tabId) => {
+  const wc = windowOf(e.sender) && webContents.fromId(Number(id));
+  if (!wc || wc.isDestroyed()) return;
+  const extId = extIdOf(wc.getURL());
+  if (!extId) return;
+  const forTab = Number.isInteger(tabId) ? tabId : null;
+  const info = { path: new URL(wc.getURL()).pathname.slice(1), windowId: 0, ...(forTab !== null ? { tabId: forTab } : {}) };
+  const tell = (name) => sendToExtension(extId, name, [info]);
+  if (open) {
+    if (sidePanels.has(wc.id)) return;
+    sidePanels.set(wc.id, { extId, tabId: forTab });
+    wc.once('destroyed', () => { if (sidePanels.delete(wc.id)) tell('sidePanel.onClosed'); });
+    tell('sidePanel.onOpened');
+  } else if (sidePanels.delete(wc.id)) {
+    tell('sidePanel.onClosed');
+  }
+});
+
+// The toolbar button of an extension without a popup: Chrome opens its side panel if it asked for that, or else tells
+// it the button was clicked (action.onClicked), waking its background. 'none': it has neither.
+function extensionActionClicked(id, tabWcId) {
+  const entry = extensions?.list.find((e) => e.id === id);
+  if (!entry?.runtimeId) return 'none';
+  if (entry.sidePanelOnClick && showSidePanel(entry.runtimeId)) return 'panel';
+  if (!extensions.info(entry).hasWorker) return 'none';
+  const wc = Number.isInteger(tabWcId) ? webContents.fromId(tabWcId) : null;
+  const tab = wc && !wc.isDestroyed() && !isPrivate(wc) ? tabDetails(wc) : undefined;
+  sendToExtension(entry.runtimeId, 'action.onClicked', [tab], { wake: true });
+  return 'clicked';
+}
+
+
+// runtime.connectNative / sendNativeMessage. Electron has neither, so Ultima starts the app itself: one an app
+// registered for Chrome (Bitwarden's desktop app, Claude Code) or for Ultima (userData/NativeMessagingHosts), and
+// passes messages to and from it the way Chrome does: JSON, each with its length first (4 bytes, native byte order).
+// Only an extension the app names in its allowed_origins may talk to it, and only one that asks for nativeMessaging.
+function nativeHostManifest(name) {
+  if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i.test(name)) return null;
+  const files = [path.join(app.getPath('userData'), 'NativeMessagingHosts', `${name}.json`)];
+  if (process.platform === 'win32') {
+    for (const hive of ['HKCU', 'HKLM']) {
+      for (const browser of ['Google\\Chrome', 'Chromium']) {
+        for (const view of ['/reg:64', '/reg:32']) {
+          try {
+            const out = require('child_process').execFileSync('reg', ['query', `${hive}\\Software\\${browser}\\NativeMessagingHosts\\${name}`, '/ve', view], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+            const file = out.match(/REG_SZ\s+(.+)/)?.[1]?.trim();
+            if (file) files.push(file);
+          } catch { /* not registered there */ }
+        }
+      }
+    }
+  } else {
+    const home = app.getPath('home');
+    const dirs = process.platform === 'darwin'
+      ? [`${home}/Library/Application Support/Google/Chrome/NativeMessagingHosts`, `${home}/Library/Application Support/Chromium/NativeMessagingHosts`, '/Library/Google/Chrome/NativeMessagingHosts']
+      : [`${home}/.config/google-chrome/NativeMessagingHosts`, `${home}/.config/chromium/NativeMessagingHosts`, '/etc/opt/chrome/native-messaging-hosts'];
+    files.push(...dirs.map((d) => path.join(d, `${name}.json`)));
+  }
+  for (const file of files) {
+    try {
+      const host = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+      if (host.name !== name || host.type !== 'stdio' || typeof host.path !== 'string') continue;
+      return { ...host, path: path.isAbsolute(host.path) ? host.path : path.join(path.dirname(file), host.path) };
+    } catch { /* not there, or not readable */ }
+  }
+  return null;
+}
+// The origin an app knows the extension by: its Chrome Web Store id (Ultima's copy may run under another id)
+function nativeOrigin(extId) {
+  const entry = entryFor(extId);
+  return `chrome-extension://${entry?.source === 'webstore' ? entry.id : extId}/`;
+}
+const nativePorts = new Map(); // port id -> { extId, child, reply, owner, task }
+let nextNativePort = 1;
+function startNativeHost(ses, extId, name) {
+  if (!asksFor(manifestOf(ses, extId), 'nativeMessaging')) throw new Error('This extension did not ask for the "nativeMessaging" permission.');
+  const host = nativeHostManifest(String(name));
+  const origin = nativeOrigin(extId);
+  if (!host) throw new Error('Specified native messaging host not found.');
+  if (!(host.allowed_origins || []).includes(origin)) throw new Error('Access to the specified native messaging host is forbidden.');
+  const args = process.platform === 'win32' ? [origin, '--parent-window=0'] : [origin];
+  const child = require('child_process').spawn(host.path, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'], shell: process.platform === 'win32' && /\.(bat|cmd)$/i.test(host.path) });
+  return child;
+}
+const writeNative = (child, msg) => {
+  const body = Buffer.from(JSON.stringify(msg ?? null), 'utf8');
+  const head = Buffer.alloc(4);
+  head.writeUInt32LE(body.length);
+  child.stdin.write(Buffer.concat([head, body]));
+};
+// Splits what an app writes into messages; calls back with each, or with an error if it writes nonsense
+function readNative(child, onMessage, onError) {
+  let buf = Buffer.alloc(0);
+  child.stdout.on('data', (chunk) => {
+    buf = Buffer.concat([buf, chunk]);
+    while (buf.length >= 4) {
+      const len = buf.readUInt32LE(0);
+      if (len > 1024 * 1024) { onError('Error when communicating with the native messaging host.'); return; }
+      if (buf.length < 4 + len) return;
+      const body = buf.subarray(4, 4 + len);
+      buf = buf.subarray(4 + len);
+      try { onMessage(JSON.parse(body.toString('utf8'))); } catch { onError('Error when communicating with the native messaging host.'); return; }
+    }
+  });
+}
+function closeNativePort(id, error) {
+  const port = nativePorts.get(id);
+  if (!port) return;
+  nativePorts.delete(id);
+  try { port.child.kill(); } catch { /* already ended */ }
+  try { port.task?.end(); } catch { /* the background already stopped */ }
+  if (error !== undefined) port.reply('ultima:ext-event', 'native.disconnect', [id, error]);
+}
+// ctx: where answers go (reply), who opened the port (owner), and, from a background, a way to keep it running while
+// the port is open (hold), as Chrome does
+function extensionNative(ses, extId, op, args, { reply, owner, hold } = {}) {
+  if (op === 'connect') {
+    const child = startNativeHost(ses, extId, args[0]);
+    const id = nextNativePort++;
+    let task = null;
+    try { task = hold?.() || null; } catch { /* stopping */ }
+    nativePorts.set(id, { extId, child, reply, owner, task });
+    readNative(child, (msg) => reply('ultima:ext-event', 'native.message', [id, msg]), (err) => closeNativePort(id, err));
+    child.on('error', () => closeNativePort(id, 'Failed to start native messaging host.'));
+    child.on('exit', () => closeNativePort(id, 'Native host has exited.'));
+    child.stdin.on('error', () => { /* the app went away: 'exit' reports it */ });
+    return id;
+  }
+  if (op === 'post') {
+    const port = nativePorts.get(Number(args[0]));
+    if (!port || port.extId !== extId) throw new Error('Attempting to use a disconnected port object');
+    writeNative(port.child, args[1]);
+    return null;
+  }
+  if (op === 'disconnect') {
+    const port = nativePorts.get(Number(args[0]));
+    if (port?.extId === extId) closeNativePort(Number(args[0]));
+    return null;
+  }
+  if (op === 'send') { // sendNativeMessage: one message, the first answer, then the app is closed
+    const child = startNativeHost(ses, extId, args[0]);
+    return new Promise((resolve, reject) => {
+      const done = (fn, value) => { try { child.kill(); } catch { /* ended */ } fn(value); };
+      readNative(child, (msg) => done(resolve, msg), (err) => done(reject, new Error(err)));
+      child.on('error', () => done(reject, new Error('Failed to start native messaging host.')));
+      child.on('exit', () => done(reject, new Error('Native host has exited.')));
+      child.stdin.on('error', () => { /* 'exit' reports it */ });
+      writeNative(child, args[1]);
+    });
+  }
+  throw new Error(`Unknown native messaging call ${op}`);
+}
+// a page or background that goes away takes its apps with it, as in Chrome
+function closeNativePortsOf(owner) {
+  for (const [id, port] of nativePorts) if (port.owner === owner) closeNativePort(id);
+}
+
+// Right-click menu items (chrome.contextMenus). Electron draws no menus, so Ultima keeps each extension's items
+// (saved with it; see menusOf) and adds them to its own page menu and to the extension's toolbar button menu. A click
+// reaches the extension as contextMenus.onClicked, with checkboxes and radio items updated first, as in Chrome.
+const MENU_CONTEXTS = ['all', 'page', 'frame', 'selection', 'link', 'editable', 'image', 'video', 'audio', 'launcher', 'browser_action', 'page_action', 'action'];
+const MENU_TYPES = ['normal', 'checkbox', 'radio', 'separator'];
+function cleanMenuProps(props, base = {}) {
+  const out = { ...base };
+  if (props.id !== undefined) out.id = props.id;
+  if (props.parentId !== undefined) out.parentId = props.parentId;
+  if (typeof props.title === 'string') out.title = props.title.slice(0, 200);
+  if (MENU_TYPES.includes(props.type)) out.type = props.type;
+  if (Array.isArray(props.contexts)) out.contexts = props.contexts.filter((c) => MENU_CONTEXTS.includes(c));
+  for (const k of ['checked', 'enabled', 'visible']) if (typeof props[k] === 'boolean') out[k] = props[k];
+  for (const k of ['documentUrlPatterns', 'targetUrlPatterns']) if (Array.isArray(props[k])) out[k] = props[k].filter((p) => typeof p === 'string');
+  return out;
+}
+function extensionMenus(ses, extId, op, args) {
+  const manifest = manifestOf(ses, extId);
+  if (!asksFor(manifest, 'contextMenus')) throw new Error('This extension did not ask for the "contextMenus" permission.');
+  const entry = entryFor(extId);
+  if (!entry) throw new Error('Unknown extension.');
+  const items = extensions.menusOf(entry);
+  const find = (id) => items.find((it) => it.id === id);
+  const save = () => extensions.saveMenus();
+  if (op === 'create') {
+    const props = args[0] || {};
+    if (props.id === undefined || (typeof props.id !== 'string' && typeof props.id !== 'number')) throw new Error('Menu items need an id.');
+    if (find(props.id)) throw new Error(`Cannot create item with duplicate id ${props.id}`);
+    if (props.parentId !== undefined && !find(props.parentId)) throw new Error(`Cannot find menu item with id ${props.parentId}`);
+    const item = cleanMenuProps(props, { type: 'normal', contexts: ['page'], enabled: true, visible: true });
+    if (item.type !== 'separator' && !item.title) throw new Error('Menu items need a title.');
+    if (items.length >= 1000) throw new Error('Too many menu items.');
+    items.push(item);
+    save();
+    return item.id;
+  }
+  if (op === 'update') {
+    const item = find(args[0]);
+    if (!item) throw new Error(`Cannot find menu item with id ${args[0]}`);
+    const change = cleanMenuProps(args[1] || {});
+    delete change.id;
+    Object.assign(item, change);
+    save();
+    return null;
+  }
+  if (op === 'remove') {
+    if (!find(args[0])) throw new Error(`Cannot find menu item with id ${args[0]}`);
+    // the item and everything under it
+    const gone = new Set([args[0]]);
+    let grew = true;
+    while (grew) { grew = false; for (const it of items) if (gone.has(it.parentId) && !gone.has(it.id)) { gone.add(it.id); grew = true; } }
+    entry.menus = items.filter((it) => !gone.has(it.id));
+    save();
+    return null;
+  }
+  if (op === 'removeAll') { entry.menus = []; save(); return null; }
+  throw new Error(`Unknown menu call ${op}`);
+}
+// The extensions' items for a right-click with these contexts, as Ultima menu items. `params`: the page's
+// (Electron's context-menu details), or null for a toolbar button. `item(label, fn, extra)` registers a click.
+function extensionMenuItems({ wc, params, onlyFor = null, item }) {
+  if (!extensions || (wc && isPrivate(wc))) return [];
+  const contexts = new Set(['all']);
+  if (params) {
+    if (params.linkURL) contexts.add('link');
+    if (params.isEditable) contexts.add('editable');
+    if (params.selectionText?.trim()) contexts.add('selection');
+    if (['image', 'video', 'audio'].includes(params.mediaType)) contexts.add(params.mediaType);
+    if (params.frameURL) contexts.add('frame');
+    if (contexts.size === 1 || (contexts.size === 2 && contexts.has('frame'))) contexts.add('page');
+  } else {
+    contexts.delete('all'); // "all" leaves out the toolbar button, as in Chrome
+    for (const c of ['action', 'browser_action', 'page_action']) contexts.add(c);
+  }
+  const pageUrl = wc && !wc.isDestroyed() ? wc.getURL() : '';
+  const docUrl = params?.frameURL || pageUrl;
+  const target = params?.linkURL || params?.srcURL || '';
+  const selection = (params?.selectionText || '').trim();
+  const shows = (it) => it.visible !== false && (it.contexts || ['page']).some((c) => contexts.has(c))
+    && (!it.documentUrlPatterns?.length || !docUrl || it.documentUrlPatterns.some((p) => matchesPattern(p, docUrl)))
+    && (!it.targetUrlPatterns?.length || !target || it.targetUrlPatterns.some((p) => matchesPattern(p, target)));
+  const out = [];
+  for (const entry of extensions.list) {
+    if (entry.enabled === false || !entry.runtimeId || !entry.menus?.length || (onlyFor && entry.id !== onlyFor)) continue;
+    const runtimeId = entry.runtimeId;
+    const click = (it) => {
+      const wasChecked = Boolean(it.checked);
+      if (it.type === 'checkbox') it.checked = !it.checked;
+      if (it.type === 'radio') {
+        // the radio items next to it (same parent, no other kind of item between) are turned off
+        const siblings = entry.menus.filter((x) => x.parentId === it.parentId);
+        let i = siblings.indexOf(it);
+        while (i > 0 && siblings[i - 1].type === 'radio') i -= 1;
+        for (let j = i; j < siblings.length && siblings[j].type === 'radio'; j += 1) siblings[j].checked = siblings[j] === it;
+      }
+      extensions.saveMenus();
+      const tabWc = wc && !wc.isDestroyed() && !isExtensionPopup(wc) ? wc : null;
+      const info = {
+        menuItemId: it.id, editable: Boolean(params?.isEditable),
+        ...(it.parentId !== undefined ? { parentMenuItemId: it.parentId } : {}),
+        ...(pageUrl ? { pageUrl } : {}), ...(params?.frameURL ? { frameUrl: params.frameURL } : {}),
+        ...(params?.linkURL ? { linkUrl: params.linkURL } : {}), ...(params?.srcURL ? { srcUrl: params.srcURL } : {}),
+        ...(['image', 'video', 'audio'].includes(params?.mediaType) ? { mediaType: params.mediaType } : {}),
+        ...(selection ? { selectionText: selection } : {}),
+        ...(it.type === 'checkbox' || it.type === 'radio' ? { wasChecked, checked: Boolean(it.checked) } : {}),
+        frameId: 0,
+      };
+      sendToExtension(runtimeId, 'contextMenus.onClicked', [info, tabWc ? tabDetails(tabWc) : undefined], { wake: true });
+    };
+    const label = (it) => (it.title || '').replace(/%s/g, selection.length > 32 ? `${selection.slice(0, 32)}…` : selection);
+    const build = (parentId) => {
+      const list = [];
+      for (const it of entry.menus.filter((x) => x.parentId === parentId && shows(x))) {
+        if (it.type === 'separator') { if (list.length) list.push({ type: 'separator' }); continue; }
+        const children = entry.menus.some((x) => x.parentId === it.id) ? build(it.id) : null;
+        if (children && !children.length) continue; // a submenu with nothing to show here
+        const extra = { enabled: it.enabled !== false };
+        if (it.type === 'checkbox' || it.type === 'radio') Object.assign(extra, { type: 'checkbox', checked: Boolean(it.checked) });
+        list.push(children ? { id: `menu-${runtimeId}-${it.id}`, label: label(it), ...extra, submenu: children } : item(label(it), () => click(it), extra));
+      }
+      while (list[list.length - 1]?.type === 'separator') list.pop();
+      return list;
+    };
+    const top = build(undefined);
+    if (!top.length) continue;
+    const icon = extensions.describe(entry).icon;
+    const lead = icon ? `<img src="${icon}" width="15" height="15" alt="">` : '';
+    // one item shows as itself; more go under the extension's name, as in Chrome
+    if (top.length === 1 && !top[0].submenu && !onlyFor) out.push({ ...top[0], leadHtml: lead });
+    else if (onlyFor) out.push(...top);
+    else out.push({ id: `menu-${runtimeId}`, label: extensions.info(entry).name, leadHtml: lead, submenu: top });
+  }
+  return out;
+}
+
+// Keyboard shortcuts (chrome.commands). An extension's suggested keys are used unless Ultima or another extension
+// already has them (at most four per extension, as in Chrome); the ones you choose are in Settings → Keyboard
+// shortcuts. _execute_action does what the toolbar button does; other commands reach the extension as
+// commands.onCommand.
+let extensionKeys = new Map(); // combo -> { id (registry id), runtimeId, name }
+const EXECUTE_ACTION = new Set(['_execute_action', '_execute_browser_action', '_execute_page_action']);
+// Chrome's "Ctrl+Shift+Y" / "Command+E" / "MacCtrl+Comma" → Ultima's combo
+function comboFromChrome(spec) {
+  if (typeof spec !== 'string' || !spec.trim()) return null;
+  const mac = process.platform === 'darwin';
+  const KEY = { Comma: ',', Period: '.', Up: 'Up', Down: 'Down', Left: 'Left', Right: 'Right', Space: 'Space' };
+  const parts = spec.split('+').map((p) => p.trim());
+  const key = parts.pop();
+  const mods = parts.map((m) => ({ Command: 'Meta', MacCtrl: 'Ctrl', Ctrl: mac ? 'Meta' : 'Ctrl', Alt: 'Alt', Shift: 'Shift', Search: 'Meta' }[m]));
+  if (!key || mods.includes(undefined)) return null;
+  return keymap.normalize([...mods, KEY[key] || (key.length === 1 ? key.toUpperCase() : key)].join('+'), process.platform);
+}
+function suggestedKey(command) {
+  const s = command?.suggested_key;
+  if (typeof s === 'string') return comboFromChrome(s);
+  if (!s || typeof s !== 'object') return null;
+  const platform = { win32: 'windows', darwin: 'mac', linux: 'linux' }[process.platform];
+  return comboFromChrome(s[platform] || s.default);
+}
+// Each extension's commands with the keys they have now: [{ name, description, shortcut }]
+function extensionCommandList(entry) {
+  const commands = extensions.manifestOf(entry).commands;
+  if (!commands || typeof commands !== 'object') return [];
+  return Object.entries(commands).map(([name, c]) => {
+    const combo = [...extensionKeys].find(([, k]) => k.id === entry.id && k.name === name)?.[0] || '';
+    const description = EXECUTE_ACTION.has(name) ? 'Activate the extension' : extensions.textOf(entry, String(c?.description || name));
+    return { name, description, shortcut: combo };
+  });
+}
+function rebuildExtensionKeys() {
+  extensionKeys = new Map();
+  if (!extensions) return;
+  for (const entry of extensions.list) {
+    if (entry.enabled === false) continue;
+    const commands = extensions.manifestOf(entry).commands;
+    if (!commands || typeof commands !== 'object') continue;
+    let suggested = 0;
+    for (const [name, c] of Object.entries(commands)) {
+      const chosen = entry.shortcuts && Object.hasOwn(entry.shortcuts, name);
+      if (!chosen && suggested >= 4) continue;
+      const combo = chosen ? entry.shortcuts[name] : suggestedKey(c);
+      if (!combo || globalKeys.has(combo) || extensionKeys.has(combo)) continue;
+      if (!chosen) suggested += 1;
+      extensionKeys.set(combo, { id: entry.id, runtimeId: entry.runtimeId, name });
+    }
+  }
+}
+function extensionShortcutFor(input, wc) {
+  if (recordingKeys || input.type !== 'keyDown' || !extensionKeys.size) return null;
+  const combo = keymap.comboFromEvent(input);
+  const hit = combo && extensionKeys.get(combo);
+  if (!hit || (keymap.isTypingKey(combo) && (input.isComposing || typingIn.get(wc.id)))) return null;
+  return hit;
+}
+function runExtensionCommand({ id, runtimeId, name }, wc) {
+  const w = windowOf(wc);
+  if (!w || w.private || !runtimeId) return; // extensions don't run in private windows
+  if (EXECUTE_ACTION.has(name)) { sendTo(w, 'ext-command', { id }); return; }
+  const tab = w.activeTab ? webContents.fromId(w.activeTab) : null;
+  sendToExtension(runtimeId, 'commands.onCommand', [name, tab && !tab.isDestroyed() ? tabDetails(tab) : undefined], { wake: true });
+}
+function extensionCommands(ses, extId, op) {
+  const entry = entryFor(extId);
+  if (op === 'getAll') return entry ? extensionCommandList(entry) : [];
+  throw new Error(`Unknown commands call ${op}`);
+}
+
+const EXTENSION_CALLS = { debugger: extensionDebugger, capture: captureVisibleTab, tabGroups: extensionTabGroups, sidePanel: extensionSidePanel, native: extensionNative, menus: extensionMenus, commands: extensionCommands };
+// ctx: { reply(channel, ...args) to the caller, owner (who called), hold() to keep a background running }
+async function extensionCall(ses, extId, area, op, args, ctx) {
+  const call = Object.hasOwn(EXTENSION_CALLS, area) ? EXTENSION_CALLS[area] : null;
+  if (!extId || !call) throw new Error(`Unknown call ${area}.${op}`);
+  return call(ses, extId, String(op), Array.isArray(args) ? args : [], ctx);
+}
+ipcMain.handle('ultima:ext-call', (e, area, op, args) => {
+  const page = e.sender;
+  const owner = `wc-${page.id}`;
+  if (area === 'native' && !page.ultimaNativeHooked) { page.ultimaNativeHooked = true; page.once('destroyed', () => closeNativePortsOf(owner)); }
+  const reply = (channel, ...a) => { if (!page.isDestroyed()) page.send(channel, ...a); };
+  return extensionCall(page.session, extIdOf(e.senderFrame?.url), area, op, args, { reply, owner });
+});
+
 // Spaces with separate sign-ins get their own persistent partition: persist:ultima-space-<id>.
 const SPACE_PARTITION = /^persist:ultima(-space-[a-z0-9]{1,16})?$/;
 const configuredSessions = new Set();
+let extensionsLoaded = Promise.resolve(); // the shared session's extensions, which pages wait for at start-up
 const knownPartition = (partition) => (SPACE_PARTITION.test(partition || '') || partition === PRIVATE_PARTITION ? partition : PARTITION);
 function partitionSession(partition) {
   const name = knownPartition(partition);
@@ -765,7 +1374,10 @@ function partitionSession(partition) {
   if (!configuredSessions.has(name)) {
     configuredSessions.add(name);
     setupSession(ses);
-    if (name !== PRIVATE_PARTITION) extensions?.attach(ses, name).then(() => broadcast('extensions-changed'));
+    if (name !== PRIVATE_PARTITION && extensions) {
+      const loaded = extensions.attach(ses, name).then(() => { rebuildExtensionKeys(); broadcast('extensions-changed'); });
+      if (name === PARTITION) extensionsLoaded = loaded;
+    }
   }
   return ses;
 }
@@ -883,17 +1495,36 @@ function applyGpcPreload(ses) {
   else if (!on && has) ses.unregisterPreloadScript(GPC_PRELOAD);
 }
 
+// extension-compat.js with Chrome's API list (extension-api.json) in front of it: preloads can't read files, so the
+// copy registered is written to userData once per run
+let extensionCompatPath = null;
+function extensionCompatFile() {
+  if (extensionCompatPath) return extensionCompatPath;
+  const src = path.join(__dirname, '..', 'extension-compat.js');
+  try {
+    const list = fs.readFileSync(path.join(__dirname, '..', 'extension-api.json'), 'utf8').trim();
+    const file = path.join(app.getPath('userData'), 'extension-compat.js');
+    fs.writeFileSync(file, `const EXTENSION_API = ${list};\n${fs.readFileSync(src, 'utf8')}`);
+    extensionCompatPath = file;
+  } catch {
+    extensionCompatPath = src; // without the list: only the stand-ins written by hand
+  }
+  return extensionCompatPath;
+}
+
 function setupSession(ses) {
   ses.setUserAgent(app.userAgentFallback);
   // fills gaps in Electron's extension APIs (storage.sync/managed) inside extension workers and pages
   for (const type of ['service-worker', 'frame']) {
-    ses.registerPreloadScript({ type, id: `ultima-extension-compat-${type}`, filePath: path.join(__dirname, '..', 'extension-compat.js') });
+    ses.registerPreloadScript({ type, id: `ultima-extension-compat-${type}`, filePath: extensionCompatFile() });
   }
   // ads and trackers (blocker.js), and tracking codes in links
   ses.webRequest.onBeforeRequest(onBlockerRequest);
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-blocker', filePath: path.join(__dirname, '..', 'blocker-preload.js') });
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-glance', filePath: path.join(__dirname, '..', 'glance-preload.js') });
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-caret', filePath: path.join(__dirname, '..', 'caret-preload.js') });
+  // saved logins at login fields, and "Save password?" after signing in (password-preload.js, passwords.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-passwords', filePath: path.join(__dirname, '..', 'password-preload.js') });
   applyGpcPreload(ses);
   // Global Privacy Control, and no cookies sent to other sites than the page's while third-party cookies are blocked
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -921,19 +1552,28 @@ function setupSession(ses) {
   });
   // Chrome's window.chrome in every web page, which Google's sign-in requires (see page-compat.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-compat', filePath: path.join(__dirname, '..', 'page-compat.js') });
+  // pages' and extensions' alert / confirm / prompt in Ultima's own dialog (see dialog-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-dialogs', filePath: path.join(__dirname, '..', 'dialog-preload.js') });
   ses.serviceWorkers.on('console-message', (_e, d) => {
     const extId = extIdOf(d.sourceUrl || '');
     if (extId && d.level >= 2) extLog(extId, `background ${String(d.sourceUrl).split('/').pop()}:${d.lineNumber}`, d.level >= 3 ? 'error' : 'warning', d.message);
   });
   // extension background workers asking to open a tab (see extension-compat.js); only extension workers are heard
   ses.serviceWorkers.on('running-status-changed', ({ versionId, runningStatus }) => {
-    // Hooked once per worker version (status changes repeat, and each lookup may return a new wrapper object).
+    // Hooked once per running worker (status changes repeat). A worker that stopped and starts again (idle, then
+    // woken) is a new object with none of the handlers, so it is hooked again: keyed by version id, a woken
+    // worker's calls found "No handler registered" and the extension stalled.
     // Electron throws for a worker that has already gone; that must never take the browser down.
-    if ((runningStatus !== 'starting' && runningStatus !== 'running') || hookedWorkers.has(versionId)) return;
+    if (runningStatus === 'stopped') closeNativePortsOf(`sw-${ses.storagePath || ''}|${versionId}`);
+    if (runningStatus !== 'starting' && runningStatus !== 'running') return;
+    // A worker that called before it was hooked waits to hear it is (see extension-compat.js). Said again once it is
+    // running, in case it was still starting and missed it.
+    const tellHooked = () => { try { ses.serviceWorkers.getWorkerFromVersionID(versionId).send('ultima:ext-hooked'); } catch { /* not running */ } };
     try {
       const worker = ses.serviceWorkers.getWorkerFromVersionID(versionId);
       if (!worker || !worker.scope.startsWith('chrome-extension://')) return;
-      hookedWorkers.add(versionId);
+      if (hookedWorkers.has(worker)) { if (runningStatus === 'running') tellHooked(); return; }
+      hookedWorkers.add(worker);
       setTimeout(() => extensionWorkerStarted(extIdOf(worker.scope)), 0);
       const extId = extIdOf(worker.scope);
       worker.ipc.on('ultima:ext-open-tab', (_e, url) => openTabForExtension(url));
@@ -945,6 +1585,11 @@ function setupSession(ses) {
       worker.ipc.handle('ultima:ext-tabs', (_e, q) => queryTabs(q));
       worker.ipc.handle('ultima:ext-alarms', (_e, op, args) => extensionAlarms(ses, extId, op, Array.isArray(args) ? args : []));
       worker.ipc.handle('ultima:ext-installed', () => extensions?.takeInstalled(ses, extId) || null);
+      worker.ipc.on('ultima:ext-unsupported', (_e, name) => noteUnsupported(extId, name));
+      const owner = `sw-${ses.storagePath || ''}|${versionId}`;
+      const reply = (channel, ...a) => { try { worker.send(channel, ...a); } catch { /* stopped */ } };
+      worker.ipc.handle('ultima:ext-call', (_e, area, op, args) => extensionCall(ses, extId, area, op, args, { reply, owner, hold: () => worker.startTask() }));
+      tellHooked();
     } catch { /* the worker stopped before it could be hooked; it is hooked when it runs again */ }
   });
 
@@ -1083,7 +1728,8 @@ function migrateSession(s) {
 
 // A new window opens a little down and to the right of the one you're in, at its size; a restored one where it was;
 // a torn-off tab's (tearoff.js) where it was dropped (`at`), showing when `reveal` says so.
-function createWindow({ private: priv = false, restore = null, url = null, at = null, tearOff = null, reveal = null } = {}) {
+// `moved`: tabs chosen in another window's sidebar, moved here together (tearoff.js).
+function createWindow({ private: priv = false, restore = null, url = null, at = null, tearOff = null, reveal = null, moved = null } = {}) {
   const from = currentWindow();
   let bounds = at || restore?.bounds;
   if (!bounds && from && !from.win.isMaximized() && !from.win.isFullScreen()) {
@@ -1118,7 +1764,7 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
       spellcheck: true,
     },
   });
-  const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url, tearOff, restoring: [], focusedAt: Date.now() };
+  const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url, tearOff, moved, restoring: [], focusedAt: Date.now() };
   windows.set(win.id, w);
   lastFocusedId = win.id;
   // shown once its page has drawn, maximized then if it should be (maximizing a hidden window shows it at once, still
@@ -1297,7 +1943,8 @@ function registerIpc() {
     const w = windowOf(e.sender);
     const url = w?.url ?? null; // opened once, not again if the UI reloads
     const tearOff = w?.tearOff ?? null;
-    if (w) { w.url = null; w.tearOff = null; }
+    const moved = w?.moved ?? null;
+    if (w) { w.url = null; w.tearOff = null; w.moved = null; }
     return {
       settings: settings.data,
       private: Boolean(w?.private),
@@ -1314,6 +1961,7 @@ function registerIpc() {
       hardwareAcceleration: HARDWARE_ACCELERATION, // what this run started with
       launchUrl: url,
       tearOff,
+      movedTabs: moved,
     };
   });
   // A window saves its own tabs; when the shared sidebar changed too, the other normal windows get it.
@@ -1388,6 +2036,12 @@ function registerIpc() {
     const to = windows.get(Number(tab?.home?.windowId));
     if (!w || !to || typeof tab !== 'object') return false;
     return tearoff.moveTo(w, tab, to, { privateDone: endPrivateBrowsingIfUnused, home: tab.home });
+  });
+  // tabs chosen in the sidebar, moved together into a new window (tabselect.js)
+  handleFrom('window:move-tabs', (e, tabs) => {
+    const w = fromWindow(e);
+    if (!w || !Array.isArray(tabs)) return false;
+    return tearoff.moveToNewWindow(w, tabs.slice(0, 500), { openWindow: createWindow, privateDone: endPrivateBrowsingIfUnused });
   });
   ipcMain.on('ghost:settled', () => tearoff.settled());
   // F11: the window fills the screen, or comes back (see enter-full-screen in createWindow)
@@ -1599,17 +2253,48 @@ function registerIpc() {
   });
 
   // ---- extensions ----
-  const extChanged = (result) => { broadcast('extensions-changed'); return result; };
-  handle('ext:list', () => extensions.all());
+  const extChanged = (result) => { rebuildExtensionKeys(); broadcast('extensions-changed'); return result; };
+  handle('ext:list', () => extensions.all().map((e) => {
+    const entry = extensions.list.find((x) => x.id === e.id);
+    return { ...e, commands: entry ? extensionCommandList(entry) : [] };
+  }));
+  // a key you chose for an extension's command in Settings → Keyboard shortcuts ('' takes it away)
+  handle('ext:set-shortcut', ({ id, name, combo }) => {
+    const entry = extensions.list.find((e) => e.id === id);
+    if (!entry || typeof name !== 'string' || typeof combo !== 'string') return null;
+    if (combo && globalKeys.has(combo)) throw new Error('Ultima already uses that shortcut.');
+    // a combo does one thing: another extension's command that had it loses it
+    for (const other of extensions.list) {
+      for (const [n, c] of Object.entries(other.shortcuts || {})) if (c === combo && combo && !(other === entry && n === name)) extensions.setShortcut(other, n, '');
+    }
+    for (const [taken, k] of extensionKeys) if (taken === combo && !(k.id === id && k.name === name)) extensions.setShortcut(extensions.list.find((e) => e.id === k.id), k.name, '');
+    extensions.setShortcut(entry, name, combo);
+    return extChanged(true);
+  });
+  // the items an extension put on its toolbar button's menu (contextMenus with the "action" context)
+  let actionMenu = null; // { token, actions }
+  handle('ext:action-menu', ({ id, tabId }) => {
+    const actions = new Map();
+    const item = (label, fn, extra = {}) => { const key = `x${actions.size}`; actions.set(key, fn); return { id: key, label, ...extra }; };
+    const wc = Number.isInteger(tabId) ? webContents.fromId(tabId) : null;
+    const items = extensionMenuItems({ wc: wc && !wc.isDestroyed() ? wc : null, params: null, onlyFor: id, item });
+    actionMenu = { token: (actionMenu?.token || 0) + 1, actions };
+    return { token: actionMenu.token, items };
+  });
+  handle('ext:action-menu-choose', ({ token, id }) => { if (actionMenu?.token === token) actionMenu.actions.get(id)?.(); });
   handle('ext:install-webstore', async (input) => extChanged(await extensions.installFromWebStore(input)));
   handleFrom('ext:install-unpacked', async (e) => {
     const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), { title: 'Choose an unpacked extension folder', properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
     return extChanged(await extensions.installUnpacked(filePaths[0]));
   });
-  handle('ext:set-enabled', async ({ id, enabled }) => extChanged(await extensions.setEnabled(id, enabled)));
+  // an extension turned off or removed lets go of the tabs it was debugging (see releaseDebuggees)
+  const release = (id) => { const runtimeId = extensions.runtimeIdFor(id, PARTITION); if (runtimeId) releaseDebuggees(runtimeId); };
+  handle('ext:set-enabled', async ({ id, enabled }) => { if (!enabled) release(id); return extChanged(await extensions.setEnabled(id, enabled)); });
   handle('ext:set-pinned', ({ id, pinned }) => extChanged(extensions.setPinned(id, pinned)));
-  handle('ext:remove', (id) => extChanged(extensions.remove(id)));
+  handle('ext:remove', (id) => { release(id); return extChanged(extensions.remove(id)); });
+  handle('ext:action', ({ id, tabId }) => extensionActionClicked(id, tabId));
+  handle('ext:check-updates', async () => extChanged(await extensions.checkForUpdates()));
   // each window reports which tab is showing in it, for chrome.tabs.onActivated
   handleFrom('tabs:active', (e, id) => {
     const w = windowOf(e.sender);
@@ -1659,9 +2344,28 @@ function registerIpc() {
   });
   handle('passwords:fill', ({ webContentsId, id }) => {
     const wc = webContents.fromId(webContentsId);
-    return wc ? fillLogin(wc, id) : false;
+    return wc ? passwords.fillLogin(wc, id) : false;
   });
   handle('passwords:delete', (id) => data.deletePassword(id));
+  handle('passwords:delete-all', () => data.deleteAllPasswords());
+  // the vault (renderer/vault.js)
+  handle('passwords:get', (id) => data.getLogin(id));
+  handle('passwords:save', (item) => data.saveLogin(item || {}));
+  handle('passwords:health', () => data.passwordHealth(passwords.strength));
+  handle('passwords:folders', () => data.listPasswordFolders());
+  handle('passwords:add-folder', (name) => data.addPasswordFolder(name));
+  handle('passwords:rename-folder', ({ id, name }) => data.renamePasswordFolder(id, name));
+  handle('passwords:delete-folder', (id) => data.deletePasswordFolder(id));
+  handleFrom('passwords:export', async (e) => {
+    const { canceled, filePath } = await dialog.showSaveDialog(parentOf(e), {
+      title: 'Export passwords', defaultPath: path.join(app.getPath('downloads'), 'Ultima passwords.csv'), filters: [{ name: 'CSV', extensions: ['csv'] }],
+    });
+    if (canceled || !filePath) return null;
+    const cell = (v) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+    const rows = (await data.exportPasswords()).map((r) => [r.name, r.url, r.username, r.password, r.notes, r.folder].map(cell).join(','));
+    fs.writeFileSync(filePath, ['name,url,username,password,note,folder', ...rows].join('\r\n'));
+    return filePath;
+  });
 
   handle('data:clear', async ({ history, cookies, cache, partitions = [] }) => {
     if (history) data.clearHistory();
@@ -1695,6 +2399,22 @@ function registerIpc() {
     pendingAsks.delete(id);
   });
 }
+
+// A page's alert(), confirm() or prompt() (dialog-preload.js): asked in Ultima's dialog in the page's window, titled
+// with the site or extension, as Chrome does. The page waits for the answer (a synchronous message, answered then).
+ipcMain.on('ultima:page-dialog', async (e, type, message, value) => {
+  const empty = type === 'confirm' ? false : null;
+  const w = e.sender.getType() === 'webview' ? windowOf(e.sender) : null; // Ultima's own UI never asks itself
+  if (!w || !['alert', 'confirm', 'prompt'].includes(type)) { e.returnValue = empty; return; }
+  let from = '';
+  try {
+    const url = new URL(e.senderFrame?.url || e.sender.getURL());
+    const entry = entryFor(extIdOf(url.href));
+    from = entry ? extensions.info(entry).name : url.host;
+  } catch { /* an unusual address: "This page says" */ }
+  const answer = await askUi('page-dialog', { type, message: String(message).slice(0, 10000), value: String(value ?? ''), from }, w);
+  try { e.returnValue = answer ?? empty; } catch { /* the page closed meanwhile */ }
+});
 
 // Questions for the user (e.g. permission prompts) are shown by the UI in Ultima's own dialogs.
 const pendingAsks = new Map();
@@ -1796,6 +2516,7 @@ app.whenReady().then(async () => {
   sessionStore.data = migrateSession(sessionStore.data);
   data = new BrowserData(dir);
   data.onBookmarksChanged = () => broadcast('bookmarks-changed');
+  passwords = initPasswords({ data, settings, windowOf, sendTo, broadcast });
   extensions = new ExtensionManager(dir);
   extLogFile = path.join(dir, 'logs', 'extensions.log');
   fs.mkdirSync(path.dirname(extLogFile), { recursive: true });
@@ -1812,7 +2533,13 @@ app.whenReady().then(async () => {
   setInterval(refreshLists, 6 * 60 * 60 * 1000);
   partitionSession(PARTITION);
   registerIpc();
-  await widevineReady();
+  // Pages restored now get their extensions' content scripts only if the extensions have loaded first (one that takes
+  // too long doesn't hold Ultima up: a reload gives the page what it missed)
+  await Promise.all([widevineReady(), Promise.race([extensionsLoaded, new Promise((r) => { setTimeout(r, 4000); })])]);
+  // extensions keep up to date, as in Chrome: checked soon after start and every five hours (see checkForUpdates)
+  const checkExtensions = () => extensions.checkForUpdates().then(() => broadcast('extensions-changed')).catch(() => {});
+  setTimeout(checkExtensions, 60 * 1000);
+  setInterval(checkExtensions, 5 * 60 * 60 * 1000);
   // every window that was open last time comes back (its regular tabs only when "Restore tabs" is on; the shared
   // sidebar always does); a link Ultima was started with opens in the last of them
   if (!settings.data.restoreSession && !process.argv.includes(RESTART_SWITCH)) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
@@ -1838,6 +2565,8 @@ app.on('before-quit', () => {
   data?.flush();
   for (const s of [settings, sessionStore]) if (s?.timer) s.flush();
 });
+// apps extensions were talking to (native messaging) end with Ultima, as with Chrome
+app.on('will-quit', () => { for (const id of [...nativePorts.keys()]) closeNativePort(id); });
 
 app.on('window-all-closed', () => {
   data?.flush();

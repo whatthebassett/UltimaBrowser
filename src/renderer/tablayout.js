@@ -29,6 +29,8 @@ function setTabLayout(mode) {
     const strip = h('<div id="hstrip" class="hstrip drag"></div>');
     const bar = h('<div id="htoolbar" class="htoolbar"></div>');
     for (const sel of TL_STRIP) strip.append($(sel));
+    // room to move the window by that tabs never take, however many are open (the strip's empty stretch is gone then)
+    strip.append(h('<div class="hstrip-grip" aria-hidden="true"></div>'));
     for (const sel of TL_TOOLBAR) bar.append($(sel));
     $('#sidebar').prepend(strip, bar);
   } else {

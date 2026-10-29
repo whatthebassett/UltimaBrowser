@@ -14,20 +14,32 @@ let onHostEvent = null;
 const early = [];
 const hostEvent = (name, args) => { if (onHostEvent) onHostEvent(name, args); else if (early.length < 50) early.push([name, args]); };
 ipcRenderer.on('ultima:ext-event', (_e, name, args) => hostEvent(name, args));
-// A background worker asks straight away whether it was just installed or updated (Electron never says).
-if (typeof document === 'undefined') {
-  ipcRenderer.invoke('ultima:ext-installed').then((details) => { if (details) hostEvent('runtime.onInstalled', [details]); }).catch(() => {});
-}
+// Main hooks up each background worker as it starts, and a worker can call before that (Stylus sets its alarms at
+// once): the call then fails with "No handler registered", and an extension that waits on it never finishes
+// starting. So a worker's calls wait until it is hooked up: its first call below answers, or main says so after
+// hooking it (there are no timers here to try again with).
+const isWorker = typeof document === 'undefined';
+const takeInstalled = () => ipcRenderer.invoke('ultima:ext-installed')
+  .then((details) => { if (details) hostEvent('runtime.onInstalled', [details]); });
+const hooked = !isWorker ? Promise.resolve() : new Promise((resolve) => {
+  ipcRenderer.once('ultima:ext-hooked', () => resolve(takeInstalled().catch(() => {})));
+  // A background worker asks straight away whether it was just installed or updated (Electron never says).
+  takeInstalled().then(resolve, () => { /* not hooked yet: main says when it is */ });
+});
+const invoke = (channel, ...args) => hooked.then(() => ipcRenderer.invoke(channel, ...args));
+const send = (channel, ...args) => { hooked.then(() => ipcRenderer.send(channel, ...args)); };
 const hostApi = {
-  openTab: (url) => ipcRenderer.send('ultima:ext-open-tab', String(url)),
-  closeTabs: (ids) => ipcRenderer.send('ultima:ext-close-tabs', ids),
-  openPopout: (url, width, height) => ipcRenderer.send('ultima:ext-open-popout', String(url), Number(width) || 0, Number(height) || 0),
-  closePopout: () => ipcRenderer.send('ultima:ext-close-popout'),
-  getContexts: (filter) => ipcRenderer.invoke('ultima:ext-contexts', filter && typeof filter === 'object' ? filter : {}),
-  frames: (details) => ipcRenderer.invoke('ultima:ext-frames', details && typeof details === 'object' ? details : {}),
-  queryTabs: (q) => ipcRenderer.invoke('ultima:ext-tabs', q && typeof q === 'object' ? q : {}),
-  storageChanged: (changes, area) => ipcRenderer.send('ultima:ext-storage-changed', changes, String(area)),
-  alarms: (op, args) => ipcRenderer.invoke('ultima:ext-alarms', String(op), Array.isArray(args) ? args : []),
+  openTab: (url) => send('ultima:ext-open-tab', String(url)),
+  closeTabs: (ids) => send('ultima:ext-close-tabs', ids),
+  openPopout: (url, width, height) => send('ultima:ext-open-popout', String(url), Number(width) || 0, Number(height) || 0),
+  closePopout: () => send('ultima:ext-close-popout'),
+  getContexts: (filter) => invoke('ultima:ext-contexts', filter && typeof filter === 'object' ? filter : {}),
+  frames: (details) => invoke('ultima:ext-frames', details && typeof details === 'object' ? details : {}),
+  queryTabs: (q) => invoke('ultima:ext-tabs', q && typeof q === 'object' ? q : {}),
+  storageChanged: (changes, area) => send('ultima:ext-storage-changed', changes, String(area)),
+  alarms: (op, args) => invoke('ultima:ext-alarms', String(op), Array.isArray(args) ? args : []),
+  unsupported: (name) => send('ultima:ext-unsupported', String(name)),
+  call: (area, op, args) => invoke('ultima:ext-call', String(area), String(op), Array.isArray(args) ? args : []),
   onEvent: (cb) => {
     onHostEvent = cb;
     while (early.length) { const [name, args] = early.shift(); cb(name, args); }
@@ -36,19 +48,22 @@ const hostApi = {
 
 // Most extension contexts are isolated, so the fixes are run in the extension's own world through the bridge.
 // Offscreen documents run with isolation off: there this preload already shares the extension's world.
+// Chrome's API list (src/extension-api.json) comes first in the copy of this file main registers: preloads can't read files.
+/* global EXTENSION_API */
+const api = typeof EXTENSION_API === 'undefined' ? null : EXTENSION_API;
 function install(compat) {
   if (process.contextIsolated === false) {
     globalThis.__ultimaExtHost = hostApi;
-    compat();
+    compat(api);
     return;
   }
   try { contextBridge.exposeInMainWorld('__ultimaExtHost', hostApi); } catch { /* not available in this context */ }
-  contextBridge.executeInMainWorld({ func: compat });
+  contextBridge.executeInMainWorld({ func: compat, args: [api] });
 }
 
 // The extension check happens inside the page/worker itself: a worker's preload context has no `location`.
 install(
-  () => {
+  (api) => {
     if (globalThis.location?.protocol !== 'chrome-extension:') return;
     const chrome = globalThis.chrome;
     if (!chrome) return;
@@ -70,6 +85,22 @@ install(
       if (typeof cb === 'function') setTimeout(() => { try { cb(value); } catch { /* the extension's own error */ } });
       return Promise.resolve(value);
     };
+    // A call Ultima answers itself (EXTENSION_CALLS in main.js): it resolves or rejects like Chrome's, and a trailing
+    // callback gets the answer, with chrome.runtime.lastError set while it runs if the call failed.
+    const withLastError = (message, fn) => {
+      const runtime = chrome.runtime;
+      try { Object.defineProperty(runtime, 'lastError', { value: { message }, configurable: true }); } catch { /* fixed */ }
+      try { fn(); } finally { try { delete runtime.lastError; } catch { /* fixed */ } }
+    };
+    const viaUltima = (area, op, args) => {
+      const cb = typeof args[args.length - 1] === 'function' ? args.pop() : null;
+      const clean = (err) => new Error(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+      const answer = host?.call ? host.call(area, op, args).catch((err) => { throw clean(err); }) : Promise.reject(new Error('Not available here'));
+      if (!cb) return answer;
+      answer.then((v) => cb(v ?? undefined), (err) => withLastError(err.message, () => cb()));
+      return undefined;
+    };
+
     // Events Ultima really delivers (tabs.*, webNavigation.*, windows.onFocusChanged), keyed by "namespace.onName"
     const live = {};
     // Some events can arrive before the extension subscribes (runtime.onInstalled is sent as its background starts);
@@ -108,7 +139,7 @@ install(
         hasListeners: () => listeners.size > 0,
       };
     };
-    const LISTS = /^(getAll|query|search|getTree|getRecent|getSubTree|getVisits|getContexts|getChildren|getDevices)/;
+    const LISTS = /^(getAll|query|search|getTree|getRecent|getSubTree|getVisits|getContexts|getChildren|getDevices|getScripts|getFontList)/;
     const stand = (cache, key) => {
       if (typeof key !== 'string' || key === 'then') return undefined;
       if (!(key in cache)) {
@@ -266,12 +297,75 @@ install(
           return done(typeof info === 'function' ? [info] : a, host?.queryTabs ? await host.queryTabs(q) : await tabs.query(q));
         },
         get: async (id, ...a) => done(a, (host?.queryTabs ? await host.queryTabs({}) : await tabs.query({})).find((t) => t.id === id)),
+        // tab groups Ultima keeps for extensions, and pictures of the tab in front (see main.js)
+        group: (...a) => viaUltima('tabGroups', 'group', a),
+        ungroup: (...a) => viaUltima('tabGroups', 'ungroup', a),
+        captureVisibleTab: (...a) => {
+          const cb = typeof a[a.length - 1] === 'function' ? a.pop() : null;
+          const options = a.find((x) => x && typeof x === 'object') || {};
+          return viaUltima('capture', 'visibleTab', cb ? [options, cb] : [options]);
+        },
         create: (props = {}, ...a) => {
           if (props.url) openTab(props.url);
           return done(a, { id: -1, index: 0, windowId: 1, active: props.active !== false, pinned: false, highlighted: true, incognito: false, url: props.url || '' });
         },
       }));
     }
+
+    // ---- native messaging: apps on this computer an extension talks to (Ultima starts them; see extensionNative) ----
+    // A Port as Chrome's: messages can be posted at once (they wait until the app has started), and onDisconnect
+    // says why with chrome.runtime.lastError.
+    const nativePorts = new Map(); // port id -> { port, lost(error) }
+    const endedEarly = new Map(); // port id -> why: the app ended before the port heard its id
+    const portEvent = () => {
+      const listeners = new Set();
+      return {
+        addListener: (f) => listeners.add(f),
+        removeListener: (f) => listeners.delete(f),
+        hasListener: (f) => listeners.has(f),
+        hasListeners: () => listeners.size > 0,
+        fire: (...args) => { for (const f of [...listeners]) { try { f(...args); } catch (err) { setTimeout(() => { throw err; }); } } },
+      };
+    };
+    liveEvent('native.message').addListener((id, msg) => { const p = nativePorts.get(id)?.port; p?.onMessage.fire(msg, p); });
+    liveEvent('native.disconnect').addListener((id, error) => {
+      const open = nativePorts.get(id);
+      nativePorts.delete(id);
+      if (open) open.lost(error); else endedEarly.set(id, error);
+    });
+    const connectNative = (application) => {
+      let id = null;
+      let closed = false;
+      const waiting = [];
+      const post = (msg) => viaUltima('native', 'post', [id, msg]).catch(() => { /* the port closed meanwhile: onDisconnect says so */ });
+      const port = {
+        name: String(application),
+        onMessage: portEvent(),
+        onDisconnect: portEvent(),
+        postMessage: (msg) => {
+          if (closed) throw new Error('Attempting to use a disconnected port object');
+          if (id === null) waiting.push(msg); else post(msg);
+        },
+        disconnect: () => {
+          if (closed) return;
+          closed = true;
+          if (id !== null) { nativePorts.delete(id); viaUltima('native', 'disconnect', [id]).catch(() => {}); }
+        },
+      };
+      const lost = (error) => {
+        if (closed) return;
+        closed = true;
+        withLastError(error || 'Native host has exited.', () => port.onDisconnect.fire(port));
+      };
+      viaUltima('native', 'connect', [String(application)]).then((pid) => {
+        id = pid;
+        if (closed) { viaUltima('native', 'disconnect', [id]).catch(() => {}); return; }
+        if (endedEarly.has(id)) { const why = endedEarly.get(id); endedEarly.delete(id); lost(why); return; }
+        nativePorts.set(id, { port, lost });
+        for (const msg of waiting.splice(0)) post(msg);
+      }, (err) => setTimeout(() => lost(err.message)));
+      return port;
+    };
 
     // ---- runtime extras ----
     if (chrome.runtime) {
@@ -286,12 +380,28 @@ install(
           return done(a);
         },
         setUninstallURL: (...a) => done(a),
+        ...[...(manifest.permissions || []), ...(manifest.optional_permissions || [])].includes('nativeMessaging') ? { // Bitwarden asks for it as optional
+          connectNative,
+          sendNativeMessage: (application, message, ...a) => viaUltima('native', 'send', [String(application), message, ...a]),
+        } : {},
         requestUpdateCheck: (...a) => done(a, { status: 'no_update' }),
       }));
     }
 
+    // ---- extension: Electron keeps almost none of this older namespace ----
+    // Dark Reader's background asks isAllowedFileSchemeAccess as it starts; without it, it never starts and its
+    // popup waits forever. Extensions here never get file:// or private-window access.
+    if (chrome.extension) {
+      define('extension', patched(chrome.extension, {
+        getURL: (p) => chrome.runtime.getURL(p),
+        isAllowedFileSchemeAccess: (...a) => done(a, false),
+        isAllowedIncognitoAccess: (...a) => done(a, false),
+      }));
+    }
+
     // ---- toolbar button calls Ultima doesn't use ----
-    if (chrome.action) define('action', patched(chrome.action));
+    // a click on the toolbar button of an extension without a popup (Electron never sends it; Ultima does)
+    if (chrome.action) define('action', patched(chrome.action, { onClicked: liveEvent('action.onClicked') }));
 
     // Scripts an extension registered survive its background restarting here, so registering them again fails with
     // "Duplicate script ID" (Bitwarden's passkey support does this). Replace the old registration instead.
@@ -362,7 +472,7 @@ install(
       }));
     }
 
-    // ---- APIs Electron lacks entirely ----
+    // ---- APIs Electron lacks entirely: better answers than the stand-ins below ----
     const setting = () => ({
       get: (d, ...a) => done(a, { value: false, levelOfControl: 'not_controllable' }),
       set: (...a) => done(a),
@@ -377,15 +487,116 @@ install(
         getAllFrames: async (details, ...a) => done(a, host?.frames ? await host.frames({ tabId: details?.tabId }) : []),
         getFrame: async (details, ...a) => done(a, host?.frames ? await host.frames({ tabId: details?.tabId, frameId: details?.frameId ?? 0 }) : null),
       },
-      contextMenus: { create: (props = {}, cb) => { if (typeof cb === 'function') setTimeout(cb); return props.id ?? Math.floor(Math.random() * 1e9); } },
+      // right-click menu items: Ultima keeps them and shows them in its menus (see extensionMenus in main.js).
+      // create() answers with the item's id at once, as Chrome's does; an onclick (older extensions) is kept here.
+      contextMenus: (() => {
+        const onclick = new Map();
+        liveEvent('contextMenus.onClicked').addListener((info, tab) => onclick.get(info.menuItemId)?.(info, tab));
+        const quiet = (p) => { if (p) p.catch(() => { /* reported through lastError when there's a callback */ }); };
+        return {
+          create: (props = {}, cb) => {
+            const { onclick: fn, ...rest } = props && typeof props === 'object' ? props : {};
+            const id = rest.id ?? Math.floor(Math.random() * 1e9);
+            if (typeof fn === 'function') onclick.set(id, fn);
+            quiet(viaUltima('menus', 'create', typeof cb === 'function' ? [{ ...rest, id }, cb] : [{ ...rest, id }]));
+            return id;
+          },
+          update: (id, props = {}, ...a) => {
+            const { onclick: fn, ...rest } = props && typeof props === 'object' ? props : {};
+            if (typeof fn === 'function') onclick.set(id, fn);
+            return viaUltima('menus', 'update', [id, rest, ...a]);
+          },
+          remove: (id, ...a) => { onclick.delete(id); return viaUltima('menus', 'remove', [id, ...a]); },
+          removeAll: (...a) => { onclick.clear(); return viaUltima('menus', 'removeAll', a); },
+          ACTION_MENU_TOP_LEVEL_LIMIT: 6,
+          ...liveEvents('contextMenus', ['onClicked']),
+        };
+      })(),
       notifications: { getAll: (...a) => done(a, {}), getPermissionLevel: (...a) => done(a, 'granted'), create: (id, ...a) => done(a, typeof id === 'string' ? id : String(Date.now())) },
-      commands: { getAll: (...a) => done(a, []) },
+      // keyboard shortcuts: Ultima listens for them and tells the extension (see extensionCommands in main.js)
+      commands: { getAll: (...a) => viaUltima('commands', 'getAll', a), ...liveEvents('commands', ['onCommand']) },
+      // Ultima's own versions (see EXTENSION_CALLS in main.js)
+      debugger: {
+        attach: (...a) => viaUltima('debugger', 'attach', a),
+        detach: (...a) => viaUltima('debugger', 'detach', a),
+        sendCommand: (...a) => viaUltima('debugger', 'sendCommand', a),
+        getTargets: (...a) => viaUltima('debugger', 'getTargets', a),
+        ...liveEvents('debugger', ['onEvent', 'onDetach']),
+      },
+      tabGroups: {
+        get: (...a) => viaUltima('tabGroups', 'get', a),
+        query: (...a) => viaUltima('tabGroups', 'query', a),
+        update: (...a) => viaUltima('tabGroups', 'update', a),
+        move: (...a) => viaUltima('tabGroups', 'move', a),
+        ...liveEvents('tabGroups', ['onCreated', 'onUpdated', 'onMoved', 'onRemoved']),
+      },
+      sidePanel: {
+        ...Object.fromEntries(['setOptions', 'getOptions', 'setPanelBehavior', 'getPanelBehavior', 'open', 'close', 'getLayout'].map((op) => [op, (...a) => viaUltima('sidePanel', op, a)])),
+        ...liveEvents('sidePanel', ['onOpened', 'onClosed']),
+      },
+      // Dark Reader's popup waits on this list before it shows anything
+      fontSettings: { getFontList: (...a) => done(a, ['serif', 'sans-serif', 'monospace', 'cursive', 'fantasy', 'system-ui'].map((f) => ({ fontId: f, displayName: f }))) },
       privacy: { services: settingsGroup(), network: settingsGroup(), websites: settingsGroup() },
     };
-    const NAMESPACES = ['webNavigation', 'contextMenus', 'menus', 'notifications', 'commands', 'sidePanel', 'privacy', 'tabGroups',
-      'bookmarks', 'history', 'downloads', 'cookies', 'declarativeNetRequest', 'proxy', 'tts', 'topSites', 'search', 'sessions',
-      'browsingData', 'contentSettings', 'fontSettings', 'pageCapture', 'power', 'identity', 'readingList', 'userScripts', 'idle', 'alarms', 'offscreen'];
-    for (const name of NAMESPACES) if (!chrome[name]) define(name, missing(extras[name]));
+
+    // ---- everything else Chrome has: stand-ins from Chrome's own API list (src/extension-api.json) ----
+    // An extension that touches an API Electron lacks gets a harmless stand-in instead of crashing: calls resolve
+    // with an empty value of the right kind, events never fire, enums and constants are there. As in Chrome, a
+    // namespace is only there when the manifest asks for its permission or key. The first call of each stand-in is
+    // reported, so Settings → Extensions can say what an extension misses (listening for an event that never comes
+    // is harmless, so that isn't).
+    const reported = new Set();
+    const unsupported = (name) => {
+      if (reported.has(name)) return;
+      reported.add(name);
+      console.warn(`Ultima doesn't support chrome.${name} yet`);
+      host?.unsupported?.(name);
+    };
+    const EMPTY = { a: () => [], b: () => false, n: () => 0, s: () => '', o: () => ({}), v: () => undefined };
+    const standInFn = (name, kind) => (...args) => { unsupported(name); return done(args, (EMPTY[kind] || EMPTY.v)()); };
+    // what `shape` (a namespace or object in the list) has that `target` lacks
+    // (deep: also fill in objects already there; not inside Ultima's own answers above, which know better)
+    const additions = (target, shape, name, deep = true) => {
+      const add = {};
+      for (const [k, kind] of Object.entries(shape.fn || {})) if (!(k in target)) add[k] = standInFn(`${name}.${k}`, kind);
+      for (const k of shape.ev || []) if (!(k in target)) add[k] = event();
+      for (const [k, values] of Object.entries(shape.enum || {})) if (!(k in target)) add[k] = Object.freeze({ ...values });
+      for (const [k, value] of Object.entries(shape.const || {})) if (!(k in target)) add[k] = value;
+      for (const [k, sub] of Object.entries(shape.props || {})) {
+        if (!(k in target)) add[k] = additions({}, sub, `${name}.${k}`);
+        else if (deep && target[k] && typeof target[k] === 'object') fill(target[k], sub, `${name}.${k}`);
+      }
+      return add;
+    };
+    const fill = (target, shape, name) => {
+      for (const [k, v] of Object.entries(additions(target, shape, name))) {
+        try { Object.defineProperty(target, k, { value: v, configurable: true, writable: true, enumerable: true }); } catch { /* fixed */ }
+      }
+    };
+    const manifest = chrome.runtime?.getManifest?.() || {};
+    const asked = new Set([...(manifest.permissions || []), ...(manifest.optional_permissions || [])].filter((p) => typeof p === 'string'));
+    const offered = (e) => ((!e.perm && !e.manifest) || (e.perm || []).some((p) => asked.has(p)) || (e.manifest || []).some((k) => k in manifest))
+      && !(e.pagesOnly && isWorker) && !(e.mv3 && manifest.manifest_version < 3);
+    for (const [name, shape] of Object.entries(api?.namespaces || {})) {
+      // devtools.* exist only in DevTools pages, and extensions test for them to know where they are
+      if (name.startsWith('devtools.') || !offered(shape)) continue;
+      const path = name.split('.');
+      let parent = chrome;
+      for (const part of path.slice(0, -1)) {
+        if (!parent[part]) { if (parent === chrome) define(part, {}); else parent[part] = {}; }
+        parent = parent[part];
+      }
+      const key = path[path.length - 1];
+      const own = extras[name] || {};
+      if (parent[key]) {
+        fill(parent[key], shape, name);
+      } else if (shape.fn || shape.ev || shape.props || extras[name]) { // a namespace of only types and constants isn't one
+        const ns = { ...additions(own, shape, name, false), ...own };
+        if (parent === chrome) define(key, ns); else parent[key] = ns;
+      }
+    }
+    // the namespaces with better answers above, if the list doesn't know them (an older list)
+    for (const [name, own] of Object.entries(extras)) if (!chrome[name] && !api?.namespaces?.[name]) define(name, missing(own));
     if (chrome.contextMenus && !chrome.menus) define('menus', chrome.contextMenus);
     if (chrome.storage) define('storage', chrome.storage); // its areas carry the change events above
     } catch (err) { console.warn(`Ultima couldn't finish setting up extension APIs: ${err?.stack || err}`); }

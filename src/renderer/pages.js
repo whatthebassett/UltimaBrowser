@@ -1,10 +1,11 @@
 // Built-in ultima:// pages, rendered directly in the browser UI.
 let pageTimer = null;
 
+// (`tab` null: a space with nothing open shows the new tab page on its own)
 function renderInternal(tab) {
   clearInterval(pageTimer);
   const root = $('#internal');
-  const name = internalName(tab.url);
+  const name = tab ? internalName(tab.url) : 'newtab';
   const pages = { newtab: pageNewTab, settings: pageSettings, history: pageHistory, waypoints: pageBookmarks, import: pageImport, passwords: pagePasswords, downloads: pageDownloads, shortcuts: pageShortcuts, tasks: pageTasks };
   root.scrollTop = 0;
   (pages[name] || pageNewTab)(root, tab);
@@ -17,12 +18,14 @@ const rerenderIfShowing = (name) => {
 
 // ---------- new tab ----------
 async function pageNewTab(root, tab) {
+  // with no tab (a space with nothing open), what you open here gets a tab of its own
+  const go = (url) => (tab ? navigate(tab, url) : createTab({ url }));
   const engine = SEARCH_ENGINES[B.settings.searchEngine] || SEARCH_ENGINES.google;
   root.innerHTML = `<div class="ntp">
     <div class="clock" id="ntp-clock"></div>
     <div class="greet" id="ntp-greet"></div>
     <label class="ntp-search">${icon('search', 18)}<input id="ntp-q" placeholder="Search ${esc(engine.name)} or type a URL" spellcheck="false"></label>
-    ${tab.private ? `<div class="ntp-private">${icon('incognito', 20)}<div><b>${B.private ? 'Private window' : 'Private tab'}</b>
+    ${tab?.private || (!tab && B.private) ? `<div class="ntp-private">${icon('incognito', 20)}<div><b>${B.private ? 'Private window' : 'Private tab'}</b>
       <span>Pages you visit here aren’t saved to your history, and their cookies and site data are deleted when your last private tab closes. Downloads and Waypoints are kept. Extensions are off.</span></div></div>`
     : '<div class="tiles" id="ntp-tiles"></div>'}
     ${keysFor('palette')[0] ? `<div class="ntp-hint">Press ${kbdHtml(keysFor('palette')[0])} anywhere to open the Control Palette</div>` : ''}
@@ -39,7 +42,7 @@ async function pageNewTab(root, tab) {
   pageTimer = setInterval(tick, 10000);
   const q = $('#ntp-q');
   q.addEventListener('keydown', (e) => {
-    if (matchesKey(e, 'field.submit') && q.value.trim()) navigate(tab, resolveInput(q.value, B.settings.searchEngine));
+    if (matchesKey(e, 'field.submit') && q.value.trim()) go(resolveInput(q.value, B.settings.searchEngine));
   });
   // don't steal focus from something the user is already typing in (palette, space rename…)
   setTimeout(() => { if (activeTab() === tab && (!document.activeElement || document.activeElement === document.body)) q.focus(); }, 0);
@@ -49,12 +52,12 @@ async function pageNewTab(root, tab) {
   if (!tiles) return;
   if (!sites.length) {
     tiles.outerHTML = `<div style="margin-top:36px"><button class="btn" id="ntp-import">${icon('import')} Bring your bookmarks & history from another browser</button></div>`;
-    $('#ntp-import').onclick = () => navigate(tab, 'ultima://import');
+    $('#ntp-import').onclick = () => go('ultima://import');
     return;
   }
   tiles.innerHTML = sites.map((s) => `<button class="tile" data-url="${esc(s.url)}" title="${esc(s.title)}">
     <span class="tile-icon">${favHtml(`https://${s.host}/favicon.ico`, s.url, s.host)}</span><span>${esc(s.host)}</span></button>`).join('');
-  tiles.onclick = (e) => { const b = e.target.closest('.tile'); if (b) navigate(tab, b.dataset.url); };
+  tiles.onclick = (e) => { const b = e.target.closest('.tile'); if (b) go(b.dataset.url); };
 }
 
 // ---------- history ----------
@@ -216,42 +219,7 @@ async function pageImport(root) {
   };
 }
 
-// ---------- passwords ----------
-async function pagePasswords(root, tab) {
-  root.innerHTML = `<div class="page"><h1>Passwords</h1><p class="sub">Encrypted with your computer account. To fill one in, right-click a login field or use the key button in the toolbar.</p>
-    <div class="toolbar"><input class="field" id="pq" placeholder="Search logins" spellcheck="false"><button class="btn" id="pimport">${icon('import')} Import CSV</button></div>
-    <div id="plist" class="list"></div></div>`;
-  let all = await window.ultima.listPasswords();
-  const draw = () => {
-    const q = $('#pq').value.toLowerCase();
-    const items = all.filter((p) => !q || `${p.origin} ${p.username}`.toLowerCase().includes(q)).sort((a, b) => a.origin.localeCompare(b.origin));
-    $('#plist').innerHTML = items.length ? items.map((p) => `<div class="row" data-id="${esc(p.id)}">${favHtml('', p.origin, p.origin)}
-      <div class="main"><div class="t">${esc(hostname(p.origin) || p.origin)}</div><div class="u">${esc(p.username || '(no username)')}</div></div>
-      <div class="acts" style="opacity:1"><button class="icon-btn" data-act="user" title="Copy username">${icon('copy', 15)}</button>
-      <button class="icon-btn" data-act="pass" title="Copy password (cleared from clipboard after 30s)">${icon('key', 15)}</button>
-      <button class="icon-btn" data-act="open" title="Open site">${icon('external', 15)}</button>
-      <button class="icon-btn" data-act="del" title="Delete">${icon('trash', 15)}</button></div></div>`).join('')
-      : `<div class="empty">${all.length ? 'Nothing matches' : 'No saved logins yet — import them from your old browser.'}</div>`;
-  };
-  $('#pq').addEventListener('input', draw);
-  $('#pimport').onclick = async () => {
-    try {
-      const r = await window.ultima.importPasswordsCsv();
-      if (r) { toast(`Imported ${r.added} passwords`); all = await window.ultima.listPasswords(); draw(); }
-    } catch (err) { toast(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
-  };
-  $('#plist').onclick = async (e) => {
-    const row = e.target.closest('.row');
-    const act = e.target.closest('[data-act]')?.dataset.act;
-    if (!row || !act) return;
-    const id = row.dataset.id;
-    if (act === 'user') { await window.ultima.copyPassword({ id, field: 'username' }); toast('Username copied'); }
-    if (act === 'pass') { await window.ultima.copyPassword({ id, field: 'password' }); toast('Password copied — clipboard clears in 30 s'); }
-    if (act === 'open') createTab({ url: all.find((p) => p.id === id).origin });
-    if (act === 'del' && await confirmDialog('You can import it again from a CSV export.', { title: 'Delete this saved login?', ok: 'Delete', danger: true })) { await window.ultima.deletePassword(id); all = all.filter((p) => p.id !== id); draw(); }
-  };
-  draw();
-}
+// ---------- passwords: the vault is in vault.js ----------
 
 // ---------- downloads ----------
 function pageDownloads(root) {

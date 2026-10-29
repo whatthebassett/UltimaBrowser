@@ -108,6 +108,9 @@ const COLOR_FILTERS = [['none', 'None'], ['grayscale', 'Grayscale'], ['invert', 
 function performanceRows() {
   const want = B.settings.hardwareAcceleration !== false;
   return [
+    sRow('Sleeping tabs', 'Tabs you haven’t used in a while unload to save memory, and load again when you open them.', sSwitch('sleepTabs')),
+    B.settings.sleepTabs && sRow('Put tabs to sleep after', 'How long a tab sits in the background first.',
+      `<select class="field" data-setting="sleepTabsAfter" data-number>${SLEEP_AFTER.map(([v, label]) => `<option value="${v}" ${Number(B.settings.sleepTabsAfter || 900) === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`),
     sRow('Hardware acceleration', 'Smoother pages and video. Turn it off if pages flicker or look garbled.', sSwitch('hardwareAcceleration')),
     want !== B.hardwareAcceleration && sRow(`Restart to turn it ${want ? 'on' : 'off'}`, 'Your tabs come back after the restart. Private ones close.',
       '<button class="btn primary" data-relaunch>Restart Ultima</button>'),
@@ -149,6 +152,14 @@ function addressModeCards() {
 }
 
 // ---------- tabs ----------
+// An extension that used APIs Ultima only stands in for: which ones, by namespace (see extension-compat.js)
+function extPartly(e) {
+  const names = [...new Set((e.unsupported || []).map((n) => `chrome.${n.split('.')[0]}`))];
+  if (!names.length) return '';
+  const list = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}` : names[0];
+  return `<br><span class="s-partly">Partly works: Ultima doesn’t have ${esc(list)} yet.</span>`;
+}
+
 const SETTINGS_TABS = [
   {
     id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads, search and performance.',
@@ -298,8 +309,8 @@ const SETTINGS_TABS = [
     id: 'extensions', title: 'Extensions', icon: 'puzzle', desc: 'Chrome extensions, installed from the Chrome Web Store or a folder.',
     render: () => [
       sGroup('Installed', EXT.list.length ? EXT.list.map((e) => sRow(
-        `${extIcon(e, 20)}${esc(e.name)} <span class="s-badge s-badge-quiet">${esc(e.version)}</span>${e.source === 'unpacked' ? ' <span class="s-badge s-badge-quiet">Unpacked</span>' : ''}`,
-        e.error ? `<span class="s-error">Couldn’t start: ${esc(e.error)}</span>` : esc(e.description || ''),
+        `${extIcon(e, 20)}${esc(e.name)} <span class="s-badge s-badge-quiet">${esc(e.version)}</span>${e.source === 'unpacked' ? ' <span class="s-badge s-badge-quiet">Unpacked</span>' : ''}${e.updateReady ? ` <span class="s-badge" title="Version ${esc(e.updateReady)} starts when Ultima restarts">Update ready</span>` : ''}`,
+        e.error ? `<span class="s-error">Couldn’t start: ${esc(e.error)}</span>` : `${esc(e.description || '')}${extPartly(e)}`,
         `${e.optionsPage ? `<button class="btn" data-ext-options="${esc(e.id)}">Options</button>` : ''}
          <button class="icon-btn ${e.pinned ? 'on' : ''}" data-ext-pin="${esc(e.id)}" title="${e.pinned ? 'Unpin from toolbar' : 'Pin to toolbar'}">${icon('pin', 15)}</button>
          <button class="icon-btn" data-ext-remove="${esc(e.id)}" title="Remove">${icon('trash', 15)}</button>
@@ -311,11 +322,14 @@ const SETTINGS_TABS = [
         sRow('Browse the Chrome Web Store', '', '<button class="btn" data-ext-store>Open store</button>'),
         sRow('Load unpacked', 'Load an extension from a folder, for developers.', '<button class="btn" data-ext-unpacked>Choose folder…</button>'),
       ]),
+      sGroup('Updates', [
+        sRow('Keep extensions up to date', 'New versions download by themselves and start when Ultima restarts.', '<button class="btn" data-ext-updates>Check now</button>'),
+      ]),
       sGroup('Troubleshooting', [
         sRow('Extension log', 'Errors and warnings from your extensions.', '<button class="btn" data-ext-log>Open log</button>'),
       ]),
       sGroup('Compatibility', [
-        sRow('What works', 'Most extensions work. Ones that need Chrome-only features, like sync or side panels, may only partly work.', ''),
+        sRow('What works', 'Most extensions work. Ones that need Chrome-only features, like sync, may only partly work.', ''),
       ]),
     ].join(''),
   },
@@ -487,7 +501,7 @@ function pageSettings(root, tab) {
     else if (d.run) { runCommand(d.run); return; }
     else if (d.extToggle) { const ext = EXT.list.find((x) => x.id === d.extToggle); await window.ultima.setExtensionEnabled({ id: ext.id, enabled: !ext.enabled }); return; }
     else if (d.extPin) { const ext = EXT.list.find((x) => x.id === d.extPin); await window.ultima.setExtensionPinned({ id: ext.id, pinned: !ext.pinned }); return; }
-    else if (d.extOptions) { openExtension({ ...EXT.list.find((x) => x.id === d.extOptions), popup: null }, t); return; }
+    else if (d.extOptions) { openExtensionOptions(EXT.list.find((x) => x.id === d.extOptions)); return; }
     else if (d.extRemove) {
       const ext = EXT.list.find((x) => x.id === d.extRemove);
       if (await confirmDialog(ext.source === 'unpacked' ? 'Its folder on your computer is left as it is.' : 'Its data in Ultima is deleted.', { title: `Remove ${ext.name}?`, ok: 'Remove', danger: true })) await window.ultima.removeExtension(ext.id);
@@ -497,6 +511,15 @@ function pageSettings(root, tab) {
       if (await installFromStore(input.value)) input.value = '';
       return;
     } else if (t.hasAttribute('data-ext-log')) { await window.ultima.openExtensionLog(); return; }
+    else if (t.hasAttribute('data-ext-updates')) {
+      t.disabled = true;
+      try {
+        const ready = await window.ultima.checkExtensionUpdates();
+        toast(ready.length ? `Updates ready for ${ready.join(', ')}. They start when Ultima restarts.` : 'Your extensions are up to date.');
+      } catch { toast('Couldn’t check for updates. Try again later.'); }
+      t.disabled = false;
+      return;
+    }
     else if (t.hasAttribute('data-ext-store')) { createTab({ url: STORE_HOME }); return; }
     else if (t.hasAttribute('data-ext-unpacked')) {
       try {

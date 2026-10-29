@@ -47,7 +47,57 @@ function pageShortcuts(root, tab) {
         <div class="main"><div class="t">${esc(c.title)}</div>${changed ? '<div class="u">Customized</div>' : ''}</div>
         <div class="key-chips">${chips}<button class="key-add" data-act="add" title="Add a shortcut">${icon('plus', 14)}</button></div>
         <button class="btn key-reset" data-act="reset" style="${changed ? '' : 'visibility:hidden'}">Reset</button></div>`;
-    }).join('')}</div>`).join('') || '<div class="empty">No shortcut matches</div>';
+    }).join('')}</div>`).join('') + extensionRows(q) || '<div class="empty">No shortcut matches</div>';
+  }
+
+  // Extensions' shortcuts (chrome.commands): one key each, as in Chrome, kept by main (see extensionCommandList)
+  function extensionRows(q) {
+    const rows = [];
+    for (const ext of EXT.list.filter((e) => e.enabled && e.commands?.length)) {
+      for (const c of ext.commands) {
+        const title = `${ext.name}: ${c.description}`;
+        if (q && !q.split(/\s+/).every((w) => `${title} ${c.shortcut ? fmt(c.shortcut) : ''}`.toLowerCase().includes(w))) continue;
+        const chip = c.shortcut ? `<span class="key-chip">${kbdHtml(c.shortcut)}<button data-act="ext-remove" title="Remove ${esc(fmt(c.shortcut))}">${icon('close', 12)}</button></span>` : '';
+        rows.push(`<div class="row key-row" data-ext-id="${esc(ext.id)}" data-ext-cmd="${esc(c.name)}">
+          <div class="main"><div class="t">${esc(title)}</div></div>
+          <div class="key-chips">${chip}<button class="key-add" data-act="ext-add" title="${c.shortcut ? 'Change the shortcut' : 'Add a shortcut'}">${icon('plus', 14)}</button></div>
+          <button class="btn key-reset" style="visibility:hidden">Reset</button></div>`);
+      }
+    }
+    return rows.length ? `<h3>Extensions</h3><div class="list">${rows.join('')}</div>` : '';
+  }
+
+  const setExtensionKey = async (id, name, combo, message) => {
+    try {
+      await window.ultima.setExtensionShortcut({ id, name, combo });
+      await refreshExtensions();
+      if ($('#klist')) draw();
+      toast(message);
+    } catch (err) {
+      if ($('#klist')) draw();
+      toast(err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    }
+  };
+
+  function recordExtensionKey(row) {
+    stopRecording();
+    const { extId, extCmd } = row.dataset;
+    window.ultima.setKeyRecording(true);
+    recording = extCmd;
+    const box = h('<button class="key-recorder">Press a shortcut… <span class="key-hint">click elsewhere to cancel</span></button>');
+    $('.key-add', row).replaceWith(box);
+    box.focus();
+    box.addEventListener('keydown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const combo = KEYMAP.comboFromEvent(e);
+      if (!combo) return; // only modifiers held so far
+      recording = null;
+      window.ultima.setKeyRecording(false);
+      const title = $('.t', row).textContent;
+      setExtensionKey(extId, extCmd, combo, `${fmt(combo)} → ${title}`);
+    });
+    box.addEventListener('blur', () => setTimeout(stopRecording, 0));
   }
 
   const save = (next, message, undo) => {
@@ -97,6 +147,8 @@ function pageShortcuts(root, tab) {
     const row = e.target.closest('.key-row');
     const btn = e.target.closest('[data-act]');
     if (!row || !btn) return;
+    if (btn.dataset.act === 'ext-add') { recordExtensionKey(row); return; }
+    if (btn.dataset.act === 'ext-remove') { setExtensionKey(row.dataset.extId, row.dataset.extCmd, '', `Removed the shortcut from “${$('.t', row).textContent}”`); return; }
     const id = row.dataset.id;
     const title = commandOf(id).title;
     const before = overrides();

@@ -6,6 +6,7 @@ const B = {
   closed: [],
   nextId: 1,
   dragId: null,
+  selected: new Set(), // ids of the tabs chosen with Ctrl / Shift+click (tabselect.js)
   private: false, // a private window (windows.js)
   windowId: null,
 };
@@ -140,6 +141,7 @@ function ensureWebview(tab, adopt = null) {
     if (hostname(e.url) !== hostname(tab.url)) tab.favicon = '';
     const otherSite = siteOrigin(e.url) !== siteOrigin(tab.url);
     tab.url = e.url;
+    passwordOfferOnNavigate(tab); // "Save password?" is for the site it came from (pwfill.js)
     if (otherSite) applySiteSound(tab);
     if (isActive()) showContent(tab);
     addHistory({ url: e.url, visit: true });
@@ -182,6 +184,7 @@ function ensureWebview(tab, adopt = null) {
   wv.addEventListener('ipc-message', (e) => {
     if (e.channel === 'ultima:pane-top') setPaneHover(tab, Boolean(e.args[0]));
     else if (e.channel === 'ultima:swipe') onPageSwipe(tab, e.args[0] || {}); // swipe.js
+    else if (e.channel === 'ultima:page-press') clearTabSelection(); // a click in the page is a click away from the tabs you chose (tabselect.js)
   });
   wv.addEventListener('focus', () => {
     focusPane(tab); // in split view, the pane you click into becomes the active tab
@@ -212,6 +215,7 @@ function activateTab(id) {
   const tab = tabById(id);
   if (!tab) return;
   if (GL.open && GL.open.source !== tab) closeGlance({ instant: true }); // a glance belongs to the page it came from
+  if (id !== B.activeId) { closeLoginMenu(); closePasswordOffer(); } // (pwfill.js; the key button brings an offer back)
   B.activeId = id;
   tab.lastActive = Date.now();
   // shared Essentials don't change the space you are in, unless it has Essentials of its own (then it's one that doesn't)
@@ -237,12 +241,15 @@ function activateTab(id) {
 
 // Tells main which page is showing (extensions get chrome.tabs.onActivated). Tab ids are the pages' webContents ids.
 function notifyActiveTab(tab) {
+  updateSidePanel(); // a side panel set for one tab shows only while that tab is in front
   if (!tab?.webview || isInternal(tab.url)) { window.ultima.setActiveTab(null); return; }
   try { window.ultima.setActiveTab(tab.webview.getWebContentsId()); } catch { /* not attached yet: dom-ready reports it */ }
 }
 
-// Shows either the tab's webview (with the other panes of its split view) or its internal page.
+// Shows either the tab's webview (with the other panes of its split view) or its internal page. With no tab (a space
+// with nothing open in it), the new tab page shows, without a tab of its own: what you open from it gets one.
 function showContent(tab) {
+  if (!tab) { showNoTab(); return; }
   const panes = tab.splitId && !isInternal(tab.url) ? splitTabs(tab.splitId) : [tab];
   for (const t of B.tabs) t.webview?.classList.toggle('hidden', !(panes.includes(t) && !isInternal(t.url)));
   layoutPanes(isInternal(tab.url) ? null : tab);
@@ -260,6 +267,37 @@ function showContent(tab) {
     if ($('#palette-backdrop').hidden) setTimeout(() => { if (!B.renaming) tab.webview?.focus(); }, 0);
   }
   renderError();
+}
+
+function showNoTab() {
+  for (const t of B.tabs) t.webview?.classList.add('hidden');
+  layoutPanes(null);
+  window.ultima.setKeyRecording(false);
+  if (document.activeElement?.tagName === 'WEBVIEW') document.activeElement.blur();
+  const internal = $('#internal');
+  internal.hidden = false;
+  renderInternal(null);
+  renderError();
+}
+
+// The tab you were on went away and nothing else in its space can take its place: no tab is made for it, the space
+// just has nothing open (showContent). When that was the last thing the window had open and you closed it (rather than
+// unloading or moving it), the window closes too, as in Chrome.
+function leaveEmpty({ closing = false } = {}) {
+  B.activeId = null;
+  if (closing && windowHasNothingOpen()) { closeEmptyWindow(); return; }
+  showContent(null);
+  notifyActiveTab(null);
+  updateChrome();
+}
+
+// No regular tab open in any space (a new tab page left behind doesn't count) and no pinned tab or Essential loaded.
+const windowHasNothingOpen = () => B.tabs.every((t) => (t.zone === 'normal' ? t.url === NEWTAB : !t.webview));
+
+function closeEmptyWindow() {
+  B.closing = true; // (nothing more to draw or save once it's going)
+  saveSessionNow(); // what comes back next time is what's left, not the tab you just closed
+  window.ultima.closeWindow();
 }
 
 function renderError() {
@@ -299,46 +337,62 @@ function navigate(tab, url) {
   saveSession();
 }
 
-// Where to go when `tab` stops being the active one: in a folder, the tab above it there (below, if it was the top
-// one), loading it if need be. Otherwise stay in the current space and prefer the opener, then the neighbor in the
-// sidebar, then the most recently used tab.
-// Never wakes an unloaded pinned tab or Essential outside its folder: with nothing else open, you get a new tab.
-function pickNextTab(tab) {
+// Which tab can take over when the one you're on goes: any regular tab, asleep or not (it loads as it opens), but a
+// pinned tab or Essential only while it's open. One you've closed stays closed, so closing them all closes the window.
+const canTakeOver = (t) => t.zone === 'normal' || !isUnloaded(t);
+const mostRecent = (tabs) => [...tabs].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
+
+// Where to go when `tab` stops being the active one (with `gone`, the other tabs going with it), in the current space:
+// regular tabs first, then open pinned tabs, then open Essentials. Among the tabs of its own kind: in a folder, the
+// tab above it there (below, if it was the top one); otherwise its opener, then its neighbor in the sidebar, then the
+// most recently used. In the next kind along, the most recently used. None left: null.
+function pickNextTab(tab, gone = [tab]) {
+  const ok = (t) => !gone.includes(t) && canTakeOver(t);
+  const all = spaceTabs();
   if (tab.folderId) {
-    const folder = spaceTabs().filter((t) => t.folderId === tab.folderId);
+    const folder = all.filter((t) => t.folderId === tab.folderId && (t === tab || ok(t)));
     const i = folder.indexOf(tab);
     const sibling = i >= 0 && (folder[i - 1] || folder[i + 1]);
     if (sibling) return sibling;
   }
-  const all = spaceTabs().filter((t) => t === tab || !isUnloaded(t));
-  const visible = all.filter((t) => t !== tab);
-  if (!visible.length) return null;
-  const i = all.indexOf(tab);
-  const opener = visible.find((t) => t.id === tab.openerId);
-  const neighbor = (i >= 0 && (all[i + 1] || all[i - 1])) || null;
-  const recent = [...visible].sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
-  return opener || (neighbor !== tab ? neighbor : null) || recent;
+  for (const zone of ['normal', 'pinned', 'essential']) {
+    const list = all.filter((t) => t.zone === zone && (t === tab || ok(t)));
+    const visible = list.filter((t) => t !== tab);
+    if (!visible.length) continue;
+    if (zone !== tab.zone) return mostRecent(visible);
+    const i = list.indexOf(tab);
+    const opener = visible.find((t) => t.id === tab.openerId);
+    return opener || list[i + 1] || list[i - 1] || mostRecent(visible);
+  }
+  return null;
 }
 
 // Closing a tab: its row slides up and fades away while the rows below glide up into its place. The list is redrawn
 // at once (the next tab is open straight away), so the row that leaves is a copy laid over the sidebar, and the
 // rows that move are animated from where they were (FLIP). Call before the tab goes; run what it returns after.
-function animateTabClose(id) {
-  const row = $(`#sidebar [data-tab="${id}"]`);
-  if (!row || !row.getClientRects().length || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+// `ids`: one tab's id, or several closing together.
+function animateTabClose(ids) {
+  const rows = [].concat(ids).map((id) => $(`#sidebar [data-tab="${id}"]`)).filter((row) => row?.getClientRects().length);
+  if (!rows.length || matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
   if (sidebarHidden() && !sidebarPeeking()) return null; // nothing to see
   const keyOf = (el) => (el.dataset.tab ? `t${el.dataset.tab}` : el.dataset.folderHead ? `f${el.dataset.folderHead}` : el);
   const movers = () => $$('#sidebar [data-tab], #sidebar [data-folder-head], #btn-newtab, #space-head, #sidebar .zone-sep');
   const before = new Map(movers().map((el) => [keyOf(el), el.getBoundingClientRect()]));
-  const r = row.getBoundingClientRect();
-  const ghost = row.cloneNode(true);
-  ghost.classList.add('tab-ghost');
-  ghost.removeAttribute('data-tab');
-  Object.assign(ghost.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+  const ghosts = rows.map((row) => {
+    const r = row.getBoundingClientRect();
+    const ghost = row.cloneNode(true);
+    ghost.classList.add('tab-ghost');
+    ghost.classList.remove('selected');
+    ghost.removeAttribute('data-tab');
+    Object.assign(ghost.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px` });
+    return ghost;
+  });
   return () => {
-    document.body.append(ghost);
-    ghost.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateY(-60%)', opacity: 0 }],
-      { duration: 180, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' }).onfinish = () => ghost.remove();
+    for (const ghost of ghosts) {
+      document.body.append(ghost);
+      ghost.animate([{ transform: 'none', opacity: 1 }, { transform: 'translateY(-60%)', opacity: 0 }],
+        { duration: 180, easing: 'cubic-bezier(0.4, 0, 1, 1)', fill: 'forwards' }).onfinish = () => ghost.remove();
+    }
     for (const el of movers()) {
       const a = before.get(keyOf(el));
       if (!a) continue;
@@ -353,44 +407,43 @@ function animateTabClose(id) {
 }
 
 // Essentials and pinned tabs: close = unload. Pass { remove: true } to take them out of the sidebar.
-function closeTab(id, { remove = false } = {}) {
+// (`animate: false` when the caller slides several rows away together)
+function closeTab(id, { remove = false, animate = true } = {}) {
   const tab = tabById(id);
   if (!tab) return;
-  if (isKept(tab) && !remove) { unloadTab(tab); return; }
-  const animate = TD.drag ? null : animateTabClose(id);
+  if (isKept(tab) && !remove) { unloadTab(tab, { closing: true }); return; }
+  const slide = TD.drag || !animate ? null : animateTabClose(id);
   const idx = B.tabs.indexOf(tab);
   // a closed private tab can come back only inside a private window
   if (!tab.private || B.private) B.closed.push({ url: tab.url, title: tab.title, name: tab.name, favicon: tab.favicon, zone: tab.zone, homeUrl: tab.homeUrl, homeTitle: tab.homeTitle, homeFavicon: tab.homeFavicon, index: idx, spaceId: tab.spaceId, folderId: tab.folderId, essentialsOf: tab.essentialsOf });
   if (B.closed.length > 25) B.closed.shift();
-  if (B.activeId === id) {
-    const next = pickNextTab(tab);
-    if (next) activateTab(next.id);
-    else { B.activeId = null; createTab(); }
-  }
+  const next = B.activeId === id ? pickNextTab(tab) : undefined;
+  if (next) activateTab(next.id);
   dropWebview(tab);
   B.tabs = B.tabs.filter((t) => t !== tab);
+  // nothing left to open in its space (or nothing was open: several closing together)
+  if (next === null || !B.activeId) { leaveEmpty({ closing: true }); if (B.closing) return; }
   renderTabs();
-  animate?.();
+  slide?.();
   saveSession();
 }
 
-// Nothing open but the new tab page you were left with: no other tab in any space (other than their own new tab
-// pages, which each space you've visited keeps), no pinned tab or Essential loaded.
+// Nothing open but a new tab page (or nothing at all): no other tab in any space (other than new tab pages), no
+// pinned tab or Essential loaded. Closing then closes the window.
 const windowIsEmpty = () => {
   const tab = activeTab();
   const blank = (t) => t.zone === 'normal' && t.url === NEWTAB;
-  return Boolean(tab) && blank(tab) && B.tabs.every((t) => t === tab || blank(t) || (isKept(t) && !t.webview));
+  return (!tab || blank(tab)) && B.tabs.every((t) => t === tab || blank(t) || (isKept(t) && !t.webview));
 };
 
-function unloadTab(tab) {
+// (`closing`: its × or Ctrl+W, which closes the window when it was all the window had open)
+function unloadTab(tab, { closing = false } = {}) {
   if (!tab) return;
-  if (B.activeId === tab.id) {
-    const next = pickNextTab(tab);
-    if (next) activateTab(next.id);
-    else createTab();
-  }
+  const next = B.activeId === tab.id ? pickNextTab(tab) : undefined;
+  if (next) activateTab(next.id);
   dropWebview(tab);
   sendHome(tab);
+  if (next === null || !B.activeId) { leaveEmpty({ closing }); if (B.closing) return; }
   renderTabs();
   saveSession();
 }
@@ -477,8 +530,8 @@ async function editPinnedLink(tab) {
   else { sendHome(tab); renderTabs(); saveSession(); }
 }
 
-function duplicateTab(tab) {
-  if (tab) createTab({ url: tab.url, title: tab.title, favicon: tab.favicon, opener: tab.zone === 'normal' ? tab : undefined, private: tab.private });
+function duplicateTab(tab, { activate = true } = {}) {
+  if (tab) createTab({ url: tab.url, title: tab.title, favicon: tab.favicon, opener: tab.zone === 'normal' ? tab : undefined, private: tab.private, activate });
 }
 
 function toggleMute(tab) {
@@ -499,7 +552,7 @@ function cycleTab(dir) {
 // spaces, pinned tabs and Essentials (windows.js). A private window saves nothing.
 // Nothing is saved until the window has restored what it had (B.restored, set at startup in app.js): a window whose
 // startup failed part-way must not write its empty sidebar over yours.
-const saveSession = debounce(() => {
+function saveSessionNow() {
   if (B.private || !B.restored) return;
   const own = B.tabs.filter((t) => t.zone === 'normal' && !t.private);
   const tabs = own.map((t) => ({ url: t.url, title: t.title, name: t.name, favicon: t.favicon, spaceId: t.spaceId, folderId: t.folderId, splitId: t.splitId }));
@@ -509,7 +562,8 @@ const saveSession = debounce(() => {
     window: { folders: B.folders.filter((f) => f.zone !== 'pinned'), splits: B.splits, activeSpaceId: B.activeSpaceId, tabs, active },
     sidebar: sharedSidebarIfChanged(),
   });
-}, 300);
+}
+const saveSession = debounce(() => { if (!B.closing) saveSessionNow(); }, 300);
 
 // ---------- sidebar rendering ----------
 function tabIcon(tab) {
@@ -542,7 +596,7 @@ function tabRow(t) {
     : '';
   const renaming = B.renaming?.id === t.id;
   const home = offSite(t) ? `<button class="tab-home" data-act="home" title="${esc(`Back to the pinned link\n${t.homeUrl}`)}">${icon('home', 14)}</button>` : '';
-  return `<div class="tab ${kept ? 'pinned-row' : ''} ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''} ${t.private && !B.private ? 'private' : ''}" data-tab="${t.id}" draggable="false" ${renaming ? '' : `title="${esc(tabTip(t))}"`}>
+  return `<div class="tab ${kept ? 'pinned-row' : ''} ${t.id === B.activeId ? 'active' : ''} ${B.selected.has(t.id) ? 'selected' : ''} ${isUnloaded(t) ? 'unloaded' : ''} ${t.private && !B.private ? 'private' : ''}" data-tab="${t.id}" draggable="false" ${renaming ? '' : `title="${esc(tabTip(t))}"`}>
       ${tabFace(t)}
       ${renaming ? `<input class="tab-rename" maxlength="80" spellcheck="false" aria-label="Tab name" placeholder="${esc(t.title)}">` : `<span class="title">${esc(tabLabel(t))}</span>`}
       ${home}${close}
@@ -563,13 +617,14 @@ function layoutEssentials() {
 
 function renderTabs() {
   if (TD.drag) { TD.dirty = true; return; } // not mid-drag (it would pull the gap away); redrawn when the card lands
+  if (B.closing) return;
   settleEssentials();
   tidyAutoGroups();
   normalizeSplits();
   normalizeTabFolders();
   const visible = spaceTabs();
   $('#essentials').innerHTML = visible.filter((t) => t.zone === 'essential').map((t) => `
-    <div class="pin ${t.id === B.activeId ? 'active' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false"
+    <div class="pin ${t.id === B.activeId ? 'active' : ''} ${B.selected.has(t.id) ? 'selected' : ''} ${isUnloaded(t) ? 'unloaded' : ''}" data-tab="${t.id}" draggable="false"
       title="${esc(tabTip(t))}" ${pinRingStyle(t)}>${tabFace(t)}</div>`).join('');
   layoutEssentials();
   $('#pinned-list').innerHTML = tabListHtml(visible.filter((t) => t.zone === 'pinned'));
@@ -577,6 +632,7 @@ function renderTabs() {
   sizeStripFolders();
   document.title = `${tabLabel(activeTab()) || 'Ultima'} — Ultima Browser`;
   restoreTabRename();
+  pruneTabSelection();
   syncPanes();
 }
 
@@ -660,7 +716,7 @@ function initTabRename() {
   // Double-click renames. Not a 'dblclick' listener: the first click redraws the sidebar (it opens the tab), and
   // Chromium only sends dblclick when both clicks hit the same element, so the second click (detail 2) is used.
   side.addEventListener('click', (e) => {
-    if (e.detail !== 2 || e.button !== 0) return;
+    if (e.detail !== 2 || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return; // (those choose tabs: tabselect.js)
     const el = e.target.closest('.tab[data-tab], .pin[data-tab]');
     if (el && !e.target.closest('[data-act], .tab-rename')) startRenameTab(tabById(Number(el.dataset.tab)));
   });
@@ -768,12 +824,12 @@ function initTabStrip() {
       if (act === 'close') closeTab(tab.id);
       else if (act === 'mute') toggleMute(tab);
       else if (act === 'home') { activateTab(tab.id); resetToPinnedPage(tab); }
-      else activateTab(tab.id);
+      else if (!selectTabsByClick(tab, e)) activateTab(tab.id); // Ctrl or Shift: chooses tabs instead (tabselect.js)
     });
     container.addEventListener('contextmenu', (e) => {
       if (e.target.closest('.tab-rename')) return; // the text box gets the usual cut/copy/paste menu
       const el = e.target.closest('[data-tab]');
-      if (el) { e.preventDefault(); tabContextMenu(tabById(Number(el.dataset.tab))); }
+      if (el) { e.preventDefault(); openTabMenu(tabById(Number(el.dataset.tab))); } // (or the menu for the tabs you chose: tabselect.js)
     });
     container.addEventListener('dragstart', (e) => {
       const el = e.target.closest('[data-tab]');

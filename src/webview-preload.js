@@ -49,6 +49,9 @@ window.addEventListener('mousemove', (e) => setNearTop(e.clientY < 64), { captur
 document.addEventListener('mouseleave', () => setNearTop(false), true);
 window.addEventListener('blur', () => setNearTop(false));
 
+// a press anywhere in the page: Ultima lets go of the tabs you chose in the sidebar (renderer/tabselect.js)
+window.addEventListener('pointerdown', () => ipcRenderer.sendToHost('ultima:page-press'), { capture: true, passive: true });
+
 // The mouse's back and forward buttons (4 and 5) go back or forward in this page (main.js does it: Electron doesn't)
 window.addEventListener('mouseup', (e) => {
   if (e.button !== 3 && e.button !== 4) return;

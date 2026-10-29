@@ -58,17 +58,20 @@
         </div>
       </header>
       <nav id="bookmark-bar" class="bookmark-bar instant" aria-label="Waypoints bar"></nav>
-      <div id="viewport">
-        <div id="load-line" class="load-line" aria-hidden="true"><i></i></div><!-- the loading animation as a line (Settings → Address bar) -->
-        <div id="internal" class="internal" hidden></div>
-        <div id="findbar" class="findbar" hidden>
-          <input id="find-input" placeholder="Find in page" spellcheck="false">
-          <span id="find-count"></span>
-          <button class="icon-btn" id="find-prev" data-cmd="find.prev" data-label="Previous match"></button>
-          <button class="icon-btn" id="find-next" data-cmd="find.next" data-label="Next match"></button>
-          <button class="icon-btn" id="find-close" data-cmd="find.close" data-label="Close"></button>
+      <div id="page-row"><!-- the page, and an extension's side panel beside it (extensions.js) -->
+        <div id="viewport">
+          <div id="load-line" class="load-line" aria-hidden="true"><i></i></div><!-- the loading animation as a line (Settings → Address bar) -->
+          <div id="internal" class="internal" hidden></div>
+          <div id="findbar" class="findbar" hidden>
+            <input id="find-input" placeholder="Find in page" spellcheck="false">
+            <span id="find-count"></span>
+            <button class="icon-btn" id="find-prev" data-cmd="find.prev" data-label="Previous match"></button>
+            <button class="icon-btn" id="find-next" data-cmd="find.next" data-label="Next match"></button>
+            <button class="icon-btn" id="find-close" data-cmd="find.close" data-label="Close"></button>
+          </div>
+          <div id="status" class="status" hidden></div>
         </div>
-        <div id="status" class="status" hidden></div>
+        <aside id="ext-panel" class="ext-panel" aria-label="Extension side panel" hidden></aside>
       </div>
     </main>
   </div>
@@ -102,6 +105,8 @@
   <script src="split.js"></script>
   <script src="glance.js"></script>
   <script src="tabdrag.js"></script>
+  <script src="tabselect.js"></script>
+  <script src="tabsleep.js"></script>
   <script src="spaces.js"></script>
   <script src="theme.js"></script>
   <script src="sidebarstyle.js"></script>
@@ -124,6 +129,9 @@
   <script src="bookmarkbar.js"></script>
   <script src="bookmarkmanager.js"></script>
   <script src="waypointpop.js"></script>
+  <script src="pwgen.js"></script>
+  <script src="pwfill.js"></script>
+  <script src="vault.js"></script>
   <script src="patchnotes.js"></script>
   <script src="settings.js"></script>
   <script src="swipe.js"></script>

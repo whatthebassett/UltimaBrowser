@@ -55,7 +55,7 @@ function switchSpace(id, focusTab) {
   applySpaceTheme();
   const target = focusTab || ownTabs(id).sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
   if (target) activateTab(target.id);
-  else createTab();
+  else { leaveEmpty(); renderTabs(); } // nothing open here: no tab is made for it (tabs.js)
   if (changed) {
     const list = $('#tabs');
     list.style.setProperty('--space-dir', B.spaces.indexOf(space) > from ? '14px' : '-14px');
@@ -165,26 +165,25 @@ async function deleteSpace(space) {
   return toast(`Deleted ${space.name}`);
 }
 
-function moveTabToSpace(tab, spaceId) {
+// (`quiet`: no "Moved to" message, when several tabs move at once and one message says so: tabselect.js)
+function moveTabToSpace(tab, spaceId, { quiet = false } = {}) {
   const target = spaceById(spaceId);
   if (!tab || !target || tab.spaceId === spaceId) return;
   const fromActive = tab.id === B.activeId;
   const before = tabPartition(tab);
-  if (fromActive) {
-    const next = pickNextTab(tab);
-    if (next) activateTab(next.id);
-    else createTab();
-  }
+  const next = fromActive ? pickNextTab(tab) : undefined;
+  if (next) activateTab(next.id);
   if (tab.zone === 'essential') Object.assign(tab, { zone: 'pinned', essentialsOf: undefined }); // an essential sent to one space becomes a pinned tab there
   tab.spaceId = spaceId;
   tab.openerId = undefined;
   tab.folderId = undefined; // folders and split views belong to a space
   tab.splitId = undefined;
   if (tab.webview && tabPartition(tab) !== before) dropWebview(tab);
+  if (next === null) leaveEmpty(); // nothing left open in the space it left
   sortZones();
   renderTabs();
   saveSession();
-  toast(`Moved to ${target.icon} ${target.name}`, { label: 'Go', run: () => switchSpace(spaceId, tab) });
+  if (!quiet) toast(`Moved to ${target.icon} ${target.name}`, { label: 'Go', run: () => switchSpace(spaceId, tab) });
 }
 
 async function spaceMenu(space = activeSpace(), pos = undefined) {

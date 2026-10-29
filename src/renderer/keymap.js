@@ -112,6 +112,7 @@
     { id: 'theme.close', title: 'Close theme editor', group: 'Inside the theme editor', scope: 'theme', keys: ['Esc'] },
     { id: 'theme.remove-color', title: 'Remove color', group: 'Inside the theme editor', scope: 'theme', keys: ['Delete', 'Backspace'] },
     { id: 'drag.cancel', title: 'Cancel drag', group: 'While dragging a tab', scope: 'drag', keys: ['Esc'] },
+    { id: 'tabs.clear-selection', title: 'Let go of chosen tabs', group: 'While tabs are chosen', scope: 'tabs', keys: ['Esc'] },
     { id: 'popover.close', title: 'Close address bar menu', group: 'Inside menus', scope: 'popover', keys: ['Esc'] },
     { id: 'dialog.confirm', title: 'Confirm', group: 'Inside dialogs', scope: 'dialog', keys: ['Enter'] },
     { id: 'dialog.cancel', title: 'Cancel', group: 'Inside dialogs', scope: 'dialog', keys: ['Esc'] },

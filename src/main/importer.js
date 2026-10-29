@@ -320,7 +320,16 @@ function passwordsFromCsv(text) {
   const iUser = col('username', 'login', 'login_username', 'user');
   const iPass = col('password', 'login_password');
   if (iUrl < 0 || iPass < 0) throw new Error('This CSV has no url/password columns.');
-  return rows.map((r) => ({ url: r[iUrl], username: iUser >= 0 ? r[iUser] : '', password: r[iPass] }));
+  // names, notes, folders and favorites where the export has them (Bitwarden's does)
+  const iName = col('name', 'title');
+  const iNotes = col('note', 'notes', 'extra');
+  const iFolder = col('folder', 'grouping');
+  const iFav = col('favorite', 'fav');
+  const at = (r, i) => (i >= 0 ? r[i] || '' : '');
+  return rows.map((r) => ({
+    url: r[iUrl], username: at(r, iUser), password: r[iPass], name: at(r, iName), notes: at(r, iNotes), folder: at(r, iFolder),
+    favorite: /^(1|true|yes)$/i.test(at(r, iFav).trim()),
+  }));
 }
 
 // Netscape bookmark HTML, exported by every major browser.

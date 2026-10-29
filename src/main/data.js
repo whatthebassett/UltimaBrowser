@@ -2,6 +2,7 @@
 const crypto = require('crypto');
 const { safeStorage } = require('electron');
 const { JsonStore } = require('./store');
+const { baseDomain } = require('./blocker');
 
 const HISTORY_LIMIT = 50000;
 const uid = () => crypto.randomBytes(8).toString('hex');
@@ -30,11 +31,41 @@ function matchScore(tokens, title, url) {
   return score;
 }
 
+// ---- matching logins to pages, as Bitwarden does ----
+const MATCHES = ['domain', 'host', 'starts', 'exact', 'never'];
+const withScheme = (u) => (/^[a-z][\w+.-]*:/i.test(u) ? u : `https://${u}`);
+function originOf(u) {
+  try {
+    const url = new URL(withScheme(u));
+    return /^https?:$/.test(url.protocol) ? url.origin : '';
+  } catch { return ''; }
+}
+function pageOf(url) {
+  try {
+    const u = new URL(url);
+    return /^https?:$/.test(u.protocol) ? u : null;
+  } catch { return null; }
+}
+// How well a login's website matches a page: 0 not at all, 1 the same base domain, 2 the same host, 3 the same address.
+function uriMatch({ uri, match }, page) {
+  if (match === 'never') return 0;
+  if (match === 'exact') return uri === page.href ? 3 : 0;
+  if (match === 'starts') return page.href.startsWith(uri) ? 3 : 0;
+  let u;
+  try { u = new URL(withScheme(uri)); } catch { return 0; }
+  if (!/^https?:$/.test(u.protocol)) return 0;
+  if (u.host === page.host) return 2;
+  if (match === 'host') return 0;
+  return baseDomain(u.hostname) === baseDomain(page.hostname) ? 1 : 0;
+}
+
 class BrowserData {
   constructor(dir) {
     this.historyStore = new JsonStore(dir, 'history', []);
     this.bookmarkStore = new JsonStore(dir, 'bookmarks', []);
     this.passwordStore = new JsonStore(dir, 'passwords', []);
+    this.passwordFolders = new JsonStore(dir, 'password-folders', []);
+    this.migrateLogins();
     this.migrateBookmarks();
     this.history = new Map(this.historyStore.data.map((h) => [h.url, h]));
   }
@@ -285,60 +316,195 @@ class BrowserData {
     return { bookmarks, history: history.slice(0, limit) };
   }
 
-  // ---- passwords (encrypted at rest with the OS keychain via safeStorage) ----
+  // ---- passwords: the vault (encrypted at rest with the OS keychain via safeStorage) ----
+  // A login: { id, name, username, secret, uris: [{ uri, match? }], notes?, folder, favorite, created, updated, used,
+  // history: [{ secret, date }], source }. `secret`, `notes` and old passwords are encrypted; `origin` (the first
+  // website's) is kept for older versions of Ultima. `match` is how a website matches pages, as in Bitwarden: missing =
+  // the base domain (accounts.example.com fills on example.com), or host, starts, exact or never.
   async encrypt(text) {
     if (await safeStorage.isAsyncEncryptionAvailable()) return { enc: true, v: (await safeStorage.encryptStringAsync(text)).toString('base64') };
     return { enc: false, v: Buffer.from(text).toString('base64') };
   }
 
   async decrypt(blob) {
+    if (!blob) return '';
     const buf = Buffer.from(blob.v, 'base64');
     return blob.enc ? (await safeStorage.decryptStringAsync(buf)).result : buf.toString();
   }
 
-  listPasswords() {
-    return this.passwordStore.data.map(({ id, origin, username, source }) => ({ id, origin, username, source }));
+  get logins() { return this.passwordStore.data; }
+
+  // logins from before the vault had only { id, origin, username, secret, source }
+  migrateLogins() {
+    let changed = false;
+    for (const p of this.logins) {
+      if (Array.isArray(p.uris)) continue;
+      Object.assign(p, {
+        uris: p.origin ? [{ uri: p.origin }] : [], name: hostOf(p.origin || '') || p.origin || 'Login', folder: null, favorite: false,
+        created: p.created || Date.now(), history: [],
+      });
+      p.updated = p.created;
+      changed = true;
+    }
+    if (changed) this.passwordStore.save();
   }
 
+  static publicLogin(p) {
+    return {
+      id: p.id, name: p.name, username: p.username, uris: p.uris, folder: p.folder || null, favorite: Boolean(p.favorite),
+      created: p.created, updated: p.updated, used: p.used || 0, source: p.source, hasNotes: Boolean(p.notes), historyCount: (p.history || []).length,
+    };
+  }
+
+  listPasswords() { return this.logins.map(BrowserData.publicLogin); }
+
+  // the logins whose websites match a page: the closest matches, then the ones used last, first
   passwordsFor(url) {
-    const host = hostOf(url);
-    if (!host) return [];
-    return this.listPasswords().filter((p) => {
-      const h = hostOf(p.origin);
-      return h && (h === host || host.endsWith(`.${h}`) || h.endsWith(`.${host}`));
-    });
+    const page = pageOf(url);
+    if (!page) return [];
+    return this.logins.map((p) => ({ p, score: Math.max(0, ...p.uris.map((u) => uriMatch(u, page))) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || (b.p.used || 0) - (a.p.used || 0) || String(a.p.name).localeCompare(b.p.name))
+      .map((x) => BrowserData.publicLogin(x.p));
   }
 
   async getPassword(id) {
-    const p = this.passwordStore.data.find((x) => x.id === id);
+    const p = this.logins.find((x) => x.id === id);
     return p ? { username: p.username, password: await this.decrypt(p.secret) } : null;
   }
 
+  // everything about a login, decrypted (the vault's detail view)
+  async getLogin(id) {
+    const p = this.logins.find((x) => x.id === id);
+    if (!p) return null;
+    const history = [];
+    for (const old of p.history || []) history.push({ password: await this.decrypt(old.secret), date: old.date });
+    return { ...BrowserData.publicLogin(p), password: await this.decrypt(p.secret), notes: await this.decrypt(p.notes), history };
+  }
+
+  // Adds a login (no id) or changes one; fields left out stay as they are. A changed password goes into the login's
+  // history (the last 5).
+  async saveLogin(item) {
+    const clean = (s, n) => String(s ?? '').slice(0, n);
+    let p = item.id && this.logins.find((x) => x.id === item.id);
+    const now = Date.now();
+    if (!p) {
+      p = { id: uid(), name: '', username: '', uris: [], folder: null, favorite: false, created: now, history: [], source: item.source || 'ultima' };
+      this.logins.push(p);
+    }
+    if (item.password !== undefined) {
+      const old = await this.decrypt(p.secret);
+      const password = clean(item.password, 1000);
+      if (old && old !== password) p.history = [{ secret: p.secret, date: p.updated || now }, ...(p.history || [])].slice(0, 5);
+      if (old !== password || !p.secret) p.secret = await this.encrypt(password);
+    }
+    if (item.notes !== undefined) p.notes = item.notes ? await this.encrypt(clean(item.notes, 10000)) : null;
+    if (item.username !== undefined) p.username = clean(item.username, 500);
+    if (item.uris !== undefined) {
+      p.uris = (Array.isArray(item.uris) ? item.uris : [])
+        .map((u) => ({ uri: clean(u?.uri, 2000).trim(), ...(MATCHES.includes(u?.match) ? { match: u.match } : {}) }))
+        .filter((u) => u.uri);
+    }
+    if (item.folder !== undefined) p.folder = this.passwordFolders.data.some((f) => f.id === item.folder) ? item.folder : null;
+    if (item.favorite !== undefined) p.favorite = Boolean(item.favorite);
+    p.name = clean(item.name, 200).trim() || p.name || hostOf(withScheme(p.uris[0]?.uri || '')) || 'Login';
+    p.origin = originOf(p.uris[0]?.uri || '');
+    p.updated = now;
+    this.passwordStore.save();
+    return BrowserData.publicLogin(p);
+  }
+
+  markLoginUsed(id) {
+    const p = this.logins.find((x) => x.id === id);
+    if (p) { p.used = Date.now(); this.passwordStore.save(3000); }
+  }
+
   deletePassword(id) {
-    this.passwordStore.data = this.passwordStore.data.filter((p) => p.id !== id);
+    this.passwordStore.data = this.logins.filter((p) => p.id !== id);
     this.passwordStore.save();
   }
 
+  // every login (folders stay, empty)
+  deleteAllPasswords() {
+    const count = this.logins.length;
+    this.passwordStore.data = [];
+    this.passwordStore.flush();
+    return count;
+  }
+
+  // Weak and reused passwords, for the vault's filters. `strength` scores a password 0–4 (pwgen.js).
+  async passwordHealth(strength) {
+    const byHash = new Map();
+    const weak = [];
+    for (const p of this.logins) {
+      const pw = await this.decrypt(p.secret);
+      if (!pw) continue;
+      if (strength(pw).score <= 2) weak.push(p.id);
+      const hash = crypto.createHash('sha256').update(pw).digest('hex');
+      byHash.set(hash, [...(byHash.get(hash) || []), p.id]);
+    }
+    return { weak, reused: [...byHash.values()].filter((ids) => ids.length > 1).flat() };
+  }
+
+  // ---- password folders ----
+  listPasswordFolders() { return this.passwordFolders.data; }
+
+  addPasswordFolder(name) {
+    const f = { id: uid(), name: String(name || '').trim().slice(0, 100) || 'New folder' };
+    this.passwordFolders.data.push(f);
+    this.passwordFolders.save();
+    return f;
+  }
+
+  renamePasswordFolder(id, name) {
+    const f = this.passwordFolders.data.find((x) => x.id === id);
+    if (f && String(name || '').trim()) { f.name = String(name).trim().slice(0, 100); this.passwordFolders.save(); }
+  }
+
+  // its logins stay, in no folder
+  deletePasswordFolder(id) {
+    this.passwordFolders.data = this.passwordFolders.data.filter((f) => f.id !== id);
+    for (const p of this.logins) if (p.folder === id) p.folder = null;
+    this.passwordFolders.save();
+    this.passwordStore.save();
+  }
+
+  // A CSV export from another browser or password manager: a login with the same website and username takes the new
+  // password. Bitwarden's exports also bring names, notes, folders and favorites (and several websites, comma-separated).
   async mergePasswords(entries, source) {
-    const list = this.passwordStore.data;
     let added = 0;
     for (const e of entries) {
       if (!e.url || !e.password) continue;
-      let origin;
-      try { origin = new URL(e.url).origin; } catch { continue; }
-      if (origin === 'null') continue;
-      const existing = list.find((p) => p.origin === origin && p.username === (e.username || ''));
-      if (existing) { existing.secret = await this.encrypt(e.password); continue; }
-      list.push({ id: uid(), origin, username: e.username || '', secret: await this.encrypt(e.password), source });
+      const uris = String(e.url).split(',').map((u) => u.trim()).filter((u) => originOf(u));
+      if (!uris.length) continue;
+      const origin = originOf(uris[0]);
+      const existing = this.logins.find((p) => originOf(p.uris[0]?.uri || '') === origin && p.username === (e.username || ''));
+      if (existing) { await this.saveLogin({ id: existing.id, password: e.password }); continue; }
+      const folder = e.folder ? (this.passwordFolders.data.find((f) => f.name === e.folder) || this.addPasswordFolder(e.folder)).id : null;
+      await this.saveLogin({
+        name: e.name, username: e.username || '', password: e.password, notes: e.notes || '', uris: uris.map((uri) => ({ uri })),
+        folder, favorite: e.favorite, source,
+      });
       added += 1;
     }
-    this.passwordStore.save();
     return added;
+  }
+
+  // every login, decrypted, for a CSV export
+  async exportPasswords() {
+    const out = [];
+    for (const p of this.logins) {
+      out.push({
+        name: p.name, url: p.uris.map((u) => u.uri).join(','), username: p.username, password: await this.decrypt(p.secret),
+        notes: await this.decrypt(p.notes), folder: this.passwordFolders.data.find((f) => f.id === p.folder)?.name || '',
+      });
+    }
+    return out;
   }
 
   flush() {
     this.historyStore.data = [...this.history.values()];
-    for (const s of [this.historyStore, this.bookmarkStore, this.passwordStore]) if (s.timer) s.flush();
+    for (const s of [this.historyStore, this.bookmarkStore, this.passwordStore, this.passwordFolders]) if (s.timer) s.flush();
   }
 }
 

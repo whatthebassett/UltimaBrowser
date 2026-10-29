@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const { net } = require('electron');
 const { JsonStore } = require('./store');
 
+const UPDATE_URL = 'https://clients2.google.com/service/update2/crx';
 const STORE_DETAIL = /^https:\/\/(?:chromewebstore\.google\.com\/detail|chrome\.google\.com\/webstore\/detail)\/(?:[^/]+\/)?([a-p]{32})/i;
 const ID_ONLY = /^[a-p]{32}$/i;
 
@@ -60,8 +61,18 @@ function unzipTo(zip, dest) {
 // Firefox (Bitwarden then runs its Firefox code, uBlock Origin Lite reads browser.commands and crashes). The
 // content-script sandbox can't be reached from outside, so every script in Ultima's own copy of a Web Store extension
 // starts by hiding `browser` (on its first line, so line numbers in error reports are unchanged).
-const CHROME_LIKE_MARK = '/*ultima:chrome-like*/';
+// Content scripts also get storage.sync backed by storage.local, as extension pages do (extension-compat.js):
+// Electron refuses sync there, and Vimium's content script then never starts.
+const CHROME_LIKE_MARK = '/*ultima:chrome-like:2*/';
 const CHROME_LIKE_SHIM = `${CHROME_LIKE_MARK}(function(){try{if(typeof browser!=="undefined"&&typeof chrome!=="undefined"&&browser!==chrome){`
+  + 'delete globalThis.browser;if(typeof browser!=="undefined")Object.defineProperty(globalThis,"browser",{value:undefined,configurable:true,writable:true});'
+  + '}var s=typeof chrome!=="undefined"&&chrome.storage,l=s&&s.local;if(l&&location.protocol!=="chrome-extension:"){'
+  + 'var m=function(f){return typeof l[f]==="function"?l[f].bind(l):undefined};'
+  + 'Object.defineProperty(s,"sync",{value:{get:m("get"),set:m("set"),remove:m("remove"),clear:m("clear"),getBytesInUse:m("getBytesInUse"),getKeys:m("getKeys"),'
+  + 'onChanged:l.onChanged,QUOTA_BYTES:102400,QUOTA_BYTES_PER_ITEM:8192,MAX_ITEMS:512},configurable:true,enumerable:true});'
+  + '}}catch(e){}})();';
+// the first version (hiding `browser` only), swapped for the current one in copies installed with it
+const CHROME_LIKE_SHIM_1 = '/*ultima:chrome-like*/(function(){try{if(typeof browser!=="undefined"&&typeof chrome!=="undefined"&&browser!==chrome){'
   + 'delete globalThis.browser;if(typeof browser!=="undefined")Object.defineProperty(globalThis,"browser",{value:undefined,configurable:true,writable:true});'
   + '}}catch(e){}})();';
 
@@ -85,7 +96,37 @@ function strictDirectiveEnd(src) {
   return m ? i + m[0].length : -1;
 }
 
+// Files a background worker loads: its script and what that imports. Rewriting any of them makes Chromium install a
+// new version of the worker beside the running one, which breaks the extension until Ultima restarts.
+function workerFiles(dir, manifest) {
+  const seen = new Set();
+  const visit = (file) => {
+    if (seen.has(file) || !fs.existsSync(file)) return;
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    for (const re of [/import\s[^'"]*?['"]([^'"]+)['"]/g, /import\(\s*['"]([^'"]+)['"]/g, /importScripts\(([^)]*)\)/g]) {
+      for (const [, spec] of src.matchAll(re)) {
+        for (const f of spec.match(/[\w./-]+\.m?js/g) || []) visit(f.startsWith('/') ? path.join(dir, f) : path.resolve(path.dirname(file), f));
+      }
+    }
+  };
+  if (manifest.background?.service_worker) visit(path.resolve(dir, manifest.background.service_worker.replace(/^\//, '')));
+  return seen;
+}
+
+// The manifest's content scripts that no background worker loads: the files the first version's copies are updated in
+// (the shim in any one of them reaches all of an extension's content scripts in a page, which share one world).
+function contentScriptFiles(dir) {
+  try {
+    const manifest = readManifest(dir);
+    const worker = workerFiles(dir, manifest);
+    return new Set((manifest.content_scripts || []).flatMap((c) => c.js || [])
+      .map((f) => path.resolve(dir, f.replace(/^\//, ''))).filter((f) => !worker.has(f)));
+  } catch { return new Set(); }
+}
+
 function makeChromeLike(dir) {
+  let contentScripts = null; // worked out only for copies that still have the first version
   const walk = (d) => {
     for (const f of fs.readdirSync(d, { withFileTypes: true })) {
       const p = path.join(d, f.name);
@@ -93,6 +134,10 @@ function makeChromeLike(dir) {
       if (!/\.(m?js)$/i.test(f.name)) continue;
       const src = fs.readFileSync(p, 'utf8');
       if (src.includes(CHROME_LIKE_MARK)) continue;
+      if (src.includes(CHROME_LIKE_SHIM_1)) {
+        if ((contentScripts ||= contentScriptFiles(dir)).has(path.resolve(p))) fs.writeFileSync(p, src.replace(CHROME_LIKE_SHIM_1, CHROME_LIKE_SHIM));
+        continue;
+      }
       // keep a leading "use strict" directive first, or the file would silently lose strict mode
       const at = strictDirectiveEnd(src);
       fs.writeFileSync(p, at >= 0 ? src.slice(0, at) + CHROME_LIKE_SHIM + src.slice(at) : CHROME_LIKE_SHIM + src);
@@ -138,6 +183,17 @@ function iconDataUrl(dir, manifest) {
   } catch { return ''; }
 }
 
+// "1.10.2" is newer than "1.9"
+function isNewer(a, b) {
+  const x = String(a).split('.').map(Number);
+  const y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
 // ---------- manager ----------
 class ExtensionManager {
   constructor(userData) {
@@ -147,6 +203,7 @@ class ExtensionManager {
     this.sessions = new Set();
     this.loaded = new Map(); // `${sessionKey}|${id}` -> Electron extension
     this.installedNews = new WeakMap(); // session -> Map(runtime id -> onInstalled details not yet delivered)
+    this.applyUpdates();
     // extensions installed before the Chrome-like fix get it now (already-fixed files are skipped)
     for (const e of this.list) {
       if (e.source === 'webstore') { try { makeChromeLike(e.path); } catch { /* folder missing: reported on load */ } }
@@ -187,11 +244,14 @@ class ExtensionManager {
       icon: iconDataUrl(entry.path, manifest),
       popup: action.default_popup || null,
       optionsPage: manifest.options_ui?.page || manifest.options_page || null,
+      sidePanel: manifest.side_panel?.default_path || (manifest.permissions || []).includes('sidePanel') || null,
       hasWorker: Boolean(manifest.background?.service_worker),
       enabled: entry.enabled !== false,
       pinned: Boolean(entry.pinned),
       source: entry.source,
       error: entry.error || null,
+      unsupported: entry.unsupported || [],
+      updateReady: entry.updateReady || null,
     };
   }
 
@@ -231,14 +291,19 @@ class ExtensionManager {
     this.installedNews.get(ses).set(ext.id, details);
     // Extensions read it early (Bitwarden checks 100 ms after starting), so the worker's preload asks for it
     // itself as it starts (takeInstalled). If the worker never asks (it was already running), send it instead.
-    // Right after loading, the worker is still registering and starting it fails, so keep trying for a while.
-    const tell = (tries) => ses.serviceWorkers.startWorkerForScope(`chrome-extension://${ext.id}/`)
-      .then((worker) => setTimeout(() => {
-        const news = this.takeInstalled(ses, ext.id);
-        if (news) try { worker.send('ultima:ext-event', 'runtime.onInstalled', [news]); } catch { /* stopped */ }
-      }, 1000))
-      .catch(() => { if (tries > 0) setTimeout(() => tell(tries - 1), 250); });
-    tell(40);
+    // Right after loading, the worker is still registering and starting it fails, so keep trying for a while. Not
+    // at once, and not once the worker has asked: starting a worker while a new version registers can leave the old
+    // one running beside it, whose calls then fail ("No SW").
+    const tell = (tries) => {
+      if (!this.installedNews.get(ses)?.has(ext.id)) return; // the worker asked for it itself
+      ses.serviceWorkers.startWorkerForScope(`chrome-extension://${ext.id}/`)
+        .then((worker) => setTimeout(() => {
+          const news = this.takeInstalled(ses, ext.id);
+          if (news) try { worker.send('ultima:ext-event', 'runtime.onInstalled', [news]); } catch { /* stopped */ }
+        }, 1000))
+        .catch(() => { if (tries > 0) setTimeout(() => tell(tries - 1), 250); });
+    };
+    setTimeout(() => tell(40), 2000);
   }
 
   // The onInstalled details still owed to an extension's background in a session, handed over only once.
@@ -264,7 +329,7 @@ class ExtensionManager {
   async add(entry) {
     this.infoCache?.delete(entry.id);
     const existing = this.list.find((e) => e.id === entry.id);
-    if (existing) { this.unloadEverywhere(existing); Object.assign(existing, entry); } else this.list.push(entry);
+    if (existing) { this.unloadEverywhere(existing); Object.assign(existing, entry, { unsupported: [], menus: [] }); } else this.list.push(entry);
     const saved = this.list.find((e) => e.id === entry.id);
     await this.loadEverywhere(saved);
     this.registry.flush(); // saved at once: an install must survive Ultima closing right after
@@ -296,8 +361,82 @@ class ExtensionManager {
     const prev = this.list.find((e) => e.id === id);
     if (prev) this.unloadEverywhere(prev);
     fs.rmSync(dest, { recursive: true, force: true });
-    fs.renameSync(staging, dest);
+    // Windows refuses to move a folder while something still has its new files open (antivirus scanning them,
+    // or the old copy's files just let go), so try again for a few seconds before giving up
+    for (let tries = 0; ; tries += 1) {
+      try { fs.renameSync(staging, dest); break; } catch (err) {
+        if (tries >= 20 || !['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) { fs.rmSync(staging, { recursive: true, force: true }); throw err; }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
     return this.add({ id, path: dest, source: 'webstore', enabled: true, pinned: prev?.pinned ?? true });
+  }
+
+  // ---- updates ----
+  // Like Chrome, Ultima keeps Web Store extensions up to date: it asks the store which have a newer version every few
+  // hours and downloads them. A running extension isn't swapped under you (an unlocked Bitwarden would lock): the new
+  // version waits in <id>.update and takes its place the next time Ultima starts, before anything loads.
+  // Returns the names of extensions with an update waiting.
+  async checkForUpdates() {
+    const store = this.list.filter((e) => e.source === 'webstore');
+    if (store.length) {
+      const apps = store.map((e) => `x=${encodeURIComponent(`id=${e.id}&v=${this.manifestOf(e).version || '0'}&uc`)}`).join('&');
+      const res = await net.fetch(`${UPDATE_URL}?response=updatecheck&prodversion=${process.versions.chrome}&acceptformat=crx3&${apps}`);
+      if (!res.ok) throw new Error(`The Chrome Web Store didn’t answer (HTTP ${res.status}).`);
+      const xml = await res.text();
+      for (const [, id, body] of xml.matchAll(/<app\s[^>]*appid="([a-p]{32})"[^>]*>([\s\S]*?)<\/app>/g)) {
+        const tag = body.match(/<updatecheck\s[^>]*>/)?.[0] || '';
+        const attr = (name) => tag.match(new RegExp(`\\s${name}="([^"]*)"`))?.[1]?.replace(/&amp;/g, '&');
+        const entry = store.find((e) => e.id === id);
+        const version = attr('version');
+        if (!entry || attr('status') !== 'ok' || !version || !attr('codebase')) continue;
+        if (!isNewer(version, this.manifestOf(entry).version || '0') || entry.updateReady === version) continue;
+        try { await this.stageUpdate(entry, attr('codebase'), version); } catch { /* tried again next time */ }
+      }
+    }
+    return this.list.filter((e) => e.updateReady).map((e) => this.info(e).name);
+  }
+
+  async stageUpdate(entry, url, version) {
+    const res = await net.fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const staging = path.join(this.dir, `${entry.id}.update`);
+    fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    try {
+      unzipTo(zipFromCrx(buf), staging);
+      makeChromeLike(staging);
+      if (readManifest(staging).version !== version) throw new Error('The download isn’t the version the store offered');
+    } catch (err) {
+      fs.rmSync(staging, { recursive: true, force: true });
+      throw err;
+    }
+    entry.updateReady = version;
+    this.registry.flush();
+  }
+
+  // At start-up, before any extension loads: the downloaded versions take the old ones' place (same folder, so the
+  // extension keeps its id and its data). One that can't be moved yet is tried again next time.
+  applyUpdates() {
+    for (const entry of this.list) {
+      if (!entry.updateReady) continue;
+      const staging = path.join(this.dir, `${entry.id}.update`);
+      if (!fs.existsSync(staging)) { delete entry.updateReady; continue; }
+      const old = `${entry.path}.old`;
+      try {
+        fs.rmSync(old, { recursive: true, force: true });
+        if (fs.existsSync(entry.path)) fs.renameSync(entry.path, old);
+        fs.renameSync(staging, entry.path);
+        fs.rmSync(old, { recursive: true, force: true });
+        delete entry.updateReady;
+        entry.unsupported = []; // the new version may not need what the old one did
+        entry.menus = []; // and makes its own menu items
+      } catch {
+        if (!fs.existsSync(entry.path) && fs.existsSync(old)) { try { fs.renameSync(old, entry.path); } catch { /* left for next time */ } }
+      }
+    }
+    this.registry.flush();
   }
 
   // A developer's unpacked extension stays where it is, so edits take effect on reload.
@@ -333,6 +472,47 @@ class ExtensionManager {
     if (entry.source === 'webstore') fs.rmSync(entry.path, { recursive: true, force: true });
     this.registry.data = this.list.filter((e) => e !== entry);
     this.registry.flush(); // saved at once: an install must survive Ultima closing right after
+  }
+
+  // Text from the manifest in the extension's language ("__MSG_name__" → its message)
+  textOf(entry, text) { return localize(entry.path, this.manifestOf(entry), text); }
+
+  // The manifest as installed (read from disk; Electron's copy is per session)
+  manifestOf(entry) {
+    try { return readManifest(entry.path); } catch { return {}; }
+  }
+
+  // Right-click menu items (chrome.contextMenus), kept with the extension as Chrome keeps them across restarts:
+  // extensions create them once, when installed. A new version starts without them and makes its own.
+  menusOf(entry) {
+    if (!Array.isArray(entry.menus)) entry.menus = [];
+    return entry.menus;
+  }
+
+  saveMenus() { this.registry.save(); }
+
+  // The keys you chose for an extension's commands (chrome.commands): a combo, or '' for none
+  setShortcut(entry, name, combo) {
+    entry.shortcuts ||= {};
+    entry.shortcuts[name] = combo;
+    this.registry.flush();
+  }
+
+  // sidePanel.setPanelBehavior({ openPanelOnActionClick }): kept, as Chrome keeps it, for the toolbar button
+  setSidePanelOnClick(entry, on) {
+    if (Boolean(entry.sidePanelOnClick) === on) return;
+    entry.sidePanelOnClick = on;
+    this.registry.flush();
+  }
+
+  // An extension used an API Ultima only stands in for. Kept until it is installed again (a new version may not).
+  // True when it is news.
+  noteUnsupported(runtimeId, name) {
+    const entry = this.list.find((e) => e.runtimeId === runtimeId);
+    if (!entry || entry.unsupported?.includes(name) || (entry.unsupported?.length ?? 0) >= 40) return false;
+    (entry.unsupported ||= []).push(name);
+    this.registry.flush();
+    return true;
   }
 
   // The extension's id inside a given session (needed for chrome-extension:// URLs there).

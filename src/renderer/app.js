@@ -25,13 +25,22 @@ function zoom(tab, delta) {
   updateChrome();
 }
 
+// The key button: "Save password?" when a sign-in is waiting for an answer (pwfill.js), else the site's saved logins.
 async function fillLogin(tab) {
   if (!ready(tab)) return toast('Open a website first');
+  if (tab.pwOffer) return PWF.offer ? closePasswordOffer() : openPasswordOffer(tab);
   const logins = await window.ultima.passwordsFor(tab.url);
   if (!logins.length) return toast(`No saved login for ${hostname(tab.url)}`);
   let id = logins[0].id;
   if (logins.length > 1) {
-    id = await showMenu(logins.map((l) => ({ id: l.id, label: l.username || '(no username)' })));
+    const key = $('#btn-key');
+    const at = key && !key.hidden ? key.getBoundingClientRect() : null;
+    id = await showMenu([
+      ...logins.map((l) => ({ id: l.id, label: l.username || '(no username)', note: l.name, icon: 'user' })),
+      { type: 'separator' },
+      { id: 'manage', label: 'Manage passwords', icon: 'key' },
+    ], at ? { x: at.left, y: at.bottom + 6 } : undefined);
+    if (id === 'manage') { runCommand('open-passwords'); return; }
     if (!id) return;
   }
   const ok = await window.ultima.fillPassword({ webContentsId: tab.webview.getWebContentsId(), id });
@@ -63,7 +72,7 @@ function runCommand(cmd) {
     case 'new-private-tab': return newPrivateTab();
     case 'quit': return window.ultima.quit();
     case 'edit-url': return openPalette('current', tab && !(tab.url === NEWTAB) ? tab.url : '');
-    case 'close-tab': if (GL.open) return closeGlance(); return windowIsEmpty() ? window.ultima.closeWindow() : tab && closeTab(tab.id);
+    case 'close-tab': if (GL.open) return closeGlance(); return windowIsEmpty() ? closeEmptyWindow() : tab && closeTab(tab.id);
     case 'reopen-tab': return reopenClosedTab();
     case 'duplicate-tab': return duplicateTab(tab);
     case 'pin-tab': return togglePin(tab);
@@ -181,7 +190,16 @@ function setUrlbarLoading(loading) {
 
 const updateChrome = debounce(async () => {
   const tab = activeTab();
-  if (!tab) return;
+  if (!tab) { // a space with nothing open: an empty address bar, nothing to go back to
+    setUrlbarLoading(false);
+    $('.url-icon').innerHTML = icon('search', 14);
+    $('.url-icon').classList.remove('secure');
+    $('.url-text').textContent = 'Search or enter address';
+    $('#page-title').textContent = '';
+    for (const id of ['#btn-back', '#btn-forward']) $(id).disabled = true;
+    for (const id of ['#btn-star', '#btn-find', '#zoom-pill', '#btn-key']) $(id).hidden = true;
+    return;
+  }
   const internal = isInternal(tab.url);
   const wv = ready(tab) && !internal ? tab.webview : null;
   const secure = tab.url.startsWith('https://');
@@ -208,7 +226,8 @@ const updateChrome = debounce(async () => {
     if (activeTab() !== tab) return;
     $('#btn-star').classList.toggle('on', marked);
     $('#btn-star').innerHTML = icon('star', 16).replace('fill="none"', marked ? 'fill="currentColor"' : 'fill="none"');
-    $('#btn-key').hidden = !logins.length;
+    $('#btn-key').hidden = !logins.length && !tab.pwOffer;
+    $('#btn-key').classList.toggle('on', Boolean(tab.pwOffer)); // a sign-in waiting to be saved
   } else {
     $('#btn-key').hidden = true;
   }
@@ -290,6 +309,17 @@ async function onAsk({ id, kind, payload }) {
       buttons: [{ id: 'cancel', label: 'Cancel' }, { id: 'signin', label: 'Sign in', primary: true }],
     });
     answer = r.id === 'signin' && r.values.username ? { username: r.values.username, password: r.values.password } : null;
+  } else if (kind === 'page-dialog') {
+    // a page's alert(), confirm() or prompt() (see dialog-preload.js)
+    const { type, message, value, from } = payload;
+    const r = await showDialog({
+      title: from ? `${from} says` : 'This page says',
+      message,
+      fields: type === 'prompt' ? [{ id: 'value', label: '', value }] : undefined,
+      buttons: type === 'alert' ? [{ id: 'ok', label: 'OK', primary: true }] : [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'OK', primary: true }],
+    });
+    if (type === 'prompt') answer = r.id === 'ok' ? r.values.value : null;
+    else answer = type === 'confirm' ? r.id === 'ok' : null;
   }
   window.ultima.answerAsk({ id, answer });
 }
@@ -524,6 +554,7 @@ async function boot() {
   initBlocking();
   initTabHistory();
   initWidgets();
+  initPasswordFill();
   $('#zoom-pill').onclick = () => zoom(activeTab(), 0);
 
   initTabStrip();
@@ -531,6 +562,8 @@ async function boot() {
   initTabFolderUi();
   initTabRename();
   initTabCardDrag();
+  initTabSelection();
+  initTabSleep();
   initTabDock();
   initSplitView();
   initGlance();
@@ -593,7 +626,8 @@ async function boot() {
   // existed land in the first space
   const own = state.window;
   const torn = state.tearOff; // a tab torn off another window (tabdrag.js): this window opens on it, in its space
-  initSpaces(state.sidebar?.spaces, own?.activeSpaceId ?? torn?.spaceId);
+  const moved = state.movedTabs; // tabs chosen in another window's sidebar, moved here together (tabselect.js)
+  initSpaces(state.sidebar?.spaces, own?.activeSpaceId ?? torn?.spaceId ?? moved?.[0]?.spaceId);
   initTabFolders([...(own?.folders || []), ...(state.sidebar?.folders || []).map((f) => ({ ...f, zone: 'pinned' }))]);
   initSplits(own?.splits);
   const restored = withFoldersHeld(() => withSplitsHeld(() => {
@@ -610,7 +644,8 @@ async function boot() {
   } else if (torn) {
     const tab = createTab({ url: torn.url || NEWTAB, title: torn.title, name: torn.name, favicon: torn.favicon, spaceId: torn.spaceId, restore: torn.restore });
     Object.assign(tab, { zoom: torn.zoom || 0, muted: Boolean(torn.muted), cameFrom: torn.cameFrom }); // (its menu can send it back)
-  } else if (state.launchUrl) createTab({ url: state.launchUrl });
+  } else if (moved?.length) openMovedTabs(moved);
+  else if (state.launchUrl) createTab({ url: state.launchUrl });
   else if (active) activateTab(active.id);
   else if (restored.length) activateTab(restored[0].id);
   else createTab({ url: NEWTAB });

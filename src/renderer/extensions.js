@@ -1,5 +1,5 @@
 // Extensions in the UI: pinned toolbar buttons, popups, the address bar menu and installing from the Chrome Web Store.
-const EXT = { list: [], popup: null, menu: null };
+const EXT = { list: [], popup: null, menu: null, panels: new Map() };
 const STORE_DETAIL = /^https:\/\/(?:chromewebstore\.google\.com\/detail|chrome\.google\.com\/webstore\/detail)\/(?:[^/]+\/)?([a-p]{32})/i;
 const STORE_HOME = 'https://chromewebstore.google.com/category/extensions';
 
@@ -70,7 +70,10 @@ async function openExtension(ext, anchor, popout = null) {
   const runtimeId = await window.ultima.extensionRuntimeId({ id: ext.id, partition });
   if (!runtimeId) return toast(`${ext.name} isn’t running${ext.error ? `: ${ext.error}` : ''}`);
   if (!ext.popup && !popout) {
-    if (ext.optionsPage) return createTab({ url: `chrome-extension://${runtimeId}/${ext.optionsPage.replace(/^\//, '')}` });
+    // no popup: the extension opens its side panel or hears the click itself, as in Chrome (see extensionActionClicked)
+    const done = await window.ultima.extensionAction({ id: ext.id, tabId: ready(tab) ? tab.webview.getWebContentsId() : null });
+    if (done !== 'none') return undefined;
+    if (ext.optionsPage) return openExtensionOptions(ext);
     return toast(`${ext.name} works on pages by itself and has no popup`);
   }
   if (EXT.popup?.dataset.ext === ext.id && !popout) return closeExtensionPopup(); // second click closes it
@@ -157,6 +160,73 @@ async function openExtension(ext, anchor, popout = null) {
   return undefined;
 }
 
+// An extension's options page, in a tab
+async function openExtensionOptions(ext) {
+  const tab = activeTab();
+  const runtimeId = await window.ultima.extensionRuntimeId({ id: ext.id, partition: tab ? tabPartition(tab) : SHARED_PARTITION });
+  if (!runtimeId) return toast(`${ext.name} isn’t running${ext.error ? `: ${ext.error}` : ''}`);
+  if (ext.optionsPage) createTab({ url: `chrome-extension://${runtimeId}/${ext.optionsPage.replace(/^\//, '')}` });
+  return undefined;
+}
+
+// ---------- side panels ----------
+// An extension's page docked beside the page (sidePanel.open, or its toolbar button; see showSidePanel in main).
+// One shows at a time: a panel set for one tab (Claude's) shows only while that tab is in front and comes back with
+// it; otherwise the one opened last. Hidden panels keep running, as in Chrome.
+const panelKey = (id, tabId) => `${id}|${tabId ?? ''}`;
+async function openSidePanel({ id, path, tabId = null }) {
+  const ext = EXT.list.find((x) => x.id === id);
+  if (!ext || B.private || !path) return;
+  const tab = activeTab();
+  const partition = tab ? tabPartition(tab) : SHARED_PARTITION;
+  const runtimeId = await window.ultima.extensionRuntimeId({ id, partition });
+  if (!runtimeId) return;
+  const src = `chrome-extension://${runtimeId}/${path}`;
+  const key = panelKey(id, tabId);
+  let panel = EXT.panels.get(key);
+  if (!panel) {
+    const wv = h(`<webview partition="${esc(partition)}" src="${esc(src)}"></webview>`);
+    panel = { id, tabId, wv, src, at: 0 };
+    wv.addEventListener('dom-ready', () => { try { window.ultima.sidePanelShown(wv.getWebContentsId(), true, tabId); } catch { /* closed */ } }, { once: true });
+    wv.addEventListener('close', () => closeSidePanel(key)); // window.close() from the panel
+    EXT.panels.set(key, panel);
+    $('#ext-panel').append(wv);
+  } else if (panel.src !== src) {
+    panel.src = src;
+    panel.wv.src = src;
+  }
+  panel.at = Date.now();
+  updateSidePanel();
+}
+function closeSidePanel(key) {
+  const panel = EXT.panels.get(key);
+  if (!panel) return;
+  EXT.panels.delete(key);
+  try { window.ultima.sidePanelShown(panel.wv.getWebContentsId(), false, panel.tabId); } catch { /* never attached */ }
+  panel.wv.remove();
+  updateSidePanel();
+}
+function updateSidePanel() {
+  const box = $('#ext-panel');
+  if (!box) return;
+  const wcOf = (t) => { try { return ready(t) ? t.webview.getWebContentsId() : null; } catch { return null; } };
+  const front = wcOf(activeTab());
+  const open = new Set(B.tabs.map(wcOf));
+  for (const [key, p] of EXT.panels) if (p.tabId !== null && !open.has(p.tabId)) closeSidePanel(key); // its tab closed
+  const panels = [...EXT.panels.values()];
+  const shown = panels.find((p) => p.tabId !== null && p.tabId === front)
+    || panels.filter((p) => p.tabId === null).sort((a, b) => b.at - a.at)[0] || null;
+  for (const p of panels) p.wv.classList.toggle('hidden', p !== shown);
+  box.hidden = !shown;
+  $('.ext-panel-head', box)?.remove();
+  if (!shown) return;
+  const ext = EXT.list.find((x) => x.id === shown.id);
+  const head = h(`<div class="ext-panel-head">${ext ? extIcon(ext, 16) : ''}<span class="ext-panel-name">${esc(ext?.name || '')}</span>
+    <button class="icon-btn" title="Close side panel">${icon('close', 14)}</button></div>`);
+  $('button', head).addEventListener('click', () => closeSidePanel(panelKey(shown.id, shown.tabId)));
+  box.prepend(head);
+}
+
 // ---------- address bar menu ----------
 function closeUrlMenu() {
   EXT.menu?.remove();
@@ -240,12 +310,18 @@ function initExtensionsUi() {
     if (!b) return;
     e.preventDefault();
     const ext = EXT.list.find((x) => x.id === b.dataset.ext);
+    // the extension's own items for its button (chrome.contextMenus), above Ultima's
+    const tab = activeTab();
+    let own = { token: 0, items: [] };
+    try { own = await window.ultima.extensionActionMenu({ id: ext.id, tabId: ready(tab) ? tab.webview.getWebContentsId() : null }); } catch { /* none */ }
     const choice = await showMenu([
+      ...own.items, ...(own.items.length ? [{ type: 'separator' }] : []),
       { id: 'open', label: ext.popup ? 'Open' : 'Options', icon: 'external', enabled: Boolean(ext.popup || ext.optionsPage) },
       { id: 'unpin', label: 'Unpin from toolbar', icon: 'pin' },
       { id: 'manage', label: 'Manage extensions', icon: 'puzzle', shortcut: 'open-extensions' },
     ]);
-    if (choice === 'open') openExtension(ext, b);
+    if (choice && /^x\d+$/.test(choice)) { window.ultima.chooseExtensionActionMenu({ token: own.token, id: choice }); return; }
+    if (choice === 'open') { if (ext.popup) openExtension(ext, b); else openExtensionOptions(ext); }
     else if (choice === 'unpin') window.ultima.setExtensionPinned({ id: ext.id, pinned: false });
     else if (choice === 'manage') runCommand('open-extensions');
   });
@@ -280,5 +356,15 @@ function initExtensionsUi() {
     openExtension(ext, anchor, { path, width, height });
   });
   window.ultima.on('ext-close-popout', () => { if (EXT.popup?.dataset.popout) closeExtensionPopup(); });
+  // an extension's "activate" shortcut (chrome.commands' _execute_action): what its toolbar button does
+  window.ultima.on('ext-command', ({ id }) => {
+    const ext = EXT.list.find((x) => x.id === id);
+    if (ext) openExtension(ext, $(`#ext-actions [data-ext="${CSS.escape(id)}"]`) || $('#urlbar'));
+  });
+  // an extension opening or closing its side panel (sidePanel.open / close, or its toolbar button)
+  window.ultima.on('ext-side-panel', ({ id, path, tabId, open }) => {
+    if (open) { openSidePanel({ id, path, tabId }); return; }
+    for (const [key, p] of EXT.panels) if (p.id === id && (tabId === null || p.tabId === tabId)) closeSidePanel(key);
+  });
   refreshExtensions();
 }
