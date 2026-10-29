@@ -1,5 +1,5 @@
-// The sidebar's buttons: which ones, in which order, at the top (beside the logo) or the bottom.
-// Edited in Settings → Appearance (Sidebar buttons) by dragging, or by right-clicking a button in the sidebar itself.
+// The sidebar's buttons: which ones, in which order, in the grid at the top (beside the logo) or the one at the bottom,
+// with upright dividers between groups and blank spaces to push them apart. Arranged by dragging, in the sheet that slides up from the bottom (sidebaredit.js).
 const SIDEBAR_BUTTONS = {
   back: { icon: 'back', cmd: 'back', label: 'Back' },
   forward: { icon: 'forward', cmd: 'forward', label: 'Forward' },
@@ -38,24 +38,31 @@ const SIDEBAR_BUTTONS = {
   settings: { icon: 'settings', cmd: 'open-settings', label: 'Settings' },
 };
 const SIDEBAR_DEFAULT = { head: ['back', 'forward', 'reload'], foot: ['palette', 'bookmarks', 'history', 'tab-history', 'downloads', 'import', 'settings'] };
-const SIDEBAR_HEAD_MAX = 5; // beside the logo there's only room for a few
+const SIDEBAR_DIVIDER = 'divider'; // an upright line between buttons
+const SIDEBAR_SPACE = 'space'; // an empty cell, a button wide
+const SIDEBAR_REPEATS = new Set([SIDEBAR_DIVIDER, SIDEBAR_SPACE]); // these two go in as often as you like
 // buttons that were in the page before this was customizable keep their ids (other code looks them up)
 const SIDEBAR_BUILT_IN = new Set(['back', 'forward', 'reload', 'palette', 'bookmarks', 'history', 'downloads', 'import', 'settings']);
 const sidebarButtonId = (key) => (SIDEBAR_BUILT_IN.has(key) ? `btn-${key}` : `sbb-${key}`);
+// the two grids the buttons sit in: beside the logo, and at the foot of the sidebar (with horizontal tabs, both in the
+// toolbar: tablayout.js)
+const sidebarZones = () => ({ head: $('#sidebar .nav'), foot: $('#sidebar .sb-cells') });
 
-// the saved layout, cleaned up: known buttons only, each once, the top no fuller than it can be
+// the saved layout, cleaned up: known buttons only, each once (dividers and blank spaces as often as you like)
 function sidebarLayout() {
   const saved = B.settings.sidebarButtons;
   const seen = new Set();
-  const clean = (list, max) => (Array.isArray(list) ? list : []).filter((k) => SIDEBAR_BUTTONS[k] && !seen.has(k) && seen.add(k)).slice(0, max);
+  const clean = (list) => (Array.isArray(list) ? list : []).filter((k) => SIDEBAR_REPEATS.has(k) || (SIDEBAR_BUTTONS[k] && !seen.has(k) && seen.add(k)));
   if (!saved || typeof saved !== 'object') return { head: [...SIDEBAR_DEFAULT.head], foot: [...SIDEBAR_DEFAULT.foot] };
-  const head = clean(saved.head, SIDEBAR_HEAD_MAX);
-  return { head, foot: clean(saved.foot, Infinity) };
+  return { head: clean(saved.head), foot: clean(saved.foot) };
 }
 
 // Every button exists once; the ones not in use wait in a hidden pool, so code that updates them always finds them.
 function initSidebarButtons() {
   const pool = $('#sb-pool');
+  $('#sidebar .nav').dataset.zone = 'head';
+  const foot = $('#sidebar .sb-foot');
+  if (!$('.sb-cells', foot)) foot.prepend(h('<div class="sb-cells" data-zone="foot"></div>'));
   for (const [key, b] of Object.entries(SIDEBAR_BUTTONS)) {
     let el = document.getElementById(sidebarButtonId(key));
     if (!el) {
@@ -67,6 +74,7 @@ function initSidebarButtons() {
     el.dataset.label = b.label;
     el.insertAdjacentHTML('afterbegin', icon(b.icon, 16));
     el.addEventListener('click', () => {
+      if (sidebarEditing()) return; // being arranged (sidebaredit.js)
       if (key === 'reload' && activeTab()?.loading) return activeTab().webview?.stop();
       if (WIDGETS[key] && widgetDropdowns()) return toggleWidget(key); // Waypoints, History, Downloads: a dropdown (widgets.js)
       return runCommand(b.cmd);
@@ -77,12 +85,17 @@ function initSidebarButtons() {
 
 function renderSidebarButtons() {
   const layout = sidebarLayout();
-  const nav = $('#sidebar .nav'); // (in the sidebar's head, or with horizontal tabs, the toolbar: tablayout.js)
-  const spacer = $('.sb-foot .spacer');
+  const zones = sidebarZones();
   const pool = $('#sb-pool');
   const used = new Set([...layout.head, ...layout.foot]);
-  for (const key of layout.head) nav.append(document.getElementById(sidebarButtonId(key)));
-  for (const key of layout.foot) spacer.before(document.getElementById(sidebarButtonId(key)));
+  $$('#sidebar .sb-div, #sidebar .sb-space').forEach((d) => d.remove());
+  for (const zone of ['head', 'foot']) {
+    for (const key of layout[zone]) {
+      zones[zone].append(key === SIDEBAR_DIVIDER ? h(`<span class="sb-div" data-sbb="${SIDEBAR_DIVIDER}" role="separator" aria-orientation="vertical"></span>`)
+        : key === SIDEBAR_SPACE ? h(`<span class="sb-space" data-sbb="${SIDEBAR_SPACE}" aria-hidden="true"></span>`)
+          : document.getElementById(sidebarButtonId(key)));
+    }
+  }
   for (const key of Object.keys(SIDEBAR_BUTTONS)) if (!used.has(key)) pool.append(document.getElementById(sidebarButtonId(key)));
 }
 
@@ -90,23 +103,14 @@ function setSidebarLayout(layout) {
   applySettings({ sidebarButtons: { head: [...layout.head], foot: [...layout.foot] } });
   renderSidebarButtons();
   updateChrome();
-  for (const ed of $$('.sbe')) renderSidebarEditor(ed);
+  renderSidebarSheet(); // the buttons left to add (sidebaredit.js)
 }
 
-// Moves a button to `zone` at `index` (or adds it there); a full top row sends it to the bottom instead.
-function placeSidebarButton(key, zone, index = Infinity) {
+// Adds a button (or a divider) at the end of `zone`, or moves it there.
+function placeSidebarButton(key, zone) {
   const layout = sidebarLayout();
-  const from = layout.head.includes(key) ? 'head' : layout.foot.includes(key) ? 'foot' : null;
-  if (from) {
-    const at = layout[from].indexOf(key);
-    layout[from].splice(at, 1);
-    if (from === zone && at < index) index -= 1;
-  }
-  if (zone === 'head' && layout.head.length >= SIDEBAR_HEAD_MAX) {
-    toast(`The top of the sidebar holds ${SIDEBAR_HEAD_MAX} buttons`);
-    return;
-  }
-  layout[zone].splice(Math.max(0, Math.min(index, layout[zone].length)), 0, key);
+  if (!SIDEBAR_REPEATS.has(key)) for (const z of ['head', 'foot']) layout[z] = layout[z].filter((k) => k !== key);
+  layout[zone].push(key);
   setSidebarLayout(layout);
 }
 
@@ -115,124 +119,12 @@ function removeSidebarButton(key) {
   setSidebarLayout({ head: layout.head.filter((k) => k !== key), foot: layout.foot.filter((k) => k !== key) });
 }
 
-async function sidebarButtonMenu(key, pos) {
+// Takes one item off the sidebar by where it is (there can be several dividers and blank spaces).
+function removeSidebarItem(el) {
+  const zoneEl = el?.closest('[data-zone]');
+  if (!zoneEl) return;
   const layout = sidebarLayout();
-  const zone = layout.head.includes(key) ? 'head' : 'foot';
-  const list = layout[zone];
-  const i = list.indexOf(key);
-  const choice = await showMenu([
-    { id: 'left', label: 'Move left', icon: 'back', enabled: i > 0 },
-    { id: 'right', label: 'Move right', icon: 'forward', enabled: i < list.length - 1 },
-    { id: 'other', label: zone === 'head' ? 'Move to the bottom' : 'Move to the top', icon: zone === 'head' ? 'arrowDown' : 'arrowUp', enabled: zone === 'head' || layout.head.length < SIDEBAR_HEAD_MAX },
-    { type: 'separator' },
-    { id: 'remove', label: 'Remove from sidebar', icon: 'minus' },
-  ], pos);
-  if (choice === 'left') placeSidebarButton(key, zone, i - 1);
-  else if (choice === 'right') placeSidebarButton(key, zone, i + 2);
-  else if (choice === 'other') placeSidebarButton(key, zone === 'head' ? 'foot' : 'head');
-  else if (choice === 'remove') removeSidebarButton(key);
-}
-
-// ---------- Settings → Appearance → Sidebar buttons ----------
-function pageSidebarButtons(el) {
-  el.innerHTML = '<div class="sbe"></div>';
-  const ed = $('.sbe', el);
-  renderSidebarEditor(ed);
-  let dragKey = null;
-
-  const chip = (e) => e.target.closest('.sbe-chip[data-key]');
-  ed.addEventListener('click', (e) => {
-    const rm = e.target.closest('[data-remove]');
-    if (rm) { removeSidebarButton(rm.dataset.remove); return; }
-    const add = e.target.closest('[data-add]');
-    if (add) placeSidebarButton(add.dataset.add, 'foot');
-    else if (e.target.closest('[data-sbe-reset]')) setSidebarLayout(SIDEBAR_DEFAULT);
-  });
-  ed.addEventListener('contextmenu', (e) => {
-    const c = chip(e);
-    if (!c) return;
-    e.preventDefault();
-    e.stopPropagation();
-    sidebarButtonMenu(c.dataset.key, { x: e.clientX, y: e.clientY });
-  });
-
-  // drag a button to reorder it, move it between top and bottom, or drop it on the library to remove it
-  ed.addEventListener('dragstart', (e) => {
-    const src = e.target.closest('[data-key], [data-add]');
-    if (!src) return;
-    dragKey = src.dataset.key || src.dataset.add;
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('text/plain', dragKey);
-    src.classList.add('dragging');
-  });
-  ed.addEventListener('dragend', () => { dragKey = null; clearMarks(); $$('.dragging', ed).forEach((x) => x.classList.remove('dragging')); });
-  const clearMarks = () => $$('.drop-before, .drop-after, .drop-into', ed).forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-into'));
-  // where in a row the pointer is: before which chip
-  const dropPoint = (slots, x) => {
-    const chips = $$('.sbe-chip[data-key]', slots).filter((c) => c.dataset.key !== dragKey);
-    const i = chips.findIndex((c) => { const r = c.getBoundingClientRect(); return x < r.left + r.width / 2; });
-    return { chips, index: i < 0 ? chips.length : i };
-  };
-  ed.addEventListener('dragover', (e) => {
-    if (!dragKey) return;
-    const slots = e.target.closest('.sbe-slots');
-    const library = e.target.closest('.sbe-library');
-    if (!slots && !library) return;
-    e.preventDefault();
-    clearMarks();
-    if (library) { if (!library.querySelector(`[data-add="${dragKey}"]`)) library.classList.add('drop-into'); return; }
-    const { chips, index } = dropPoint(slots, e.clientX);
-    if (!chips.length) slots.classList.add('drop-into');
-    else if (index < chips.length) chips[index].classList.add('drop-before');
-    else chips[chips.length - 1].classList.add('drop-after');
-  });
-  ed.addEventListener('dragleave', (e) => { if (!ed.contains(e.relatedTarget)) clearMarks(); });
-  ed.addEventListener('drop', (e) => {
-    if (!dragKey) return;
-    e.preventDefault();
-    const key = dragKey;
-    const slots = e.target.closest('.sbe-slots');
-    clearMarks();
-    if (e.target.closest('.sbe-library')) { removeSidebarButton(key); return; }
-    if (!slots) return;
-    // index among the row's chips as they are now (placeSidebarButton allows for the chip leaving its old spot)
-    const all = $$('.sbe-chip[data-key]', slots);
-    const { chips, index } = dropPoint(slots, e.clientX);
-    const target = chips[index];
-    placeSidebarButton(key, slots.dataset.zone, target ? all.indexOf(target) : all.length);
-  });
-}
-
-function renderSidebarEditor(ed) {
-  const layout = sidebarLayout();
-  const used = new Set([...layout.head, ...layout.foot]);
-  const chip = (key) => {
-    const b = SIDEBAR_BUTTONS[key];
-    return `<div class="sbe-chip" draggable="true" data-key="${key}" title="${esc(b.label)} — drag to move, right-click for more">
-      ${icon(b.icon, 16)}<button class="sbe-x" data-remove="${key}" title="Remove ${esc(b.label)}">${icon('close', 10)}</button></div>`;
-  };
-  const free = Object.keys(SIDEBAR_BUTTONS).filter((k) => !used.has(k));
-  ed.innerHTML = `
-    <section class="s-group"><h3 class="s-group-title">Sidebar buttons</h3>
-      <div class="s-card sbe-card">
-        <div class="sbe-mock">
-          <div class="sbe-row sbe-top">
-            <span class="sbe-brand">${LOGO}<span>Ultima</span></span>
-            <div class="sbe-slots" data-zone="head">${layout.head.map(chip).join('')}</div>
-          </div>
-          <div class="sbe-body" aria-hidden="true"><i></i><i></i><i class="short"></i><i></i></div>
-          <div class="sbe-row sbe-bottom">
-            <div class="sbe-slots" data-zone="foot">${layout.foot.map(chip).join('')}</div>
-            <span class="sbe-chip locked" title="Compact sidebar — always here">${icon('sidebar', 16)}</span>
-          </div>
-        </div>
-        <p class="sbe-hint">Drag to reorder. Drag a button to the list below to remove it. The top holds up to ${SIDEBAR_HEAD_MAX}.</p>
-      </div>
-    </section>
-    <section class="s-group"><h3 class="s-group-title">Add buttons</h3>
-      <div class="s-card"><div class="sbe-library">${free.length ? free.map((k) => `
-        <button class="sbe-tile" draggable="true" data-add="${k}" title="Add to the bottom of the sidebar, or drag it where you want it">${icon(SIDEBAR_BUTTONS[k].icon, 18)}<span>${esc(SIDEBAR_BUTTONS[k].label)}</span></button>`).join('')
-          : '<div class="sbe-empty">Every button is in your sidebar.</div>'}</div></div>
-    </section>
-    <div class="s-actions"><button class="btn" data-sbe-reset>${icon('reload', 14)} Reset to default</button></div>`;
+  const index = $$(':scope > [data-sbb]', zoneEl).indexOf(el);
+  if (index >= 0) layout[zoneEl.dataset.zone].splice(index, 1);
+  setSidebarLayout(layout);
 }

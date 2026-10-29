@@ -56,7 +56,8 @@ const DEFAULT_SETTINGS = {
   windowMaterial: 'acrylic',
   glassTint: 45,
   loadingIndicator: true,
-  loadingTheme: 'space',
+  loadingTheme: 'space', // a built-in choice, 'custom', or one of loadingSaved ('saved:<id>')
+  loadingSaved: [], // colors made with Custom and kept as choices of their own: { id, name, colors }
   addressBarMode: 'palette', // what clicking the address bar opens: palette, extended (palette at the bar) or classic
   loadingStyle: 'bar', // the loading animation: in the address bar (bar), or a line under the toolbar (line)
   showBookmarksBar: true,
@@ -217,15 +218,17 @@ function pageContextMenu(wc, p) {
   const openTab = (url, background = true) => send('open-url', { url, background, private: priv });
   const short = (s, n = 32) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-  // Copy, Paste, Waypoints and Reload, always at the top as a row of buttons (overlays.js draws `type: 'actions'`)
+  // Back, Forward, Reload and Waypoints, always at the top as a row of buttons (overlays.js draws `type: 'actions'`);
+  // Copy and Paste are below, where there's something to copy or a text box to paste into
   const saved = data.isBookmarked(wc.getURL());
+  const nav = wc.navigationHistory;
   t.push({
     type: 'actions',
     buttons: [
-      item('Copy', () => wc.copy(), { icon: 'copy', enabled: Boolean(p.editFlags.canCopy || p.selectionText.trim()), hint: `${MOD}+C` }),
-      item('Paste', () => wc.paste(), { icon: 'paste', enabled: Boolean(p.isEditable && p.editFlags.canPaste), hint: `${MOD}+V` }),
-      item(saved ? 'Remove from Waypoints' : 'Add this page to Waypoints', () => send('command', 'bookmark'), { icon: 'star', on: saved, shortcut: 'bookmark' }),
+      item('Back', () => nav.goBack(), { icon: 'back', enabled: nav.canGoBack(), shortcut: 'back' }),
+      item('Forward', () => nav.goForward(), { icon: 'forward', enabled: nav.canGoForward(), shortcut: 'forward' }),
       item('Reload', () => wc.reload(), { icon: 'reload', shortcut: 'reload' }),
+      item(saved ? 'Edit Waypoint' : 'Add this page to Waypoints', () => send('command', 'bookmark'), { icon: 'star', on: saved, shortcut: 'bookmark' }),
     ],
   });
 
@@ -272,6 +275,8 @@ function pageContextMenu(wc, p) {
       item('Redo', () => wc.redo(), { enabled: f.canRedo, hint: `${MOD}+Y` }),
       sep,
       item('Cut', () => wc.cut(), { enabled: f.canCut, icon: 'cut', hint: `${MOD}+X` }),
+      item('Copy', () => wc.copy(), { enabled: f.canCopy, icon: 'copy', hint: `${MOD}+C` }),
+      item('Paste', () => wc.paste(), { enabled: f.canPaste, icon: 'paste', hint: `${MOD}+V` }),
       item('Paste as plain text', () => wc.pasteAndMatchStyle(), { enabled: f.canPaste, hint: `${MOD}+Shift+V` }),
       item('Select all', () => wc.selectAll(), { enabled: f.canSelectAll, hint: `${MOD}+A` }),
       sep,
@@ -288,6 +293,7 @@ function pageContextMenu(wc, p) {
   } else if (p.selectionText.trim()) {
     const sel = p.selectionText.trim();
     t.push(
+      item('Copy', () => wc.copy(), { icon: 'copy', hint: `${MOD}+C` }),
       item(`Search for “${short(sel, 28)}”`, () => send('open-url', { search: sel, background: false, private: priv }), { icon: 'search' }),
       item('Copy link to highlight', () => {
         const page = new URL(wc.getURL());
@@ -306,9 +312,6 @@ function pageContextMenu(wc, p) {
     );
   }
   t.push(
-    item('Back', () => wc.navigationHistory.goBack(), { icon: 'back', enabled: wc.navigationHistory.canGoBack(), shortcut: 'back' }),
-    item('Forward', () => wc.navigationHistory.goForward(), { icon: 'forward', enabled: wc.navigationHistory.canGoForward(), shortcut: 'forward' }),
-    sep,
     item('View page source', () => openTab(`view-source:${wc.getURL()}`, false), { icon: 'code' }),
     item('Inspect', () => wc.inspectElement(p.x, p.y), { icon: 'code', shortcut: 'devtools' }),
   );
@@ -1118,8 +1121,13 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
   const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url, tearOff, restoring: [], focusedAt: Date.now() };
   windows.set(win.id, w);
   lastFocusedId = win.id;
-  if (bounds.maximized) win.maximize();
-  win.once('ready-to-show', () => (reveal ? reveal(win) : win.show()));
+  // shown once its page has drawn, maximized then if it should be (maximizing a hidden window shows it at once, still
+  // blank, and it would then show a second time)
+  win.once('ready-to-show', () => {
+    if (reveal) reveal(win);
+    else if (bounds.maximized) { win.maximize(); win.focus(); } // (maximize shows it without focusing it)
+    else win.show();
+  });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   hookShortcuts(win.webContents);
 
@@ -1326,10 +1334,10 @@ function registerIpc() {
     sessionStore.save(800);
   });
   handle('app:quit', () => app.quit()); // every window is kept for next time (see before-quit)
-  // Quits and starts again (a new hardware acceleration setting), with the same switches but not the link or file
-  // Ultima was opened with, which would open again. Every window's tabs come back, even with "Restore tabs" off.
+  // Quits and starts again (a new hardware acceleration setting), with the same switches but not the link, file or new
+  // window Ultima was opened for, which would open again. Every window's tabs come back, even with "Restore tabs" off.
   handle('app:relaunch', () => {
-    const args = process.argv.slice(1).filter((a) => a !== '--single-argument' && a !== RESTART_SWITCH && !defaultBrowser.launchTarget(['', a]));
+    const args = process.argv.slice(1).filter((a) => ![RESTART_SWITCH, NEW_WINDOW, NEW_PRIVATE_WINDOW, '--single-argument'].includes(a) && !defaultBrowser.launchTarget(['', a]));
     app.relaunch({ args: [...args, RESTART_SWITCH] });
     app.quit();
   });
@@ -1356,9 +1364,6 @@ function registerIpc() {
     w.win.focus();
     sendTo(w, 'show-contents', wc.id);
   });
-  // what the graphics card is doing right now: Chromium also turns parts off itself, for drivers it knows are broken
-  // or after the graphics process crashed
-  handle('gpu:status', () => app.getGPUFeatureStatus());
   handleFrom('window:new', (_e, opts) => {
     const url = typeof opts?.url === 'string' && /^(https?|ultima):/i.test(opts.url) ? opts.url : null;
     createWindow({ private: Boolean(opts?.private), url });
@@ -1721,16 +1726,31 @@ async function widevineReady() {
   }
 }
 
-// Ultima started again (a link from another app, the taskbar icon): the last normal window you used comes forward and
-// opens the link; with only private windows open, a normal one opens for it.
+// Ultima started again while it's open. A link or a page from another app opens in the last normal window you used,
+// which comes forward (with only private windows open, a normal one opens for it). Started without one (the taskbar's
+// right-click menu, the Start menu) or asked for a new window (the taskbar menu's New window), a new window opens, as in
+// Chrome; New private window opens a private one.
 app.on('second-instance', (_e, argv) => {
+  if (!app.isReady()) return;
   const url = defaultBrowser.launchTarget(argv);
+  if (argv.includes(NEW_PRIVATE_WINDOW)) { createWindow({ private: true, url }); return; }
   const w = currentWindow({ normal: true });
-  if (!w) { if (app.isReady()) createWindow({ url }); return; }
+  if (!w || !url || argv.includes(NEW_WINDOW)) { createWindow({ url }); return; }
   if (w.win.isMinimized()) w.win.restore();
   w.win.focus();
-  if (url) sendTo(w, 'open-url', { url, background: false });
+  sendTo(w, 'open-url', { url, background: false });
 });
+
+// The taskbar's right-click menu on Windows: New window and New private window. Each starts Ultima again with its
+// switch, which the open Ultima hears (second-instance), or which the first window to open follows.
+const NEW_WINDOW = '--new-window';
+const NEW_PRIVATE_WINDOW = '--new-private-window';
+function setTaskbarTasks() {
+  if (process.platform !== 'win32') return;
+  const before = app.isPackaged ? '' : `"${app.getAppPath()}" `; // (a development copy runs as electron.exe <folder>)
+  const task = (title, arg) => ({ program: process.execPath, arguments: `${before}${arg}`, iconPath: process.execPath, iconIndex: 0, title, description: title });
+  app.setUserTasks([task('New window', NEW_WINDOW), task('New private window', NEW_PRIVATE_WINDOW)]);
+}
 
 // macOS hands links over as an event, also before the window exists
 // A server or proxy asking for a username and password (Basic/Digest, or NTLM/Negotiate when Windows' own sign-in
@@ -1800,6 +1820,9 @@ app.whenReady().then(async () => {
   if (restore.length) restore.forEach((r, i) => createWindow({ restore: r, url: i === restore.length - 1 ? launchUrl : null }));
   else createWindow({ url: launchUrl });
   launchUrl = null;
+  // started from the taskbar menu's New private window: your windows come back as usual, and a private one opens too
+  if (process.argv.includes(NEW_PRIVATE_WINDOW)) createWindow({ private: true });
+  setTaskbarTasks();
   defaultBrowser.refreshRegistration();
   nativeTheme.on('updated', () => { broadcast('system-theme', nativeTheme.shouldUseDarkColors); toTaskWindow('system-theme', nativeTheme.shouldUseDarkColors); });
   // macOS: clicking the Dock icon with every window closed brings back the last one

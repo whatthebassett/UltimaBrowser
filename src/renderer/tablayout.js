@@ -37,6 +37,7 @@ function setTabLayout(mode) {
     $('#htoolbar')?.remove();
     TL.home = null;
   }
+  if (B.spaces?.length) renderSpaces(); // the space chips, or the one switcher across the top
   if (B.restored) { renderTabs(); updateChrome(); } // (while Ultima starts, its own first render does this)
 }
 

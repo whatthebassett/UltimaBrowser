@@ -13,7 +13,7 @@ function sidebarPeek(on) {
 }
 
 function sidebarBusy() {
-  return Boolean(OV.menu || OV.dialog || B.renaming || EXT.menu || TH.panel || $('.space-name-input, .theme-editor, .ext-popup'))
+  return Boolean(OV.menu || OV.dialog || B.renaming || EXT.menu || TH.panel || sidebarEditing() || $('.space-name-input, .theme-editor, .ext-popup'))
     || document.body.classList.contains('tab-dragging') || document.body.classList.contains('sb-resizing') || $('#sidebar').matches(':hover');
 }
 

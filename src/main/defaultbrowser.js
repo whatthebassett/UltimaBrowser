@@ -7,7 +7,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const { pathToFileURL, fileURLToPath } = require('url');
 
 const APP_NAME = 'Ultima Browser'; // its name in Windows Settings (RegisteredApplications)
 const PROG_ID = 'UltimaHTML';
@@ -93,12 +93,19 @@ async function refreshRegistration() {
 }
 
 // The page to open from a command line: a link (Ultima as the default browser) or an .html file opened with it.
+// When Ultima is already open, Chromium hands the second launch's command line over rewritten: --single-argument is
+// gone, and the path can keep its quotes and end in a stray NUL, so those are taken off.
+const isPage = (file) => FILE_TYPES.includes(path.extname(file).toLowerCase());
 function launchTarget(argv) {
   const at = argv.indexOf('--single-argument');
-  const args = at >= 0 ? [argv.slice(at + 1).join(' ')] : argv.slice(1);
+  const args = (at >= 0 ? [argv.slice(at + 1).join(' ')] : argv.slice(1))
+    .map((a) => String(a).replace(/\0/g, '').trim().replace(/^"(.*)"$/, '$1'))
+    .filter((a) => a && !a.startsWith('--'));
   for (const a of args) {
     if (/^https?:\/\//i.test(a)) return a;
-    if (FILE_TYPES.includes(path.extname(a).toLowerCase()) && fs.existsSync(a)) return pathToFileURL(path.resolve(a)).href;
+    if (/^file:\/\//i.test(a)) {
+      try { if (isPage(fileURLToPath(a))) return a; } catch { /* not a file address after all */ }
+    } else if (isPage(a) && fs.existsSync(a)) return pathToFileURL(path.resolve(a)).href;
   }
   return null;
 }

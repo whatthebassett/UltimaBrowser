@@ -89,7 +89,7 @@ function bookmarksWidget() {
   const tab = activeTab();
   const saved = tab && !isInternal(tab.url) && BM.nodes.some((n) => n.type === 'url' && n.url === tab.url);
   const acts = tab && !isInternal(tab.url)
-    ? `<button class="icon-btn ${saved ? 'on' : ''}" data-wg="star" title="${saved ? 'Remove this page from Waypoints' : 'Add this page to Waypoints'}">${icon('star', 15).replace('fill="none"', saved ? 'fill="currentColor"' : 'fill="none"')}</button>` : '';
+    ? `<button class="icon-btn ${saved ? 'on' : ''}" data-wg="star" title="${saved ? 'Edit this page’s Waypoint' : 'Add this page to Waypoints'}">${icon('star', 15).replace('fill="none"', saved ? 'fill="currentColor"' : 'fill="none"')}</button>` : '';
   const foot = '<button class="wg-link" data-wg="page">Open Waypoints</button>';
   const urlRow = (n) => wgRow(`data-bm="${esc(n.id)}" title="${esc(`${n.title || n.url}\n${n.url}`)}"`, favHtml(bmFavicon(n), n.url, n.title), n.title || n.url, hostname(n.url));
   const words = WG.query.toLowerCase().split(/\s+/).filter(Boolean);
@@ -173,7 +173,7 @@ async function onWidgetClick(e) {
   if (!t) return;
   const d = t.dataset;
   if (d.wg === 'page') { const kind = WG.kind; closeWidget(); runCommand({ bookmarks: 'open-bookmarks', history: 'open-history', downloads: 'open-downloads' }[kind]); return; }
-  if (d.wg === 'star') { await toggleBookmark(); await refreshBookmarkBar(); renderWidget(); return; }
+  if (d.wg === 'star') { closeWidget(); bookmarkPage(); return; } // the Waypoint popup takes it from here
   if (d.wg === 'clear-dl') {
     await window.ultima.clearDownloads();
     for (const [id, x] of B.downloads) if (x.state !== 'progressing') B.downloads.delete(id);

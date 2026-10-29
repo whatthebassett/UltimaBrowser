@@ -104,27 +104,13 @@ const COLOR_FILTERS = [['none', 'None'], ['grayscale', 'Grayscale'], ['invert', 
   ['protanopia', 'Red-weak (protanopia)'], ['deuteranopia', 'Green-weak (deuteranopia)'], ['tritanopia', 'Blue-weak (tritanopia)']];
 
 // ---------- performance ----------
-// B.gpu: what the graphics card draws right now (app.getGPUFeatureStatus in main), fetched when the page shows.
 // B.hardwareAcceleration is what this run started with: a changed setting waits for a restart.
-async function refreshGpuStatus() {
-  B.gpu = await window.ultima.gpuStatus();
-  rerenderIfShowing('settings');
-}
-const GPU_FEATURES = [['gpu_compositing', 'pages'], ['video_decode', 'video'], ['2d_canvas', 'canvas drawing'], ['webgl', '3D graphics (WebGL)']];
-
 function performanceRows() {
-  if (!B.gpu) refreshGpuStatus();
   const want = B.settings.hardwareAcceleration !== false;
-  const used = B.gpu ? GPU_FEATURES.filter(([k]) => String(B.gpu[k] || '').startsWith('enabled')).map(([, label]) => label) : [];
-  const now = !B.gpu ? 'Checking…'
-    : used.length ? `Your graphics card draws ${used.length > 1 ? `${used.slice(0, -1).join(', ')} and ${used[used.length - 1]}` : used[0]}.`
-      : B.hardwareAcceleration ? 'Your graphics card isn’t available, so the processor draws everything.'
-        : 'Hardware acceleration is off, so the processor draws everything.';
   return [
     sRow('Hardware acceleration', 'Smoother pages and video. Turn it off if pages flicker or look garbled.', sSwitch('hardwareAcceleration')),
     want !== B.hardwareAcceleration && sRow(`Restart to turn it ${want ? 'on' : 'off'}`, 'Your tabs come back after the restart. Private ones close.',
       '<button class="btn primary" data-relaunch>Restart Ultima</button>'),
-    sRow('Right now', now, ''),
     sRow('Task manager', `See what each tab uses, and end the ones you don’t need.${keyText('task-manager') ? ` Shortcut: ${esc(keyText('task-manager'))}.` : ''}`,
       `<button class="btn" data-run="task-manager">${icon('activity', 14)} Open task manager</button>`),
   ];
@@ -185,9 +171,7 @@ const SETTINGS_TABS = [
   },
   {
     id: 'appearance', title: 'Appearance', icon: 'sun', desc: 'Theme, window, tabs, Waypoints bar and sidebar.',
-    // the sidebar buttons editor (sidebarbuttons.js) is mounted into its place after the rest is drawn
-    mount: (body) => { const m = $('.sbe-mount', body); if (m) pageSidebarButtons(m); },
-    jumps: [['Sidebar buttons', 'sidebar-buttons', 'customize add remove reorder toolbar top bottom']],
+    jumps: [['Sidebar buttons', 'sidebar-buttons', 'customize add remove reorder toolbar top bottom divider']],
     render: () => {
       const s = B.settings;
       const style = sidebarStyleRows(); // sidebarstyle.js
@@ -223,7 +207,10 @@ const SETTINGS_TABS = [
           !tabsAcross() && sRow('Hide sidebar', `Point at the left edge to bring it back.${keyText('toggle-sidebar-hidden') ? ` Shortcut: ${esc(keyText('toggle-sidebar-hidden'))}.` : ''}`, sSwitch('sidebarHidden')),
           resetStyle,
         ]),
-        '<div class="sbe-mount" data-anchor="sidebar-buttons"></div>',
+        `<div data-anchor="sidebar-buttons">${sGroup(tabsAcross() ? 'Toolbar buttons' : 'Sidebar buttons', [
+          sRow(tabsAcross() ? 'Toolbar buttons' : 'Sidebar buttons', tabsAcross() ? 'Drag buttons onto the toolbar.' : 'Drag buttons onto the top or bottom of the sidebar, with dividers between them.',
+            `<button class="btn" data-run="customize-sidebar">${icon('sidebar', 14)} Edit ${tabsAcross() ? 'toolbar' : 'sidebar'}</button>`),
+        ])}</div>`,
       ].join('');
     },
   },
@@ -301,10 +288,9 @@ const SETTINGS_TABS = [
         sRow('Show while pages load', 'A moving gradient until the page has loaded.', sSwitch('loadingIndicator')),
         s.loadingIndicator !== false && sRow('Style', 'In the address bar, or a line under the toolbar.',
           sSeg('loadingStyle', [['bar', 'Address bar'], ['line', 'Line']])),
-        sRow('Colors', 'Match each space, or pick your own. Click one to preview.',
-          `<div class="loader-swatches ${s.loadingIndicator === false ? 'off' : ''}">${Object.entries(LOADER_THEMES).map(([k, t]) => `<button class="loader-swatch ${(s.loadingTheme || 'space') === k ? 'on' : ''}" data-loader="${k}"><span style="--sw:${loaderBackground(loaderColors(k))}"></span>${esc(t.name)}</button>`).join('')}</div>`,
-          'data-stack'),
-        s.loadingTheme === 'custom' && s.loadingIndicator !== false && sRow('Custom colors', 'Pick 2 to 5 colors.', loaderCustomEditor(), 'data-stack'),
+        sRow('Colors', 'Match each space, or pick your own. Click one to preview.', loaderSwatches(), 'data-stack'),
+        s.loadingTheme === 'custom' && s.loadingIndicator !== false && sRow('Custom colors', 'Pick 2 to 5 colors, and drag them to change the order. Save them to keep them as a choice.', loaderCustomEditor(), 'data-stack'),
+        savedLoader(s.loadingTheme) && s.loadingIndicator !== false && sRow('Your colors', 'Give them a name. Pick 2 to 5 colors, and drag them to change the order.', loaderCustomEditor(savedLoader(s.loadingTheme)), 'data-stack'),
       ]);
     },
   },
@@ -482,14 +468,16 @@ function pageSettings(root, tab) {
     else if (d.tabLayout) applySettings({ tabLayout: d.tabLayout });
     else if (d.addressMode) { applySettings({ addressBarMode: d.addressMode }); updateChrome(); }
     else if (d.loader) { applySettings({ loadingTheme: d.loader }); previewLoader(); }
+    else if (t.hasAttribute('data-lc-save')) saveCustomLoader();
+    else if (d.loaderRemove) removeSavedLoader(d.loaderRemove);
     else if (t.hasAttribute('data-lc-add')) {
-      const colors = customLoaderColors();
+      const colors = editedLoaderColors();
       // a new color carries the gradient on: well round the wheel from the last one
       const last = hexToHsl(colors[colors.length - 1]);
-      applySettings({ loadingCustom: [...colors, hslToHex({ ...last, h: (last.h + 150) % 360 })] });
+      setEditedLoaderColors([...colors, hslToHex({ ...last, h: (last.h + 150) % 360 })]);
       previewLoader();
     } else if (d.lcRemove) {
-      applySettings({ loadingCustom: customLoaderColors().filter((_, i) => i !== Number(d.lcRemove)) });
+      setEditedLoaderColors(editedLoaderColors().filter((_, i) => i !== Number(d.lcRemove)));
       previewLoader();
     }
     else if (d.spaceTheme) { openThemeEditor(spaceById(d.spaceTheme)); return; }
@@ -538,20 +526,39 @@ function pageSettings(root, tab) {
     }
     // custom loading colors follow the picker live, without redrawing the page (that would close the picker)
     if (e.target.dataset.lc !== undefined) {
-      const colors = [...customLoaderColors()];
+      const colors = [...editedLoaderColors()];
       colors[Number(e.target.dataset.lc)] = e.target.value;
-      applySettings({ loadingCustom: colors });
+      setEditedLoaderColors(colors);
       e.target.parentElement.style.background = e.target.value;
       e.target.closest('.lc-stop').querySelector('.lc-hex').textContent = e.target.value.toUpperCase();
-      const sw = $('[data-loader="custom"] span', main);
+      const sw = $(`[data-loader="${editedLoaderKey()}"] span`, main);
       if (sw) sw.style.setProperty('--sw', loaderBackground(colors));
     }
+    // a saved set's name, as it's typed (its swatch too); an empty name isn't kept
+    if (e.target.dataset.lcName !== undefined) {
+      const saved = savedLoader(B.settings.loadingTheme);
+      const name = e.target.value.trim();
+      if (saved && name) {
+        updateSavedLoader(saved.id, { name });
+        const sw = $(`[data-loader="saved:${saved.id}"]`, main);
+        if (sw) sw.lastChild.textContent = name;
+        const x = $(`[data-loader-remove="${saved.id}"]`, main);
+        if (x) { x.dataset.tip = `Remove ${name}`; x.setAttribute('aria-label', `Remove ${name}`); }
+      }
+    }
+  });
+  // loading color stops drag sideways to a new place (the others slide aside); a click still opens the picker
+  main.addEventListener('pointerdown', (e) => {
+    const chip = e.button === 0 && e.target.closest('.lc-chip');
+    if (chip) dragLoaderStop(e, chip.closest('.lc-stop'), () => { if (activeTab() === tab) rerender(); });
   });
   main.addEventListener('keydown', (e) => {
     if (e.target.matches('[data-ext-input]') && matchesKey(e, 'field.submit')) { e.preventDefault(); $('[data-ext-install]', main).click(); }
+    if (e.target.matches('[data-lc-name]') && matchesKey(e, 'field.submit')) { e.preventDefault(); e.target.blur(); }
   });
 main.addEventListener('change', (e) => {
     if (e.target.dataset.lc !== undefined) previewLoader();
+    if (e.target.dataset.lcName !== undefined && !e.target.value.trim()) e.target.value = savedLoader(B.settings.loadingTheme)?.name || '';
     const k = e.target.dataset.setting;
     if (k && e.target.tagName === 'SELECT') {
       applySettings({ [k]: 'number' in e.target.dataset ? Number(e.target.value) : e.target.value });
@@ -564,17 +571,122 @@ main.addEventListener('change', (e) => {
   scrollToAnchor(settingsAnchor(tab));
 }
 
-// The custom loading gradient's color stops: a color picker each, plus add and remove.
-function loaderCustomEditor() {
-  const colors = customLoaderColors();
-  return `<div class="loader-custom">${colors.map((c, i) => `
+// The loading color choices: the built-in ones, then the ones you saved (each with a × to remove it), then Custom.
+function loaderSwatches() {
+  const current = B.settings.loadingTheme || 'space';
+  const swatch = (key, name) => `<button class="loader-swatch ${current === key ? 'on' : ''}" data-loader="${esc(key)}"><span style="--sw:${loaderBackground(loaderColors(key))}"></span>${esc(name)}</button>`;
+  const builtIn = Object.entries(LOADER_THEMES).filter(([k]) => k !== 'custom').map(([k, t]) => swatch(k, t.name));
+  const saved = savedLoaders().map((t) => `<div class="loader-saved">${swatch(`saved:${t.id}`, t.name)}
+    <button class="icon-btn ls-remove" data-loader-remove="${esc(t.id)}" title="Remove ${esc(t.name)}" aria-label="Remove ${esc(t.name)}">${icon('close', 12)}</button></div>`);
+  return `<div class="loader-swatches ${B.settings.loadingIndicator === false ? 'off' : ''}">${[...builtIn, ...saved, swatch('custom', LOADER_THEMES.custom.name)].join('')}</div>`;
+}
+
+// The colors the editor under the choices is changing: Custom's, or the saved set that's picked.
+const editedLoaderKey = () => (savedLoader(B.settings.loadingTheme) ? B.settings.loadingTheme : 'custom');
+const editedLoaderColors = () => savedLoader(B.settings.loadingTheme)?.colors.filter(isHex).slice(0, 5) || customLoaderColors();
+const updateSavedLoader = (id, change) => applySettings({ loadingSaved: savedLoaders().map((t) => (t.id === id ? { ...t, ...change } : t)) });
+function setEditedLoaderColors(colors) {
+  const saved = savedLoader(B.settings.loadingTheme);
+  if (saved) updateSavedLoader(saved.id, { colors });
+  else applySettings({ loadingCustom: colors });
+}
+
+// Keeps the Custom colors as a choice of their own (Custom 1, Custom 2… until you name it), picks it, and puts you in
+// its name.
+function saveCustomLoader() {
+  const saved = savedLoaders();
+  let n = saved.length + 1;
+  while (saved.some((t) => t.name === `Custom ${n}`)) n += 1;
+  const entry = { id: Math.random().toString(36).slice(2, 10), name: `Custom ${n}`, colors: [...customLoaderColors()] };
+  applySettings({ loadingSaved: [...saved, entry], loadingTheme: `saved:${entry.id}` });
+  previewLoader();
+  setTimeout(() => { const f = $('[data-lc-name]'); f?.focus(); f?.select(); }); // (once the page shows its editor)
+}
+
+// Takes saved colors away (Undo puts them back where they were); if they were in use, Space takes over.
+function removeSavedLoader(id) {
+  const saved = savedLoaders();
+  const index = saved.findIndex((t) => t.id === id);
+  if (index < 0) return;
+  const gone = saved[index];
+  const wasOn = B.settings.loadingTheme === `saved:${id}`;
+  applySettings({ loadingSaved: saved.filter((t) => t.id !== id), ...(wasOn ? { loadingTheme: 'space' } : {}) });
+  toast(`${gone.name} removed`, {
+    label: 'Undo',
+    run: () => {
+      const now = savedLoaders();
+      applySettings({ loadingSaved: [...now.slice(0, index), gone, ...now.slice(index)], ...(wasOn ? { loadingTheme: `saved:${id}` } : {}) });
+      rerenderIfShowing('settings');
+    },
+  });
+}
+
+// Drags a color stop along its row. Past a few pixels it's a drag: the stop follows the pointer, the others slide
+// aside to where it would land, and letting go puts the color there (the click that ends it doesn't open the picker).
+function dragLoaderStop(e, stop, done) {
+  const stops = $$('.lc-stop', stop.parentElement);
+  const from = stops.indexOf(stop);
+  if (stops.length < 2 || from < 0) return;
+  const pitch = stops[1].getBoundingClientRect().left - stops[0].getBoundingClientRect().left;
+  const x0 = e.clientX;
+  const y0 = e.clientY;
+  let to = from;
+  let dragging = false;
+  const move = (ev) => {
+    const dx = ev.clientX - x0;
+    if (!dragging) {
+      if (Math.hypot(dx, ev.clientY - y0) < 5) return;
+      dragging = true;
+      stop.classList.add('lc-dragging');
+      document.body.classList.add('lc-moving');
+      for (const s of stops) if (s !== stop) s.style.transition = 'transform 0.18s cubic-bezier(0.2, 0, 0, 1)';
+    }
+    ev.preventDefault();
+    const span = [-from * pitch - pitch / 2, (stops.length - 1 - from) * pitch + pitch / 2]; // held within the row
+    const x = Math.max(span[0], Math.min(span[1], dx));
+    stop.style.transform = `translateX(${x}px) scale(1.08)`;
+    to = Math.max(0, Math.min(stops.length - 1, from + Math.round(x / pitch)));
+    stops.forEach((s, i) => {
+      if (s === stop) return;
+      const shift = from < to && i > from && i <= to ? -pitch : from > to && i >= to && i < from ? pitch : 0;
+      s.style.transform = shift ? `translateX(${shift}px)` : '';
+    });
+  };
+  const up = () => {
+    window.removeEventListener('pointermove', move, true);
+    window.removeEventListener('pointerup', up, true);
+    window.removeEventListener('pointercancel', up, true);
+    if (!dragging) return;
+    const eat = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+    window.addEventListener('click', eat, true);
+    setTimeout(() => window.removeEventListener('click', eat, true));
+    document.body.classList.remove('lc-moving');
+    const colors = [...editedLoaderColors()];
+    if (to !== from) {
+      colors.splice(to, 0, ...colors.splice(from, 1));
+      setEditedLoaderColors(colors);
+      previewLoader();
+    }
+    done();
+  };
+  window.addEventListener('pointermove', move, true);
+  window.addEventListener('pointerup', up, true);
+  window.addEventListener('pointercancel', up, true);
+}
+
+// The loading gradient's color stops, Custom's or a saved set's: a color picker each, plus add and remove. Custom's
+// has a button to keep them; a saved set's has its name above.
+function loaderCustomEditor(saved = null) {
+  const colors = editedLoaderColors();
+  const name = saved ? `<input class="field lc-name" data-lc-name maxlength="30" spellcheck="false" autocomplete="off" aria-label="Name" value="${esc(saved.name)}">` : '';
+  return `<div class="lc-wrap">${name}<div class="loader-custom">${colors.map((c, i) => `
       <div class="lc-stop">
         <label class="lc-chip" style="background:${c}" title="Change color ${i + 1}"><input type="color" value="${c}" data-lc="${i}" aria-label="Color ${i + 1}"></label>
         <span class="lc-hex">${c.toUpperCase()}</span>
         ${colors.length > 2 ? `<button class="icon-btn lc-remove" data-lc-remove="${i}" title="Remove this color">${icon('close', 12)}</button>` : ''}
       </div>`).join('')}
     ${colors.length < 5 ? `<button class="lc-add" data-lc-add title="Add a color">${icon('plus', 16)}</button>` : ''}
-  </div>`;
+  </div>${saved ? '' : `<button class="btn" data-lc-save>${icon('plus', 14)} Save these colors</button>`}</div>`;
 }
 
 // Keeps a space's theme preview on the Spaces tab in step while its theme is being edited.

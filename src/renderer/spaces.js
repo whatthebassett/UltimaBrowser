@@ -220,9 +220,52 @@ function renderSpaces() {
     <span class="space-name" title="Double-click to rename">${esc(space.name)}</span>
     ${space.separate ? `<span class="space-lock" title="Separate sign-ins">${icon('shield', 12)}</span>` : ''}
     <button class="icon-btn space-more" title="Space options">${icon('more', 16)}</button>`;
-  $('#space-bar').innerHTML = B.spaces.map((s, i) => `<button class="space-chip ${s.id === space.id ? 'on' : ''}" data-space="${s.id}"
+  // with horizontal tabs, one button for them all (the space you're in); in the sidebar, a chip for each
+  if (tabsAcross()) renderSpaceSwitch(space);
+  else {
+    $('#space-bar').innerHTML = B.spaces.map((s, i) => `<button class="space-chip ${s.id === space.id ? 'on' : ''}" data-space="${s.id}"
       style="--chip:${s.color}" title="${esc(withKey(s.name, `space-${i + 1}`))}">${s.icon}</button>`).join('')
-    + `<button class="space-chip add" data-act="new-space" title="${esc(withKey('New space', 'new-space'))}">${icon('plus', 14)}</button>`;
+      + `<button class="space-chip add" data-act="new-space" title="${esc(withKey('New space', 'new-space'))}">${icon('plus', 14)}</button>`;
+  }
+}
+
+// ---------- the space switcher (horizontal tabs) ----------
+// The space you're in, as one button at the start of the tab strip: its icon and name in its color. Clicking it lists
+// your spaces; scrolling or swiping over it flips to the next or previous one, its name sliding in from that side.
+const SS = { shown: null };
+function renderSpaceSwitch(space) {
+  const bar = $('#space-bar');
+  const i = B.spaces.indexOf(space);
+  const before = SS.shown && B.spaces.findIndex((s) => s.id === SS.shown);
+  bar.innerHTML = `<button class="space-switch" data-space-switch style="--chip:${space.color}" aria-haspopup="menu"
+      title="${esc(`${space.name} — click for your spaces, scroll to switch`)}">
+    <span class="ss-face"><span class="ss-icon">${space.icon}</span><span class="ss-name">${esc(space.name)}</span></span>
+    <span class="ss-chev">${icon('forward', 12)}</span></button>`;
+  if (SS.shown && SS.shown !== space.id && before >= 0 && !reducedMotion()) {
+    const face = $('.ss-face', bar);
+    face.style.setProperty('--ss-from', i > before ? '12px' : '-12px');
+    face.classList.add('ss-in');
+  }
+  SS.shown = space.id;
+}
+
+// Every space (its color, icon and name, a tick on the one you're in), then New space and the options of this one.
+async function spaceSwitchMenu() {
+  const btn = $('[data-space-switch]');
+  if (!btn) return;
+  const r = btn.getBoundingClientRect();
+  btn.classList.add('open');
+  const current = activeSpace();
+  const choice = await showMenu([
+    ...B.spaces.map((s, i) => ({ id: `space:${s.id}`, type: 'checkbox', checked: s.id === current.id, swatch: s.color, label: `${s.icon}  ${s.name}`, shortcut: `space-${i + 1}` })),
+    { type: 'separator' },
+    { id: 'new', icon: 'plus', label: 'New space', shortcut: 'new-space' },
+    { id: 'options', icon: 'more', label: `${current.name} options…` },
+  ], { x: r.left, y: r.bottom + 6 });
+  btn.classList.remove('open');
+  if (choice?.startsWith('space:')) switchSpace(choice.slice(6));
+  else if (choice === 'new') createSpace();
+  else if (choice === 'options') spaceMenu(current, { x: r.left, y: r.bottom + 6 });
 }
 
 function initSpaceUi() {
@@ -237,6 +280,7 @@ function initSpaceUi() {
 
   const bar = $('#space-bar');
   bar.addEventListener('click', (e) => {
+    if (e.target.closest('[data-space-switch]')) { spaceSwitchMenu(); return; }
     const chip = e.target.closest('.space-chip');
     if (!chip) return;
     if (chip.dataset.act === 'new-space') createSpace();
@@ -245,7 +289,22 @@ function initSpaceUi() {
   bar.addEventListener('contextmenu', (e) => {
     const chip = e.target.closest('[data-space]');
     if (chip) { e.preventDefault(); spaceMenu(spaceById(chip.dataset.space)); }
+    else if (e.target.closest('[data-space-switch]')) { e.preventDefault(); spaceMenu(activeSpace()); }
   });
+  // scrolling or a two-finger swipe over the switcher flips through the spaces (a notch, or a swipe's worth, at a time)
+  let flip = 0;
+  let flipLockedUntil = 0;
+  bar.addEventListener('wheel', (e) => {
+    if (!e.target.closest('[data-space-switch]')) return;
+    e.preventDefault();
+    if (Date.now() < flipLockedUntil) return;
+    flip += Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    if (Math.abs(flip) >= 40) {
+      cycleSpace(flip > 0 ? 1 : -1);
+      flip = 0;
+      flipLockedUntil = Date.now() + 320;
+    }
+  }, { passive: false });
   // drop a dragged tab on a space to move it there
   bar.addEventListener('dragover', (e) => {
     const chip = e.target.closest('[data-space]');

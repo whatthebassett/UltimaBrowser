@@ -17,7 +17,6 @@ contextBridge.exposeInMainWorld('ultima', {
   toggleFullscreen: invoke('window:fullscreen'),
   quit: invoke('app:quit'),
   relaunch: invoke('app:relaunch'),
-  gpuStatus: invoke('gpu:status'),
   taskList: invoke('tasks:list'),
   taskEnd: invoke('tasks:end'),
   openTaskManager: invoke('tasks:open'),

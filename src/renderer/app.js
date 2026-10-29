@@ -97,7 +97,7 @@ function runCommand(cmd) {
     }
     case 'space-options': {
       // (with horizontal tabs the space's name row is hidden: the menu hangs from its icon in the tab strip)
-      const r = (tabsAcross() ? $('#space-bar .space-chip.on') : $('#space-head')).getBoundingClientRect();
+      const r = (tabsAcross() ? $('[data-space-switch]') : $('#space-head')).getBoundingClientRect();
       return spaceMenu(activeSpace(), { x: r.left + 8, y: r.bottom + 4 });
     }
     case 'toggle-space-separate': return setSpaceSeparate(activeSpace(), !activeSpace().separate);
@@ -112,7 +112,7 @@ function runCommand(cmd) {
       return undefined;
     case 'forward': return wv?.canGoForward() && wv.goForward();
     case 'home': return tab && navigate(tab, NEWTAB);
-    case 'bookmark': return toggleBookmark();
+    case 'bookmark': return bookmarkPage(); // waypointpop.js
     case 'copy-url':
       if (tab) copyText(tab.url, 'URL copied');
       return undefined;
@@ -140,7 +140,7 @@ function runCommand(cmd) {
     case 'open-passwords': return openInternal('settings#passwords');
     case 'open-settings': return openInternal('settings');
     case 'open-shortcuts': return openInternal('settings#shortcuts');
-    case 'customize-sidebar': return openInternal('settings#appearance/sidebar-buttons');
+    case 'customize-sidebar': return openSidebarEditor(); // sidebaredit.js
     case 'toggle-bookmarks-bar': return toggleBookmarksBar();
     case 'import-bookmarks-bar': return importChromeBookmarkBar();
     case 'rename-tab': sidebarShowForCommand(); return startRenameTab(activeTab());
@@ -162,14 +162,6 @@ function runCommand(cmd) {
       return undefined;
     default: return undefined;
   }
-}
-
-async function toggleBookmark() {
-  const tab = activeTab();
-  if (!tab || isInternal(tab.url)) return;
-  const added = await window.ultima.toggleBookmark({ url: tab.url, title: tab.title, favicon: tab.favicon });
-  toast(added ? 'Added to the Waypoints bar' : 'Waypoint removed', added ? { label: 'Undo', run: () => window.ultima.toggleBookmark({ url: tab.url }).then(updateChrome) } : undefined);
-  updateChrome();
 }
 
 // ---------- toolbar / URL bar ----------
@@ -311,7 +303,7 @@ async function onUiContextMenu(e) {
   const selected = window.getSelection().toString().trim();
   const mod = KEYS.platform === 'darwin' ? 'Cmd' : 'Ctrl';
   const sep = { type: 'separator' };
-  let menuButton = null; // a sidebar button right-clicked
+  let menuButton = null; // a sidebar button (or divider) right-clicked
   let items;
   if (field) {
     field.focus();
@@ -333,11 +325,13 @@ async function onUiContextMenu(e) {
     ];
   } else if (e.target.closest('#sidebar')) {
     // (the sidebar, or with horizontal tabs the tab strip and toolbar: tablayout.js)
-    const sbb = e.target.closest('[data-sbb]')?.dataset.sbb;
+    const sbbEl = e.target.closest('[data-zone] > [data-sbb]');
+    const sbb = sbbEl?.dataset.sbb;
     const across = tabsAcross();
+    const what = sbb === SIDEBAR_DIVIDER ? 'this divider' : sbb === SIDEBAR_SPACE ? 'this blank space' : `“${SIDEBAR_BUTTONS[sbb]?.label}”`;
     items = [
-      ...(sbb ? [{ id: 'sbb-remove', label: `Remove “${SIDEBAR_BUTTONS[sbb].label}” from the ${across ? 'toolbar' : 'sidebar'}`, icon: 'minus' },
-        { id: 'customize-sidebar', label: `Customize ${across ? 'toolbar' : 'sidebar'} buttons…`, icon: 'sidebar', shortcut: 'customize-sidebar' }, sep] : []),
+      ...(sbb ? [{ id: 'sbb-remove', label: `Remove ${what} from the ${across ? 'toolbar' : 'sidebar'}`, icon: 'minus' },
+        { id: 'customize-sidebar', label: `Edit ${across ? 'toolbar' : 'sidebar'}…`, icon: 'sidebar', shortcut: 'customize-sidebar' }, sep] : []),
       { id: 'new-tab', label: 'New tab', icon: 'plus', shortcut: 'new-tab' },
       { id: 'new-space', label: 'New space', icon: 'layers', shortcut: 'new-space' },
       { id: 'reopen-tab', label: 'Reopen closed tab', icon: 'history', shortcut: 'reopen-tab' },
@@ -349,11 +343,11 @@ async function onUiContextMenu(e) {
         { id: 'toggle-sidebar', label: B.settings.sidebarCollapsed ? 'Expand sidebar' : 'Compact sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar' },
         { id: 'toggle-sidebar-hidden', label: B.settings.sidebarHidden ? 'Keep sidebar open' : 'Hide sidebar', icon: 'sidebar', shortcut: 'toggle-sidebar-hidden' },
       ]),
-      ...(sbb ? [] : [{ id: 'customize-sidebar', label: `Customize ${across ? 'toolbar' : 'sidebar'} buttons…`, icon: 'sidebar', shortcut: 'customize-sidebar' }]),
+      ...(sbb ? [] : [{ id: 'customize-sidebar', label: `Edit ${across ? 'toolbar' : 'sidebar'}…`, icon: 'sidebar', shortcut: 'customize-sidebar' }]),
       { id: 'open-shortcuts', label: 'Keyboard shortcuts', icon: 'command', shortcut: 'open-shortcuts' },
       { id: 'open-settings', label: 'Settings', icon: 'settings', shortcut: 'open-settings' },
     ];
-    if (sbb) menuButton = sbb;
+    if (sbb) menuButton = sbbEl;
   } else {
     items = [
       { id: 'palette', label: 'Control Palette', icon: 'command', shortcut: 'palette' },
@@ -367,7 +361,7 @@ async function onUiContextMenu(e) {
   if (!id) return;
   if (id.startsWith('edit:')) { field?.focus(); window.ultima.uiEdit(id.slice(5)); }
   else if (id === 'ui-search') createTab({ url: searchUrl(selected, B.settings.searchEngine) });
-  else if (id === 'sbb-remove') removeSidebarButton(menuButton);
+  else if (id === 'sbb-remove') removeSidebarItem(menuButton);
   else runCommand(id);
 }
 

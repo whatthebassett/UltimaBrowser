@@ -69,7 +69,7 @@
     { id: 'toggle-tab-layout', title: 'Vertical / horizontal tabs', group: 'Ultima', keys: ['Alt+S'] },
     { id: 'toggle-sidebar-hidden', title: 'Hide sidebar', group: 'Ultima', keys: ['Mod+Shift+S'] },
     { id: 'toggle-fullscreen', title: 'Full screen', group: 'Ultima', keys: ['F11'], macKeys: ['Ctrl+Mod+F'] },
-    { id: 'customize-sidebar', title: 'Customize sidebar', group: 'Ultima', keys: [] },
+    { id: 'customize-sidebar', title: 'Edit sidebar', group: 'Ultima', keys: [] },
     { id: 'toggle-bookmarks-bar', title: 'Waypoints bar', group: 'Ultima', keys: [] },
     { id: 'import-bookmarks-bar', title: 'Import bookmarks bar', group: 'Ultima', keys: [] },
     { id: 'toggle-loading-animation', title: 'Loading animation', group: 'Ultima', keys: [] },

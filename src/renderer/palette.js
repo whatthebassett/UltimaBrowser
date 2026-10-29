@@ -57,7 +57,7 @@ const COMMANDS = [
   { id: 'tab-folder-remove', title: 'Remove tab from its folder', icon: 'folder', words: 'ungroup tab group folder' },
   { id: 'import-bookmarks-bar', title: 'Import bookmarks bar (Chrome, Edge…)', icon: 'import', words: 'chrome edge brave vivaldi favorites favorites copy' },
   { id: 'toggle-bookmarks-bar', title: 'Show / hide Waypoints bar', icon: 'bookmark', words: 'bookmarks favorites toolbar bar' },
-  { id: 'customize-sidebar', title: 'Customize sidebar buttons', icon: 'sidebar', words: 'widgets toolbar add remove buttons edit layout' },
+  { id: 'customize-sidebar', title: 'Edit sidebar', icon: 'sidebar', words: 'customize widgets toolbar add remove buttons edit layout divider' },
   { id: 'toggle-loading-animation', title: 'Loading animation on / off', icon: 'sparkle', words: 'address bar progress gradient spinner' },
   { id: 'theme-dark', title: 'Theme: Dark', icon: 'moon' },
   { id: 'theme-light', title: 'Theme: Light', icon: 'sun' },

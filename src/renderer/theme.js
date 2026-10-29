@@ -121,9 +121,16 @@ const LOADER_THEMES = {
   candy: { name: 'Candy', colors: ['#ec4899', '#a78bfa', '#38bdf8'] },
   rainbow: { name: 'Rainbow', colors: ['#ef4444', '#f59e0b', '#22c55e', '#3b82f6', '#a855f7'] },
   mono: { name: 'Mono', colors: ['#6b7280', '#f3f4f6', '#9ca3af'] },
+  snowcone: { name: 'Snow Cone', colors: ['#ffffff', '#65bbf1', '#f16575'] },
   custom: { name: 'Custom' },
 };
 const CUSTOM_LOADER_DEFAULT = ['#f43f5e', '#f59e0b', '#8b5cf6'];
+
+const isHex = (c) => /^#[0-9a-f]{6}$/i.test(c);
+// Colors you made with Custom and kept (Settings → Address bar): as many as you like, each a choice of its own
+const savedLoaders = () => (Array.isArray(B.settings.loadingSaved) ? B.settings.loadingSaved : [])
+  .filter((t) => t && typeof t.id === 'string' && Array.isArray(t.colors) && t.colors.filter(isHex).length >= 2);
+const savedLoader = (key) => (typeof key === 'string' && key.startsWith('saved:') ? savedLoaders().find((t) => `saved:${t.id}` === key) || null : null);
 
 // Your own colors (2–5), from Settings → Address bar
 function customLoaderColors() {
@@ -139,6 +146,8 @@ function spreadColor(hex) {
 }
 
 function loaderColors(key) {
+  const saved = savedLoader(key);
+  if (saved) return saved.colors.filter(isHex).slice(0, 5);
   // a private window's space is black and its accent gray: following either, the animation is in grays
   if (B.private && (key === 'space' || key === 'accent' || !LOADER_THEMES[key])) return PRIVATE_LOADER;
   if (key === 'accent') return spreadColor(B.settings.accent || '#8b5cf6');

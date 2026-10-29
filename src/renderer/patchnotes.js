@@ -3,6 +3,28 @@
 // Each item is [what, one short plain sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.2.3',
+    date: '2026-10-29',
+    new: [
+      ['Edit Waypoints as you add them', 'Adding a Waypoint opens a popup to change its name, link and folder, or remove it.'],
+      ['Save your loading colors', 'Keep as many custom address bar colors as you like, name and change them, and remove the ones you don’t want.'],
+      ['Reorder your colors', 'Drag a custom color to move it.'],
+      ['Snow Cone', 'A new white, blue and pink choice for the address bar’s loading colors.'],
+      ['Edit the sidebar in place', 'Drag buttons from a panel at the bottom straight onto the top or bottom of the sidebar.'],
+      ['Sidebar button grids', 'Put as many buttons as you like at the top and bottom of the sidebar, in rows, with dividers and blank spaces between them.'],
+    ],
+    improved: [
+      ['Back and Forward in the page menu', 'Back and Forward sit as buttons at the top of the right-click menu, and Copy and Paste are back in the list.'],
+      ['Frosted notifications', 'Pop-up messages are frosted glass with a touch of your accent color.'],
+      ['Spaces with horizontal tabs', 'One button shows the space you’re in. Click it for your spaces, or scroll over it to switch.'],
+    ],
+    fixed: [
+      ['Opening web pages from files', 'Web pages you open from a file open in Ultima again, even while it’s running.'],
+      ['New window from the taskbar', 'The taskbar’s right-click menu opens a new window, or a new private one.'],
+      ['Opening new windows', 'A new window opens once, without a blank flash first.'],
+    ],
+  },
+  {
     version: '0.2.2',
     date: '2026-10-29',
     new: [
