@@ -537,6 +537,7 @@ async function boot() {
   initTabFolderUi();
   initTabRename();
   initTabCardDrag();
+  initTabDock();
   initSplitView();
   initGlance();
   initTaskManager();
@@ -597,7 +598,8 @@ async function boot() {
   // link), then this window's own tabs (main leaves those out when "Restore tabs" is off); tabs from before spaces
   // existed land in the first space
   const own = state.window;
-  initSpaces(state.sidebar?.spaces, own?.activeSpaceId);
+  const torn = state.tearOff; // a tab torn off another window (tabdrag.js): this window opens on it, in its space
+  initSpaces(state.sidebar?.spaces, own?.activeSpaceId ?? torn?.spaceId);
   initTabFolders([...(own?.folders || []), ...(state.sidebar?.folders || []).map((f) => ({ ...f, zone: 'pinned' }))]);
   initSplits(own?.splits);
   const restored = withFoldersHeld(() => withSplitsHeld(() => {
@@ -607,7 +609,14 @@ async function boot() {
     return (own?.tabs || []).map((t) => createTab({ ...t, zone: 'normal', activate: false, lazy: true }));
   }));
   const active = (own?.active?.key && B.tabs.find((t) => t.key === own.active.key)) || restored[own?.active?.normal] || null;
-  if (state.launchUrl) createTab({ url: state.launchUrl });
+  const tornKept = keptCopy(torn?.key); // a pinned tab or Essential: this window's copy of it takes the page
+  if (tornKept) {
+    takeInto(tornKept, torn);
+    tornKept.cameFrom = torn.cameFrom;
+  } else if (torn) {
+    const tab = createTab({ url: torn.url || NEWTAB, title: torn.title, name: torn.name, favicon: torn.favicon, spaceId: torn.spaceId, restore: torn.restore });
+    Object.assign(tab, { zoom: torn.zoom || 0, muted: Boolean(torn.muted), cameFrom: torn.cameFrom }); // (its menu can send it back)
+  } else if (state.launchUrl) createTab({ url: state.launchUrl });
   else if (active) activateTab(active.id);
   else if (restored.length) activateTab(restored[0].id);
   else createTab({ url: NEWTAB });

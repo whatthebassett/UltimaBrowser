@@ -10,6 +10,7 @@ const importer = require('./importer');
 const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
 const taskManager = require('./taskmanager');
+const tearoff = require('./tearoff');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -770,7 +771,7 @@ function partitionSession(partition) {
 // servers, remembered permissions, its finished downloads in the list).
 function endPrivateBrowsingIfUnused() {
   const ses = session.fromPartition(PRIVATE_PARTITION);
-  if (webContents.getAllWebContents().some((wc) => !wc.isDestroyed() && wc.session === ses)) return;
+  if (tearoff.movingPrivate() || webContents.getAllWebContents().some((wc) => !wc.isDestroyed() && wc.session === ses)) return;
   ses.clearStorageData().catch(() => {});
   ses.clearCache().catch(() => {});
   ses.clearAuthCache().catch(() => {});
@@ -1077,10 +1078,11 @@ function migrateSession(s) {
   };
 }
 
-// A new window opens a little down and to the right of the one you're in, at its size; a restored one where it was.
-function createWindow({ private: priv = false, restore = null, url = null } = {}) {
+// A new window opens a little down and to the right of the one you're in, at its size; a restored one where it was;
+// a torn-off tab's (tearoff.js) where it was dropped (`at`), showing when `reveal` says so.
+function createWindow({ private: priv = false, restore = null, url = null, at = null, tearOff = null, reveal = null } = {}) {
   const from = currentWindow();
-  let bounds = restore?.bounds;
+  let bounds = at || restore?.bounds;
   if (!bounds && from && !from.win.isMaximized() && !from.win.isFullScreen()) {
     const b = from.win.getBounds();
     bounds = { ...b, x: b.x + 28, y: b.y + 28, maximized: false };
@@ -1113,11 +1115,11 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
       spellcheck: true,
     },
   });
-  const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url };
+  const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url, tearOff, restoring: [], focusedAt: Date.now() };
   windows.set(win.id, w);
   lastFocusedId = win.id;
   if (bounds.maximized) win.maximize();
-  win.once('ready-to-show', () => win.show());
+  win.once('ready-to-show', () => (reveal ? reveal(win) : win.show()));
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   hookShortcuts(win.webContents);
 
@@ -1139,6 +1141,7 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
   win.on('enter-full-screen', () => sendTo(w, 'window-fullscreen', { on: true, immersive: Boolean(w.immersive) }));
   win.on('focus', () => {
     lastFocusedId = win.id;
+    w.focusedAt = Date.now(); // (where windows overlap, the one used last is taken to be on top: tearoff.js)
     dispatchExtEvent('windows.onFocusChanged', [priv ? -1 : 0]);
     if (!priv) announceActiveTab(w); // to extensions, the window you're in is "the" window, so its tab is the active one
   });
@@ -1162,7 +1165,11 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
     if (Number(a11y.minFontSize) > 0) prefs.minimumFontSize = Math.min(72, Number(a11y.minFontSize));
     params.partition = priv ? PRIVATE_PARTITION : knownPartition(params.partition); // a private window's pages are all private
     partitionSession(params.partition);
+    // a torn-off tab's page starts from the history it had (tearoff.js), not by loading an address
+    const restoring = tearoff.claim(params.src);
+    if (restoring) { delete params.src; w.restoring.push(restoring); }
   });
+  win.webContents.on('did-attach-webview', (_e, guest) => { const r = w.restoring.shift(); if (r) tearoff.restoreInto(guest, r); });
   win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.webContents.on('did-start-loading', () => { recordingKeys = false; });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -1171,7 +1178,7 @@ function createWindow({ private: priv = false, restore = null, url = null } = {}
     windows.delete(win.id);
     if (lastFocusedId === win.id) lastFocusedId = null;
     if (!priv && !quitting && liveWindows().some((x) => !x.private)) forgetWindow(w.key);
-    if (!liveWindows().length) taskWindow()?.close(); // the task manager goes with the last window
+    if (!liveWindows().length) { taskWindow()?.close(); tearoff.destroy(); } // the task manager goes with the last window
   });
   return w;
 }
@@ -1281,7 +1288,8 @@ function registerIpc() {
   handleFrom('state:get', (e) => {
     const w = windowOf(e.sender);
     const url = w?.url ?? null; // opened once, not again if the UI reloads
-    if (w) w.url = null;
+    const tearOff = w?.tearOff ?? null;
+    if (w) { w.url = null; w.tearOff = null; }
     return {
       settings: settings.data,
       private: Boolean(w?.private),
@@ -1297,6 +1305,7 @@ function registerIpc() {
       backdrops: BACKDROPS,
       hardwareAcceleration: HARDWARE_ACCELERATION, // what this run started with
       launchUrl: url,
+      tearOff,
     };
   });
   // A window saves its own tabs; when the shared sidebar changed too, the other normal windows get it.
@@ -1355,6 +1364,27 @@ function registerIpc() {
     createWindow({ private: Boolean(opts?.private), url });
   });
   handleFrom('window:close', (e) => parentOf(e)?.close()); // Ctrl+W with no tabs left
+  // tearing a tab off into a new window (tearoff.js, driven by tabdrag.js)
+  const fromWindow = (e) => { const w = windowOf(e.sender); return w && w.win.webContents === e.sender ? w : null; };
+  handleFrom('tear:begin', (e, info) => { const w = fromWindow(e); if (w && info && typeof info === 'object') tearoff.begin(w, info, { windows: liveWindows }); });
+  handleFrom('tear:out', (e, on) => { if (fromWindow(e)) tearoff.out(on); });
+  handleFrom('tear:cancel', (e) => { if (fromWindow(e)) tearoff.cancel(); });
+  handleFrom('tear:drop', (e, tab) => {
+    const w = fromWindow(e);
+    if (!w || !tab || typeof tab !== 'object') { tearoff.cancel(); return false; }
+    return tearoff.drop(w, tab, { openWindow: createWindow, normalSize: () => settings.data.window, privateDone: endPrivateBrowsingIfUnused });
+  });
+  // a tab dragged in from another window is over this one's tabs (or not)
+  handleFrom('dock:over', (e, on) => { const w = fromWindow(e); if (w) tearoff.over(w, on); });
+  // a torn-off tab back to the window it came from, if that's still open (its menu)
+  handleFrom('window:is-open', (_e, id) => Boolean(windows.get(Number(id)) && !windows.get(Number(id)).win.isDestroyed()));
+  handleFrom('tear:back', (e, tab) => {
+    const w = fromWindow(e);
+    const to = windows.get(Number(tab?.home?.windowId));
+    if (!w || !to || typeof tab !== 'object') return false;
+    return tearoff.moveTo(w, tab, to, { privateDone: endPrivateBrowsingIfUnused, home: tab.home });
+  });
+  ipcMain.on('ghost:settled', () => tearoff.settled());
   // F11: the window fills the screen, or comes back (see enter-full-screen in createWindow)
   handleFrom('window:fullscreen', (e) => {
     const w = windowOf(e.sender);

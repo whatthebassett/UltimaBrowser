@@ -42,7 +42,7 @@ const internalName = (url) => {
 
 function createTab({
   url = NEWTAB, title, name, favicon = '', zone, pinned = false, homeUrl, homeTitle, homeFavicon, activate = true, lazy = false, index, opener, spaceId, folderId, splitId,
-  key, private: priv = false, essentialsOf,
+  key, private: priv = false, essentialsOf, restore,
 } = {}) {
   // a private window's tabs are all private (windows.js); private tabs are regular tabs, never pinned
   const isPriv = B.private || Boolean(priv);
@@ -76,6 +76,7 @@ function createTab({
   // a tab opened from a tab in a folder joins that folder, as in Chrome (pinned folders hold only pinned tabs)
   if (z !== 'essential') tab.folderId = folderById(folderId)?.zone === z ? folderId : z === 'normal' && opener?.zone === 'normal' ? opener.folderId : undefined;
   if (z === 'normal' && splitById(splitId)) tab.splitId = splitId; // restoring a session
+  if (restore) tab.restore = restore; // a tab torn off another window: its page comes with its history (tabdrag.js)
   let at = index ?? B.tabs.length;
   if (index === undefined && opener) {
     // open next to the tab that spawned it, after its other children
@@ -101,7 +102,8 @@ function ensureWebview(tab, adopt = null) {
     wv.setAttribute('partition', tabPartition(tab));
     wv.setAttribute('allowpopups', '');
     wv.className = 'hidden';
-    wv.src = isInternal(tab.url) ? 'about:blank' : tab.url;
+    wv.src = isInternal(tab.url) ? 'about:blank' : tab.restore ? `about:blank?ultima-restore=${tab.restore}` : tab.url;
+    tab.restore = undefined;
   }
   tab.webview = wv;
   tab.ready = Boolean(adopt);
@@ -177,7 +179,10 @@ function ensureWebview(tab, adopt = null) {
   wv.addEventListener('enter-html-full-screen', () => document.body.classList.add('fullscreen'));
   wv.addEventListener('leave-html-full-screen', () => document.body.classList.remove('fullscreen'));
   // clicks inside a page never reach this document, so a page taking focus is what closes open menus and popups
-  wv.addEventListener('ipc-message', (e) => { if (e.channel === 'ultima:pane-top') setPaneHover(tab, Boolean(e.args[0])); });
+  wv.addEventListener('ipc-message', (e) => {
+    if (e.channel === 'ultima:pane-top') setPaneHover(tab, Boolean(e.args[0]));
+    else if (e.channel === 'ultima:swipe') onPageSwipe(tab, e.args[0] || {}); // swipe.js
+  });
   wv.addEventListener('focus', () => {
     focusPane(tab); // in split view, the pane you click into becomes the active tab
     if (!$('#palette-backdrop').hidden) closePalette();
@@ -369,11 +374,12 @@ function closeTab(id, { remove = false } = {}) {
   saveSession();
 }
 
-// Nothing open but the new tab page you were left with: no other tab in any space, no pinned tab or Essential loaded.
+// Nothing open but the new tab page you were left with: no other tab in any space (other than their own new tab
+// pages, which each space you've visited keeps), no pinned tab or Essential loaded.
 const windowIsEmpty = () => {
   const tab = activeTab();
-  return Boolean(tab) && tab.url === NEWTAB && tab.zone === 'normal'
-    && B.tabs.every((t) => t === tab || (isKept(t) && !t.webview));
+  const blank = (t) => t.zone === 'normal' && t.url === NEWTAB;
+  return Boolean(tab) && blank(tab) && B.tabs.every((t) => t === tab || blank(t) || (isKept(t) && !t.webview));
 };
 
 function unloadTab(tab) {
@@ -663,6 +669,8 @@ function initTabRename() {
 async function tabContextMenu(tab) {
   const kept = isKept(tab);
   const drifted = awayFromHome(tab);
+  // a tab torn off another window can go back there, while that's open (tabdrag.js)
+  const back = Boolean(tab.cameFrom) && await window.ultima.windowIsOpen(tab.cameFrom.windowId).catch(() => false);
   const choice = await showMenu([
     { id: 'reload', icon: 'reload', label: isUnloaded(tab) ? 'Load' : 'Reload', shortcut: 'reload' },
     { id: 'unload', icon: 'unload', label: 'Unload tab', enabled: Boolean(tab.webview), shortcut: 'unload-tab' },
@@ -696,6 +704,7 @@ async function tabContextMenu(tab) {
         { id: 'space-new', label: 'New space' },
       ],
     }]),
+    ...(back ? [{ id: 'back', icon: 'window', label: 'Move back to its old window' }] : []),
     { type: 'separator' },
     kept
       ? { id: 'remove', icon: 'trash', danger: true, label: tab.zone === 'essential' ? 'Remove from sidebar' : 'Unpin and close' }
@@ -725,6 +734,7 @@ async function tabContextMenu(tab) {
     case 'edit-home': editPinnedLink(tab); break;
     case 'mute': toggleMute(tab); break;
     case 'copy': copyText(tab.url, 'Link copied'); break;
+    case 'back': sendTabBack(tab); break;
     case 'close': closeTab(tab.id); break;
     case 'remove': closeTab(tab.id, { remove: true }); break;
     case 'close-others': regular.filter((t) => t !== tab).forEach((t) => closeTab(t.id)); break;

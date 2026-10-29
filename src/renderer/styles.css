@@ -1295,7 +1295,13 @@ body.collapsed .tfolder-tabs { margin-left: 0; padding-left: 0; border-left: 0; 
     0 2px 6px rgba(0, 0, 0, 0.18);
 }
 .drag-card.tab .tab-close, .drag-card.tab .tab-audio, .drag-card.tab .tab-home { visibility: hidden; }
-.drag-card.settling { transition: transform 0.19s cubic-bezier(0.2, 0, 0, 1), opacity 0.19s ease, box-shadow 0.19s ease; --lift: 0; }
+.drag-card.settling { transition: transform 0.19s cubic-bezier(0.2, 0, 0, 1), opacity 0.19s ease, box-shadow 0.19s ease, scale 0.19s ease; --lift: 0; }
+/* torn off (tabdrag.js): the card gives way to the picture of the window it will become */
+.drag-card { transition: opacity 0.12s ease, scale 0.16s cubic-bezier(0.4, 0, 1, 1); }
+/* a pinned tab or Essential dragged in from another window: this window's copy of it takes the page */
+.tab.drop-copy, .pin.drop-copy { box-shadow: inset 0 0 0 1.5px var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+/* (and a tab dragged in from another window, away from this one's tabs) */
+.drag-card.torn, .drag-card.away { opacity: 0; scale: 0.7; }
 .drag-source { display: none !important; }
 .drag-slot {
   flex: none; border-radius: 8px; background: color-mix(in srgb, var(--accent) 13%, transparent);
@@ -1545,3 +1551,16 @@ body.htabs.sb-hidden #sb-hotzone { left: 0; right: 0; top: 0; bottom: auto; widt
 
 /* switching tab layouts (tablayout.js switchTabLayout): the bar slides out, then the new one in; no clicks meanwhile */
 body.tl-switching #sidebar { pointer-events: none; }
+
+/* a touchpad swipe on a page (swipe.js): the sign that comes in from that edge, filled in once letting go will act */
+.swipe-hint {
+  position: fixed; left: 0; top: 0; z-index: 80; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center;
+  pointer-events: none; color: var(--text); background: color-mix(in srgb, var(--surface) 92%, transparent);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+  box-shadow: inset 0 0 0 1px var(--glass-edge), 0 6px 20px rgba(0, 0, 0, 0.3);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.swipe-hint svg { transition: rotate 0.05s linear; }
+.swipe-hint.ready { background: var(--accent); color: #fff; }
+.swipe-hint.went { opacity: 0; scale: 1.25; transition: opacity 0.26s ease, scale 0.26s cubic-bezier(0.2, 0, 0, 1), background 0.15s ease; }
+.swipe-hint.gone { opacity: 0; scale: 0.5; transition: opacity 0.18s ease, scale 0.18s ease; }

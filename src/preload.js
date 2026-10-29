@@ -7,6 +7,13 @@ contextBridge.exposeInMainWorld('ultima', {
   saveSession: invoke('session:save'),
   newWindow: invoke('window:new'),
   closeWindow: invoke('window:close'),
+  tearBegin: invoke('tear:begin'),
+  tearOut: invoke('tear:out'),
+  tearCancel: invoke('tear:cancel'),
+  tearDrop: invoke('tear:drop'),
+  tearBack: invoke('tear:back'),
+  dockOver: invoke('dock:over'),
+  windowIsOpen: invoke('window:is-open'),
   toggleFullscreen: invoke('window:fullscreen'),
   quit: invoke('app:quit'),
   relaunch: invoke('app:relaunch'),
@@ -94,7 +101,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended'];
+    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

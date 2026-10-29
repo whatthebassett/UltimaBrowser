@@ -2,6 +2,11 @@
 // movement), the other tabs slide aside to open a gap where it will land, and on release it settles into the gap.
 // It can land among regular or pinned tabs, in Essentials, in a folder (in its gap, or on its header), or on the
 // bookmarks bar (which bookmarks it). Esc (rebindable) or dropping anywhere else sends it back.
+// A tab dragged out of the window, or onto the middle of the page, is torn off: the window it would become follows the
+// pointer (main/tearoff.js), and letting go opens it there. Over another Ultima window's tabs, it shows up there as a
+// card with its gap instead, and letting go moves it in (a torn-off tab can also go back from its menu). A pinned tab
+// or Essential is in every window's sidebar already: its page moves to that window's own copy, and the one here goes
+// back to its pinned link.
 // A folder drags the same way by its header: the whole folder is the card, and it lands among the regular or pinned
 // tabs (which pins or unpins it).
 const TD = { press: null, drag: null, dirty: false };
@@ -46,6 +51,7 @@ function startCardDrag(e) {
   const tab = p.folderId ? null : tabById(p.id);
   if ((!tab && !folderById(p.folderId)) || !document.contains(p.el)) return;
   const r = p.el.getBoundingClientRect();
+  const list = $('#tabs').getBoundingClientRect(); // before the drag opens drop spots around it (a torn-off tab lands first in it)
   const isPin = p.el.classList.contains('pin');
   const card = p.el.cloneNode(true);
   card.classList.add('drag-card');
@@ -62,11 +68,12 @@ function startCardDrag(e) {
   TD.drag = {
     id: p.id, folderId: p.folderId, tab, card, slot, source: p.el, home: { parent: slot.parentElement, next: p.el },
     left: r.left, top: r.top, offX: p.x - r.left, offY: p.y - r.top, x: e.clientX, y: e.clientY,
-    vx: 0, tilt: 0, t0: performance.now(), target: { kind: 'list' },
+    vx: 0, tilt: 0, t0: performance.now(), target: { kind: 'list' }, list,
   };
   document.body.classList.add('tab-dragging', 'card-dragging');
   $$('webview').forEach((w) => { w.style.pointerEvents = 'none'; }); // the page mustn't swallow the pointer
   try { document.body.setPointerCapture(p.pointerId); } catch { /* released already */ }
+  if (tab) beginTear(TD.drag);
   card.focus({ preventScroll: true }); // keys (Esc) come to Ultima, not the page
   // the click that ends this press must not open whatever is under the pointer (removed when the drag ends)
   TD.eatClick = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
@@ -86,7 +93,7 @@ function onCardMove(e) {
 function queueAim(d) {
   if (d.hitQueued) return;
   d.hitQueued = true;
-  requestAnimationFrame(() => { d.hitQueued = false; if (TD.drag === d) aimCard(); });
+  requestAnimationFrame(() => { d.hitQueued = false; if (TD.drag === d && !d.settling) aimCard(); });
 }
 
 // The card follows the pointer, lifting (a little bigger) as it starts and leaning into its movement.
@@ -105,6 +112,7 @@ function cardFrame(now) {
 
 // Near the top or bottom of the tab list (its ends, across the strip), the list scrolls.
 function autoScrollTabs(d) {
+  if (d.incoming && !d.over) return;
   const list = $('#tabs');
   const r = list.getBoundingClientRect();
   const edge = 36;
@@ -125,7 +133,18 @@ function aimCard() {
   const d = TD.drag;
   const at = document.elementFromPoint(d.x, d.y);
   clearCardMarks();
+  // dragged in from another window: only this window's tabs take it
+  if (d.incoming) {
+    const on = Boolean(at && dockArea()?.contains(at));
+    dockOver(d, on);
+    // one of the pinned tabs or Essentials: this window has it too, and that one lights up to take the page
+    if (d.copy) { d.target = { kind: on ? 'copy' : 'none' }; if (on) copyRow(d)?.classList.add('drop-copy'); return; }
+    if (!on) { d.target = { kind: 'none' }; moveSlot(null); return; }
+  }
   if (d.folderId) { aimFolderCard(d, at); return; }
+  const tear = Boolean(d.canTear) && wantsTear(d, at);
+  tearAim(d, tear);
+  if (tear) return;
   // the bookmarks bar: bookmark the tab at that spot
   if (at?.closest('#bookmark-bar') && !isInternal(d.tab.url)) {
     const t = bmDropTarget({ target: at, clientX: d.x });
@@ -168,7 +187,7 @@ function aimCard() {
   // over a split row: between its parts, left to right (rearranges the split, or joins it). Once the gap is in a
   // row it stays while the pointer is within the row and a gap's height around it: taking the gap out of the
   // list moves the row by that much, which would otherwise bounce the gap straight back out.
-  const inRow = d.slot.parentElement.classList.contains('tsplit') ? d.slot.parentElement : null;
+  const inRow = d.slot.parentElement?.classList.contains('tsplit') ? d.slot.parentElement : null;
   const band = (el) => {
     const r = span(restingRect(el));
     const extra = el === inRow ? 38 : 0;
@@ -189,6 +208,238 @@ function aimCard() {
   else if (next.classList.contains('tfolder-head')) moveSlot(next.parentElement.parentElement, next.parentElement); // just before the folder
   else if (next.classList.contains('tsplit')) moveSlot(next.parentElement, next); // a split view is one block
   else moveSlot(next.parentElement, next); // a tab inside a folder takes the gap into the folder
+}
+
+// ---------- tearing a tab off into a new window ----------
+// The window it would become is drawn by main (tearoff.js), on a see-through window over the screen. It gets ready
+// as the drag starts: a picture of the page, and this window's colors.
+function beginTear(d) {
+  d.canTear = true;
+  const t = d.tab;
+  const shown = t.webview && !t.webview.classList.contains('hidden') ? t.webview : t.id === B.activeId ? $('#viewport') : null;
+  const r = shown?.getBoundingClientRect();
+  // colors as they are now (resolved: the ghost has none of this window's variables)
+  const probe = h('<i style="position:fixed;visibility:hidden"></i>');
+  document.body.append(probe);
+  const color = (v) => { probe.style.color = `var(${v})`; return getComputedStyle(probe).color; };
+  const look = { surface: color('--surface'), text: color('--text'), accent: color('--accent'), edge: color('--border'),
+    font: getComputedStyle(d.card).fontFamily, still: document.body.classList.contains('reduce-motion') };
+  probe.remove();
+  // the space's colors, as the sidebar wears them (over the see-through window, which the ghost can't copy)
+  const sb = getComputedStyle($('#sidebar'));
+  look.chrome = [sb.backgroundImage, `linear-gradient(${sb.backgroundColor}, ${sb.backgroundColor})`].filter((v) => v && v !== 'none').join(', ');
+  window.ultima.tearBegin({
+    rect: r && { x: r.left, y: r.top, width: r.width, height: r.height }, title: tabLabel(t), favicon: t.favicon, url: t.url, private: Boolean(t.private || B.private),
+    key: isKept(t) ? t.key : undefined,
+    look, grip: { x: d.offX, y: d.offY }, ratio: innerHeight / innerWidth,
+    // where the page sits in the window, so the picture can grow into the same place in the new one
+    inset: (({ left, top, right, bottom }) => ({ l: left, t: top, r: innerWidth - right, b: innerHeight - bottom }))($('#viewport').getBoundingClientRect()),
+  }).catch(() => {});
+}
+
+// Outside the window, over the middle of the page, or anywhere on the page it's showing itself (it can't split with
+// itself) or for a tab that can't split at all (a pinned tab, an Essential, one of Ultima's own pages): a new window.
+// The sides of the page are still split view.
+function wantsTear(d, at) {
+  if (d.x < 0 || d.y < 0 || d.x >= innerWidth || d.y >= innerHeight) return true;
+  if (!at?.closest('#viewport') || at.closest('.glance-view')) return false;
+  const vp = $('#viewport').getBoundingClientRect();
+  const across = (d.x - vp.left) / vp.width;
+  return (across > 0.35 && across < 0.65) || !canSplit(d.tab) || (activeTab() === d.tab && !d.tab.splitId);
+}
+
+// The tab's card gives way to the window's picture (and comes back when the tab does).
+function tearAim(d, on) {
+  if (on) {
+    d.target = { kind: 'window' };
+    showSplitDrop(null);
+    moveSlot(d.home.parent, d.home.next);
+  }
+  if (Boolean(d.torn) === on) return;
+  d.torn = on;
+  d.card.classList.toggle('torn', on);
+  window.ultima.tearOut(on).catch(() => {});
+}
+
+// Let go: the tab moves to a window of its own, which opens under the pointer with the tab where you hold it, and
+// leaves this one (which closes if that was all it had open).
+async function tearOffCard() {
+  const d = TD.drag;
+  d.settling = true;
+  const tab = d.tab;
+  const { list } = d;
+  // where the tab will be in the new window: first in its list (the sidebar and the strip look the same there); a
+  // pinned tab or Essential where it is here (it's in that window's sidebar already)
+  const hold = isKept(tab) ? { x: d.left + d.offX, y: d.top + d.offY }
+    : tabsAcross() ? { x: list.left + d.offX, y: d.top + d.offY } : { x: d.left + d.offX, y: list.top + d.offY };
+  // and where it was here (the tab after it, and its folder), so it can be sent back there
+  const after = B.tabs.slice(B.tabs.indexOf(tab) + 1).find((t) => t.zone === 'normal' && t.spaceId === tab.spaceId);
+  const moved = await window.ultima.tearDrop({ ...movingTab(tab), hold, home: { before: after?.id, folderId: tab.folderId } }).catch(() => false);
+  d.tornOff = true;
+  finishCardDrag('torn');
+  if (moved && B.tabs.includes(tab)) detachTab(tab);
+}
+
+// What goes with a tab to another window (main/tearoff.js takes its page's history from `webContentsId`).
+function movingTab(tab) {
+  let webContentsId = null;
+  try { if (ready(tab)) webContentsId = tab.webview.getWebContentsId(); } catch { /* not attached yet */ }
+  return {
+    url: tab.url, title: tab.title, favicon: tab.favicon, name: tab.name, spaceId: tab.spaceId, zoom: tab.zoom, muted: tab.muted,
+    private: Boolean(tab.private || B.private), key: isKept(tab) ? tab.key : undefined, webContentsId,
+  };
+}
+
+// A torn-off tab back to the window it came from (its menu), where it was there.
+async function sendTabBack(tab) {
+  const moved = await window.ultima.tearBack({ ...movingTab(tab), home: tab.cameFrom }).catch(() => false);
+  if (moved && B.tabs.includes(tab)) detachTab(tab);
+}
+
+// ---------- a tab dragged in from another window ----------
+// The window it's dragged from keeps the pointer, so main says where it is over this one (tearoff.js). Over this
+// window's tabs it shows up as a card with its gap, as if it were dragged here; letting go moves it in at that spot.
+const dockArea = () => $(tabsAcross() ? '#hstrip' : '#sidebar');
+
+function initTabDock() {
+  window.ultima.on('dock', (m) => {
+    if (m.type === 'enter') dockEnter(m.tab || {});
+    else if (m.type === 'drop') dockDrop(m.tab || {});
+    else if (m.type === 'arrive') arriveTab(m.tab || {}, m.home || {});
+    else if (TD.drag?.incoming && m.type === 'move') dockMove(Number(m.x), Number(m.y));
+    else if (TD.drag?.incoming && m.type === 'leave') dockLeave();
+  });
+}
+
+function dockEnter(info) {
+  const old = TD.drag;
+  if (old && !old.gone) return; // a drag of this window's own, or one landing here
+  if (old) finishCardDrag('gone');
+  const copy = keptCopy(info.key);
+  const tab = { id: -1, url: String(info.url || NEWTAB), title: String(info.title || ''), favicon: String(info.favicon || ''), zone: 'normal', private: info.private || undefined };
+  document.body.classList.add('tab-dragging', 'card-dragging');
+  // the card is the size of the gap it will open (measured with the drop spots the drag opens), or a picture of this
+  // window's copy of it
+  const row = copy && $(`#sidebar [data-tab="${copy.id}"]`);
+  const slot = h('<div class="drag-slot tab-slot"></div>');
+  if (!row) $('#tabs').append(slot);
+  const size = (row || slot).getBoundingClientRect();
+  slot.remove();
+  const card = row ? row.cloneNode(true) : h(tabRow(tab));
+  for (const el of [card, ...card.querySelectorAll('*')]) for (const a of ['data-tab', 'title', 'data-tip', 'id']) el.removeAttribute(a);
+  card.classList.remove('unloaded', 'active'); // (its page is open, in the other window)
+  card.classList.add('drag-card', 'away'); // until it's over the tabs
+  card.tabIndex = -1;
+  Object.assign(card.style, { left: '0px', top: '0px', width: `${size.width}px`, height: `${size.height}px` });
+  document.body.append(card);
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+  TD.drag = {
+    incoming: true, id: null, tab, card, slot, source: document.createElement('i'), home: { parent: null, next: null },
+    left: 0, top: 0, offX: clamp(Number(info.grip?.x) || 0, 14, size.width - 14), offY: clamp(Number(info.grip?.y) || 0, 6, size.height - 6),
+    x: null, y: null, vx: 0, tilt: 0, t0: performance.now(), target: { kind: 'none' }, over: false, copy,
+  };
+  requestAnimationFrame(cardFrame);
+}
+
+function dockMove(x, y) {
+  const d = TD.drag;
+  if (d.settling || !Number.isFinite(x) || !Number.isFinite(y)) return;
+  d.vx = d.x === null ? 0 : d.vx * 0.6 + (x - d.x) * 0.4;
+  d.x = x;
+  d.y = y;
+  d.settle = 0;
+  // a hidden sidebar comes out at the window's left edge, as it does for the pointer
+  if (sidebarHidden() && !sidebarPeeking() && x <= 12) sidebarPeek(true);
+  queueAim(d);
+}
+
+// Over this window's tabs or not: the card comes in (lifting) or tucks away, and the window it's dragged from shows
+// or hides its own picture of it.
+function dockOver(d, on) {
+  if (d.over === on) return;
+  d.over = on;
+  if (on) d.t0 = performance.now();
+  d.card.classList.toggle('away', !on);
+  window.ultima.dockOver(on).catch(() => {});
+}
+
+// The pointer went on elsewhere, or the drag ended there: the card tucks away and its gap closes.
+function dockLeave() {
+  const d = TD.drag;
+  if (d.settling) return;
+  d.settling = true;
+  d.gone = true;
+  d.card.classList.add('away');
+  moveSlot(null);
+  clearCardMarks();
+  setTimeout(() => { if (TD.drag === d) finishCardDrag('gone'); }, 180);
+}
+
+// Let go over this window: the tab moves in at its gap (or at the end of the list, if it had none yet), and opens.
+function dockDrop(info) {
+  const d = TD.drag;
+  if (!d?.incoming || d.settling) { arriveTab(info, {}); return; } // nothing showing here any more: it comes in all the same
+  if (d.copy) { takeInto(d.copy, info); settleCard('copy'); return; }
+  if (d.target.kind !== 'folder' && !d.slot.closest('#essentials, #pinned-list, #tabs')) {
+    d.target = { kind: 'list' };
+    dockOver(d, true);
+    moveSlot($('#tabs'), null);
+  }
+  const tab = createTab({ url: info.url || NEWTAB, title: info.title, name: info.name, favicon: info.favicon, private: info.private, restore: info.restore });
+  Object.assign(tab, { zoom: Number(info.zoom) || 0, muted: Boolean(info.muted) });
+  d.id = tab.id;
+  d.tab = tab;
+  settleCard(d.target.kind === 'folder' ? 'folder' : 'slot');
+}
+
+// A tab sent back here from the window it was torn off into: where it was (before the tab that came after it, in its
+// folder and space), when that's still here; it opens.
+function arriveTab(info, home) {
+  const copy = keptCopy(info.key);
+  if (copy) { takeInto(copy, info); return; }
+  const space = spaceById(home.spaceId) ? home.spaceId : B.activeSpaceId;
+  const tab = createTab({
+    url: info.url || NEWTAB, title: info.title, name: info.name, favicon: info.favicon, private: info.private, restore: info.restore, spaceId: space, activate: false,
+  });
+  Object.assign(tab, { zoom: Number(info.zoom) || 0, muted: Boolean(info.muted) });
+  tab.folderId = folderById(home.folderId)?.zone === 'normal' ? home.folderId : undefined;
+  const next = tabById(Number(home.before));
+  if (next && next.zone === 'normal' && next.spaceId === space && next !== tab) moveTab(tab.id, B.tabs.indexOf(next), 'normal');
+  if (space !== B.activeSpaceId) switchSpace(space, tab);
+  else activateTab(tab.id);
+}
+
+// Pinned tabs and Essentials are in every window, by key: this window's copy of one.
+const keptCopy = (key) => (key ? B.tabs.find((t) => isKept(t) && t.key === key) || null : null);
+const copyRow = (d) => $(`#sidebar [data-tab="${d.copy.id}"]`);
+
+// A pinned tab or Essential moved here from another window: this window's copy of it takes the page, with its
+// history, and opens.
+function takeInto(tab, info) {
+  dropWebview(tab);
+  Object.assign(tab, {
+    url: info.url || tab.url, title: info.title || tab.title, favicon: info.favicon || tab.favicon, restore: info.restore,
+    zoom: Number(info.zoom) || 0, muted: Boolean(info.muted),
+  });
+  activateTab(tab.id);
+}
+
+// Takes a tab out of this window without closing it (it lives on in another). When it was all this window had of
+// its own (no other page open, no pinned tab or Essential loaded), the window goes too: it moved, in effect.
+function detachTab(tab) {
+  const blank = (t) => t.zone === 'normal' && t.url === NEWTAB;
+  if (B.tabs.every((t) => t === tab || blank(t) || (isKept(t) && !t.webview))) { window.ultima.closeWindow(); return; }
+  // a pinned tab or Essential stays (it's in every window's sidebar), back on its pinned link and unloaded
+  if (isKept(tab)) { unloadTab(tab); return; }
+  if (B.activeId === tab.id) {
+    const next = pickNextTab(tab);
+    if (next) activateTab(next.id);
+    else { B.activeId = null; createTab(); }
+  }
+  dropWebview(tab);
+  B.tabs = B.tabs.filter((t) => t !== tab);
+  renderTabs();
+  saveSession();
 }
 
 // Where an element sits in the layout, leaving out the slide it may be in the middle of (or the gap would flicker).
@@ -262,7 +513,7 @@ function markFolderTarget(d) {
 
 function clearCardMarks() {
   if (TD.drag?.target?.kind !== 'split') showSplitDrop(null);
-  $$('.drop-before, .drop-after, .drop-into, .drop-target, .drop-folder').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-target', 'drop-folder'));
+  $$('.drop-before, .drop-after, .drop-into, .drop-target, .drop-folder, .drop-copy').forEach((x) => x.classList.remove('drop-before', 'drop-after', 'drop-into', 'drop-target', 'drop-folder', 'drop-copy'));
 }
 
 // Moves the gap, sliding everything that shifts (FLIP: measure, move, then animate from the old spot).
@@ -275,7 +526,8 @@ function moveSlot(parent, next) {
   if ((d.settle || 0) < 3) { d.settle = (d.settle || 0) + 1; queueAim(d); }
   const els = $$('#sidebar .tab[data-tab]:not(.drag-source), #sidebar .pin[data-tab]:not(.drag-source), #sidebar .tfolder-head, #sidebar .drag-slot');
   const before = new Map(els.map((el) => [el, el.getBoundingClientRect()]));
-  if (next) parent.insertBefore(slot, next); else parent.append(slot);
+  if (!parent) slot.remove(); // (no gap: a tab dragged in from another window, away from the tabs)
+  else if (next) parent.insertBefore(slot, next); else parent.append(slot);
   layoutEssentials(); // the gap counts as a tile there
   for (const el of els) {
     const a = before.get(el);
@@ -293,6 +545,7 @@ function moveSlot(parent, next) {
 
 function dropCard() {
   const d = TD.drag;
+  if (d.target.kind === 'window' && d.torn) { tearOffCard(); return; }
   if (d.target.kind === 'list' && d.slot.closest('#essentials, #pinned-list, #tabs')) settleCard('slot');
   else if (d.target.kind === 'folder' || d.target.kind === 'bar' || d.target.kind === 'split') settleCard(d.target.kind);
   else settleCard('back');
@@ -303,8 +556,11 @@ function settleCard(how) {
   const d = TD.drag;
   if (!d || d.settling) return;
   d.settling = true;
+  // not torn off after all: the window's picture tucks away, and the tab's card comes back from wherever it is
+  if (d.canTear) { window.ultima.tearCancel().catch(() => {}); d.card.classList.remove('torn'); }
   if (how === 'back') moveSlot(d.home.parent, d.home.next);
-  const where = how === 'folder' ? $(`[data-folder-head="${d.target.id}"]`) : how === 'bar' ? $('#bookmark-bar') : how === 'split' ? $('#viewport .split-drop') : d.slot;
+  const where = how === 'folder' ? $(`[data-folder-head="${d.target.id}"]`) : how === 'bar' ? $('#bookmark-bar') : how === 'split' ? $('#viewport .split-drop')
+    : how === 'copy' ? copyRow(d) || $('#sidebar') : d.slot;
   clearCardMarks();
   const r = where.getBoundingClientRect();
   const fits = how === 'slot' || how === 'back' ? Math.abs(r.width - d.card.offsetWidth) < 4 : false;
@@ -348,6 +604,7 @@ function finishCardDrag(how) {
   d.source.classList.remove('drag-source');
   layoutEssentials();
   document.body.classList.remove('tab-dragging', 'card-dragging');
+  if (d.incoming) sidebarLeave(500);
   $$('webview').forEach((w) => { w.style.pointerEvents = ''; });
   $$('#sidebar [style*="transform"]').forEach((el) => { el.style.transform = ''; el.style.transition = ''; });
   TD.drag = null;

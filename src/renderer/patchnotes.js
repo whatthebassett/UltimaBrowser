@@ -3,6 +3,18 @@
 // Each item is [what, one short plain sentence on it]; sections without items are left out.
 const PATCH_NOTES = [
   {
+    version: '0.2.2',
+    date: '2026-10-29',
+    new: [
+      ['Tear off tabs', 'Drag a tab out of the window to give it a window of its own, or onto another window’s tabs to move it there.'],
+      ['Swipe to go back', 'Swipe sideways with two fingers on a touchpad to go back or forward.'],
+      ['Pull to reload', 'Swipe down past the top of a page with two fingers to reload it.'],
+    ],
+    fixed: [
+      ['Closing the window with Ctrl+W', 'Ctrl+W on your last New Tab closes the window again, even with other spaces open.'],
+    ],
+  },
+  {
     version: '0.2.1',
     date: '2026-10-28',
     new: [
