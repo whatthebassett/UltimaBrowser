@@ -191,19 +191,20 @@ async function updatePalette() {
     .slice(0, commandsOnly ? 40 : q ? 5 : 4);
   for (const { c } of cmds) items.push({ group: 'Commands', kind: 'cmd', cmd: c.id, icon: c.icon, title: c.title, keyId: c.keyId || c.id });
 
-  if (q && !commandsOnly) {
-    const res = await window.ultima.search(q);
-    if (seq !== P.seq) return; // a newer keystroke already rendered
-    const open = new Set(B.tabs.map((t) => t.url));
-    res.bookmarks = res.bookmarks.filter((b) => !open.has(b.url));
-    res.history = res.history.filter((x) => !open.has(x.url));
-    for (const b of res.bookmarks) items.push({ group: 'Waypoints', kind: 'url', url: b.url, title: b.title, sub: b.url, fav: favHtml('', b.url, b.title), hint: icon('star', 13) });
-    for (const x of res.history) items.push({ group: 'History', kind: 'url', url: x.url, title: x.title || x.url, sub: x.url, fav: favHtml('', x.url, x.title) });
-  }
-
+  // what's known at once (the address or search, tabs, commands) is shown now, so Enter right after typing acts on
+  // what you typed; Waypoints and history join it when they come
   P.items = items;
   P.sel = 0;
   renderPalette(q);
+  if (!q || commandsOnly) return;
+  const res = await window.ultima.search(q);
+  if (seq !== P.seq) return; // a newer keystroke already rendered
+  const open = new Set(B.tabs.map((t) => t.url));
+  res.bookmarks = res.bookmarks.filter((b) => !open.has(b.url));
+  res.history = res.history.filter((x) => !open.has(x.url));
+  for (const b of res.bookmarks) items.push({ group: 'Waypoints', kind: 'url', url: b.url, title: b.title, sub: b.url, fav: favHtml('', b.url, b.title), hint: icon('star', 13) });
+  for (const x of res.history) items.push({ group: 'History', kind: 'url', url: x.url, title: x.title || x.url, sub: x.url, fav: favHtml('', x.url, x.title) });
+  if (res.bookmarks.length || res.history.length) renderPalette(q); // (the selection stays where you moved it)
 }
 
 function renderPalette(q) {

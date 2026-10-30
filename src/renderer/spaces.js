@@ -93,6 +93,17 @@ function createSpace(switchTo = true) {
 function startRenameSpace() {
   const space = activeSpace();
   const label = $('.space-name');
+  // with horizontal tabs (and the compact sidebar) the space's name isn't on screen to edit in place: a dialog asks
+  if (!label || !label.getClientRects().length) {
+    editDialog({ title: 'Rename space', fields: [{ id: 'name', label: 'Name', value: space.name }], ok: 'Rename' }).then((v) => {
+      const name = v?.name?.trim().slice(0, 28);
+      if (!name) return;
+      space.name = name;
+      renderSpaces();
+      saveSession();
+    });
+    return;
+  }
   const input = h(`<input class="space-name-input" value="${esc(space.name)}" maxlength="28" spellcheck="false">`);
   label.replaceWith(input);
   input.focus();
@@ -115,8 +126,9 @@ function startRenameSpace() {
 function setSpaceSeparate(space, separate) {
   if (Boolean(space.separate) === separate) return;
   space.separate = separate;
-  // A webview can't change partition once attached, so reload this space's tabs into the new one.
-  for (const t of [...ownTabs(space.id), ...ownEssentials(space.id)]) dropWebview(t);
+  // A webview can't change partition once attached, so reload this space's tabs into the new one (only those whose
+  // partition changes: a private tab's stays the private one, and dropping it could end private browsing)
+  for (const t of [...ownTabs(space.id), ...ownEssentials(space.id)]) if (t.webview && t.webview.getAttribute('partition') !== tabPartition(t)) dropWebview(t);
   const cur = activeTab();
   if (cur?.spaceId === space.id) activateTab(cur.id);
   renderTabs();

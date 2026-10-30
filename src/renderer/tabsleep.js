@@ -14,7 +14,8 @@ function sleepTabsTick() {
   const shown = cur?.splitId ? splitTabs(cur.splitId) : cur ? [cur] : [];
   let slept = false;
   for (const t of B.tabs) {
-    if (!t.webview) { t.seenAt = undefined; continue; }
+    // (never a private tab: private browsing ends, and its sign-ins with it, once no private page is open)
+    if (!t.webview || t.private) { t.seenAt = undefined; continue; }
     // (sound, a glance or a drag keeps it awake, and its clock starts again once they end)
     if (!t.seenAt || shown.includes(t) || t.audible || GL.open?.source === t || TD.drag?.tab === t) { t.seenAt = now; continue; }
     if (!on || now - t.seenAt < after) continue; // (kept up to date while it's off, so turning it on is fair)

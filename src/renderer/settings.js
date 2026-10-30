@@ -588,6 +588,8 @@ main.addEventListener('change', (e) => {
       // shows or hides "Reset page colors" and "Reset sidebar style"
       if ((k === 'colorFilter' || k === 'sidebarFont' || k === 'sidebarTextSize') && activeTab() === tab) rerender();
     }
+    // the contrast and brightness sliders, once let go, show or hide "Reset page colors" too
+    if ((k === 'pageContrast' || k === 'pageBrightness') && e.target.type === 'range' && activeTab() === tab) rerender();
   });
 
   show(current);

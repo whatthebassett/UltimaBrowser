@@ -80,8 +80,8 @@ function groupOf(url) {
   const h = u.hostname;
   const app = WORK_APPS.find((a) => a.match(h, u.pathname, u.search));
   if (app) {
-    if (B.settings.autoGroupWork === 'suite' && app.suite) return { key: `suite:${app.suite}`, name: SUITES[app.suite][0], color: SUITES[app.suite][1] };
-    return { key: `app:${app.id}`, name: app.name, color: app.color };
+    if (B.settings.autoGroupWork === 'suite' && app.suite) return { key: `suite:${app.suite}`, name: SUITES[app.suite][0], color: SUITES[app.suite][1], work: true };
+    return { key: `app:${app.id}`, name: app.name, color: app.color, work: true, app: app.id };
   }
   if (B.settings.autoGroupSites === false || u.hostname === 'localhost') return null;
   const site = registrableSite(u.hostname);
@@ -91,9 +91,82 @@ function groupOf(url) {
 
 const groupable = (t) => t.zone === 'normal' && !t.private && !t.splitId && !isInternal(t.url);
 
-// A site's group is named for what its tabs' titles share ("Video – YouTube", "Other – YouTube" → YouTube), else its
-// domain ("nytimes" → Nytimes)
+// ---------- what a work app's tabs are about ----------
+// A work app's group is named for what its tabs share: the Jira project of its tickets ("WEB"), the repository of its
+// GitHub pages, the Confluence space its pages are in, the words its documents' titles share ("Q4 Roadmap", "Q4 Budget"
+// → Q4). With nothing in common, it's the app's name.
+// Words in titles that say which app it is (left out), and words too plain to name a group by
+const APP_WORDS = new Set(`google docs sheets slides forms drive gmail calendar meet chat microsoft word excel powerpoint
+  outlook teams onedrive sharepoint office 365 online web confluence jira atlassian trello bitbucket slack notion figma
+  github gitlab linear asana clickup miro airtable zoom salesforce hubspot zendesk dropbox loom monday.com`.split(/\s+/));
+const PLAIN_WORDS = new Set(`the a an of for and or to in on with at by from my your our is are be untitled document
+  spreadsheet presentation form copy new draft file files page pages home dashboard overview edit view issue issues
+  ticket tickets board backlog summary search results inbox mail settings`.split(/\s+/));
+// what a page's address says it's part of: a Jira ticket's project, a code site's repository
+const repoOf = (u) => { const [owner, repo] = u.pathname.split('/').filter(Boolean); return owner && repo && !owner.startsWith('-') ? repo : null; };
+const URL_CONTEXT = {
+  jira: (u) => (/\/browse\/([A-Z][A-Z0-9_]+)-\d+/.exec(u.pathname) || /[?&]selectedIssue=([A-Z][A-Z0-9_]+)-\d+/.exec(u.search)
+    || /\/projects\/([A-Za-z][A-Za-z0-9_]+)/.exec(u.pathname))?.[1]?.toUpperCase() || null,
+  github: repoOf,
+  gitlab: repoOf,
+  bitbucket: repoOf,
+  confluence: (u) => /\/wiki\/spaces\/([^/]+)/.exec(u.pathname)?.[1] || null,
+};
+
+// A title's parts ("Roadmap – Engineering – Confluence" → Roadmap, Engineering), without the app's own, a ticket's key
+// or a file's extension; none while the page hasn't said its title yet (its address stands in for it)
+function titleParts(title) {
+  if (!title || /^[a-z][a-z0-9+.-]*:\/\//i.test(title)) return [];
+  return title.replace(/\.(docx?|xlsx?|pptx?|pdf|csv|txt|md)\b/gi, '').split(/\s+[-–—|·•]\s+/)
+    .map((s) => s.replace(/^\[?[A-Z][A-Z0-9_]+-\d+\]?:?\s*/, '').trim())
+    .filter((s) => s && !s.split(/\s+/).every((w) => APP_WORDS.has(w.toLowerCase())));
+}
+const meaningful = (words) => words.some((w) => (w.length >= 2 || /\d/.test(w)) && !PLAIN_WORDS.has(w.toLowerCase()));
+
+// What every title is about, or null
+function sharedTopic(titles) {
+  const lists = titles.map(titleParts);
+  if (lists.length < 2 || lists.some((p) => !p.length)) return null;
+  // a part every title has (a Confluence space, a project), the most general one: titles go from the page to its place
+  for (const part of [...lists[0]].reverse()) {
+    const lc = part.toLowerCase();
+    if (part.length <= 40 && meaningful(part.split(/\s+/)) && lists.every((p) => p.some((x) => x.toLowerCase() === lc))) return part;
+  }
+  // else the longest run of words every title has (at most four, without plain words at its ends)
+  const words = lists.map((p) => p.join(' ').split(/\s+/));
+  const lower = words.map((w) => w.map((x) => x.toLowerCase().replace(/[,:;]$/, '')));
+  const has = (ws, run) => ws.some((_, i) => run.every((r, j) => ws[i + j] === r));
+  let best = null;
+  for (let len = Math.min(4, words[0].length); len >= 1 && !best; len -= 1) {
+    for (let i = 0; i + len <= words[0].length && !best; i += 1) {
+      const run = lower[0].slice(i, i + len);
+      if (lower.every((ws) => has(ws, run))) {
+        let picked = words[0].slice(i, i + len).map((w) => w.replace(/[,:;]$/, ''));
+        while (picked.length && PLAIN_WORDS.has(picked[0].toLowerCase())) picked = picked.slice(1);
+        while (picked.length && PLAIN_WORDS.has(picked[picked.length - 1].toLowerCase())) picked = picked.slice(0, -1);
+        if (picked.length && meaningful(picked)) best = picked.join(' ');
+      }
+    }
+  }
+  return best;
+}
+
+function workTopic(g, tabs) {
+  const ofUrl = URL_CONTEXT[g.app];
+  if (ofUrl) {
+    const found = tabs.map((t) => { try { return ofUrl(new URL(t.url)); } catch { return null; } });
+    if (found[0] && found.every((x) => x === found[0]) && g.app !== 'confluence') return found[0];
+    const topic = sharedTopic(tabs.map((t) => t.title));
+    if (topic) return topic;
+    return found[0] && found.every((x) => x === found[0]) ? found[0] : null; // a Confluence space's key, when its name isn't in the titles
+  }
+  return sharedTopic(tabs.map((t) => t.title));
+}
+
+// A work app's group is named for what its tabs are about (above). A site's group is named for what its tabs' titles
+// share ("Video – YouTube", "Other – YouTube" → YouTube), else its domain ("nytimes" → Nytimes)
 function groupName(g, tabs) {
+  if (g.work) return workTopic(g, tabs) || g.name;
   if (g.name) return g.name;
   const parts = tabs.map((t) => (t.title || '').split(/\s+[-–—|·•:]\s+/).map((s) => s.trim()).filter(Boolean)).filter((p) => p.length > 1);
   if (parts.length >= 2) {

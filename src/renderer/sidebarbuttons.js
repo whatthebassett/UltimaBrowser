@@ -33,16 +33,17 @@ const SIDEBAR_BUTTONS = {
   devtools: { icon: 'code', cmd: 'devtools', label: 'Developer tools' },
   'clear-data': { icon: 'eraser', cmd: 'clear-data', label: 'Clear browsing data' },
   shortcuts: { icon: 'keyboard', cmd: 'open-shortcuts', label: 'Keyboard shortcuts' },
+  collapse: { icon: 'sidebar', cmd: 'toggle-sidebar', label: 'Compact sidebar' },
   'hide-sidebar': { icon: 'sidebar', cmd: 'toggle-sidebar-hidden', label: 'Hide sidebar' },
   'tab-layout': { icon: 'tab', cmd: 'toggle-tab-layout', label: 'Vertical / horizontal tabs' },
   settings: { icon: 'settings', cmd: 'open-settings', label: 'Settings' },
 };
-const SIDEBAR_DEFAULT = { head: ['back', 'forward', 'reload'], foot: ['palette', 'bookmarks', 'history', 'tab-history', 'downloads', 'import', 'settings'] };
+const SIDEBAR_DEFAULT = { head: ['back', 'forward', 'reload'], foot: ['palette', 'bookmarks', 'history', 'tab-history', 'downloads', 'import', 'settings', 'space', 'collapse'] };
 const SIDEBAR_DIVIDER = 'divider'; // an upright line between buttons
 const SIDEBAR_SPACE = 'space'; // an empty cell, a button wide
 const SIDEBAR_REPEATS = new Set([SIDEBAR_DIVIDER, SIDEBAR_SPACE]); // these two go in as often as you like
 // buttons that were in the page before this was customizable keep their ids (other code looks them up)
-const SIDEBAR_BUILT_IN = new Set(['back', 'forward', 'reload', 'palette', 'bookmarks', 'history', 'downloads', 'import', 'settings']);
+const SIDEBAR_BUILT_IN = new Set(['back', 'forward', 'reload', 'palette', 'bookmarks', 'history', 'downloads', 'import', 'settings', 'collapse']);
 const sidebarButtonId = (key) => (SIDEBAR_BUILT_IN.has(key) ? `btn-${key}` : `sbb-${key}`);
 // the two grids the buttons sit in: beside the logo, and at the foot of the sidebar (with horizontal tabs, both in the
 // toolbar: tablayout.js)
@@ -54,7 +55,10 @@ function sidebarLayout() {
   const seen = new Set();
   const clean = (list) => (Array.isArray(list) ? list : []).filter((k) => SIDEBAR_REPEATS.has(k) || (SIDEBAR_BUTTONS[k] && !seen.has(k) && seen.add(k)));
   if (!saved || typeof saved !== 'object') return { head: [...SIDEBAR_DEFAULT.head], foot: [...SIDEBAR_DEFAULT.foot] };
-  return { head: clean(saved.head), foot: clean(saved.foot) };
+  const layout = { head: clean(saved.head), foot: clean(saved.foot) };
+  // layouts saved before the compact sidebar button could be moved had it fixed at the bottom right: it stays there
+  if (saved.version !== 2 && !seen.has('collapse')) layout.foot.push(SIDEBAR_SPACE, 'collapse');
+  return layout;
 }
 
 // Every button exists once; the ones not in use wait in a hidden pool, so code that updates them always finds them.
@@ -100,7 +104,7 @@ function renderSidebarButtons() {
 }
 
 function setSidebarLayout(layout) {
-  applySettings({ sidebarButtons: { head: [...layout.head], foot: [...layout.foot] } });
+  applySettings({ sidebarButtons: { head: [...layout.head], foot: [...layout.foot], version: 2 } });
   renderSidebarButtons();
   updateChrome();
   renderSidebarSheet(); // the buttons left to add (sidebaredit.js)

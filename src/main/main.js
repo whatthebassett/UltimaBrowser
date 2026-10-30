@@ -3,6 +3,7 @@ const os = require('os');
 const fs = require('fs');
 const {
   app, BrowserWindow, ipcMain, session, Menu, clipboard, dialog, shell, webContents, webFrameMain, nativeTheme, net, screen,
+  desktopCapturer, WebContentsView,
 } = require('electron');
 const { JsonStore } = require('./store');
 const { BrowserData, hostOf } = require('./data');
@@ -194,6 +195,8 @@ function hookShortcuts(wc) {
       return;
     }
     const cmd = shortcutFor(input, wc);
+    const popup = cmd && (popups.get(id) || popupOfUi(wc));
+    if (popup) { if (popupCommand(popup, cmd)) event.preventDefault(); return; }
     if (cmd) { event.preventDefault(); sendTo(windowOf(wc), 'command', cmd); return; }
     const fromExtension = extensionShortcutFor(input, wc); // an extension's shortcut (chrome.commands)
     if (fromExtension) { event.preventDefault(); runExtensionCommand(fromExtension, wc); }
@@ -225,7 +228,8 @@ function pageContextMenu(wc, p) {
   };
   const sep = { type: 'separator' };
   const t = [];
-  const send = (channel, payload) => sendTo(windowOf(wc), channel, payload); // the window the page is in
+  const popup = popups.get(wc.id); // a site's pop-up window draws the menu itself; its links open in its Ultima window
+  const send = (channel, payload) => sendTo(channel === 'page-menu' ? askWindowOf(wc) : homeWindowOf(wc), channel, payload);
   const priv = isPrivate(wc); // links from a private page open privately
   const openTab = (url, background = true) => send('open-url', { url, background, private: priv });
   const short = (s, n = 32) => (s.length > n ? `${s.slice(0, n)}…` : s);
@@ -240,7 +244,7 @@ function pageContextMenu(wc, p) {
       item('Back', () => nav.goBack(), { icon: 'back', enabled: nav.canGoBack(), shortcut: 'back' }),
       item('Forward', () => nav.goForward(), { icon: 'forward', enabled: nav.canGoForward(), shortcut: 'forward' }),
       item('Reload', () => wc.reload(), { icon: 'reload', shortcut: 'reload' }),
-      item(saved ? 'Edit Waypoint' : 'Add this page to Waypoints', () => send('command', 'bookmark'), { icon: 'star', on: saved, shortcut: 'bookmark' }),
+      ...(popup ? [] : [item(saved ? 'Edit Waypoint' : 'Add this page to Waypoints', () => send('command', 'bookmark'), { icon: 'star', on: saved, shortcut: 'bookmark' })]),
     ],
   });
 
@@ -304,7 +308,7 @@ function pageContextMenu(wc, p) {
         submenu: logins.map((s) => item(s.username || '(no username)', () => passwords.fillLogin(wc, s.id, frame), { note: s.name })),
       });
     }
-    if (p.formControlType === 'input-password' && /^https?:/i.test(frame.url)) {
+    if (p.formControlType === 'input-password' && /^https?:/i.test(frame.url) && !popup) {
       t.push(item('Suggest strong password…', () => send('pw-generate', { webContentsId: wc.id, frame: [frame.processId, frame.routingId], x: p.x, y: p.y }), { icon: 'sparkle' }));
     }
     if (logins.length || p.formControlType === 'input-password') t.push(sep);
@@ -324,8 +328,10 @@ function pageContextMenu(wc, p) {
   if (!p.linkURL && !p.isEditable && !p.selectionText.trim() && p.mediaType === 'none') {
     t.push(
       item('Copy page link', () => clipboard.writeText(wc.getURL()), { icon: 'link', shortcut: 'copy-url' }),
-      item('Find in page…', () => send('command', 'find'), { icon: 'find', shortcut: 'find' }),
-      item('Print…', () => send('command', 'print'), { icon: 'print', shortcut: 'print' }),
+      ...(popup ? [] : [
+        item('Find in page…', () => send('command', 'find'), { icon: 'find', shortcut: 'find' }),
+        item('Print…', () => send('command', 'print'), { icon: 'print', shortcut: 'print' }),
+      ]),
       sep,
     );
   }
@@ -375,10 +381,71 @@ function setSitePermissions(origin, values) {
   settings.save();
 }
 
+// Screen sharing (getDisplayMedia): you choose a tab, a window or a screen in Ultima's picker, in the page's window.
+// The picker is the permission question (so Cancel refuses as "no" does); what you chose is kept for the page's
+// request, which comes right after. Sound comes along from a tab, or from a whole screen on Windows.
+const chosenShares = new Map(); // webContents id → { id, audio, source }
+async function pickScreenShare(wc, origin) {
+  const w = windowOf(wc);
+  if (!w) return null;
+  // the list comes quickly without previews; they take a few seconds and are sent once ready
+  const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
+  const jpeg = (img) => (img && !img.isEmpty() ? `data:image/jpeg;base64,${img.toJPEG(75).toString('base64')}` : '');
+  desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 }, fetchWindowIcons: true }).then((full) => {
+    sendTo(w, 'share-thumbs', Object.fromEntries(full.map((x) => [x.id, { thumb: jpeg(x.thumbnail), icon: jpeg(x.appIcon) }])));
+  }, () => {});
+  const tabs = webContents.getAllWebContents()
+    .filter((t) => !t.isDestroyed() && t.getType() === 'webview' && windowOf(t) === w && /^https?:/.test(t.getURL()) && !isExtensionPopup(t) && !glancePages.has(t.id));
+  const choices = [
+    ...tabs.map((t) => ({ id: `tab:${t.id}`, kind: 'tab', name: t.getTitle() || t.getURL(), icon: pageFavicons.get(t.id) || '' })),
+    ...sources.map((x) => ({ id: x.id, kind: x.id.startsWith('screen:') ? 'screen' : 'window', name: x.name })),
+  ];
+  const answer = await askUi('screen-share', { site: hostOf(origin) || origin, screenAudio: process.platform === 'win32', choices }, w);
+  return answer?.id ? { ...answer, source: sources.find((x) => x.id === answer.id) } : null;
+}
+
+// The streams for what you chose, or null
+function sharedStreams(request) {
+  const wc = request.frame && webContents.fromFrame(request.frame);
+  const chosen = wc && chosenShares.get(wc.id);
+  if (!chosen || !request.videoRequested) return null;
+  chosenShares.delete(wc.id);
+  const sound = chosen.audio && request.audioRequested;
+  if (chosen.id.startsWith('tab:')) {
+    const tab = webContents.fromId(Number(chosen.id.slice(4)));
+    return tab && !tab.isDestroyed() ? { video: tab.mainFrame, ...(sound && { audio: tab.mainFrame }) } : null;
+  }
+  if (!chosen.source) return null;
+  return { video: chosen.source, ...(sound && process.platform === 'win32' && chosen.id.startsWith('screen:') && { audio: 'loopback' }) };
+}
+
 // Blocked JavaScript or images: a Content-Security-Policy added to the site's pages (and frames from it)
 function siteContentPolicy(origin) {
   return [siteAllows(origin, 'javascript') === false && "script-src 'none'", siteAllows(origin, 'images') === false && "img-src 'none'"].filter(Boolean).join('; ');
 }
+// A page its service worker makes never reaches webRequest, so it would skip that policy: such sites get no service
+// workers (their scripts aren't fetched, and the ones already there go when the setting changes).
+async function dropServiceWorkers(origin) {
+  for (const ses of siteSessions()) await ses.clearStorageData({ origin, storages: ['serviceworkers'] }).catch(() => {});
+}
+// a page going to such a site: its service workers go (they'd serve it its pages around the policy)
+function dropBlockedWorkers(wc) {
+  wc.on('did-start-navigation', (d) => {
+    if (!d.isMainFrame || d.isSameDocument) return;
+    const origin = originOf(d.url);
+    if (/^https?:/.test(origin) && siteContentPolicy(origin)) wc.session.clearStorageData({ origin, storages: ['serviceworkers'] }).catch(() => {});
+  });
+}
+
+// a click or key press in any of a page's frames (activation-preload.js), by the page's webContents id
+const framePressedAt = new Map();
+ipcMain.on('ultima:user-activation', (e) => { framePressedAt.set(e.sender.id, Date.now()); });
+// input that lets a page open a pop-up (Chrome's "user activation")
+const ACTIVATING_INPUT = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'touchStart', 'touchEnd', 'gestureTap']);
+
+// Whether the site itself is set to Allow (not just allowed by the default)
+const siteAllowsOutright = (ses, origin, key) => (isPrivateSession(ses) && privatePermissions[origin]?.[key] !== undefined
+  ? privatePermissions[origin][key] : SITE_PERMS.storedFor(settings.data.permissions[origin], key)) === true;
 
 // Cookies a site set or may read (its own domain, its subdomains and the parent domains it shares cookies with)
 const cookieForHost = (cookie, host) => {
@@ -783,6 +850,46 @@ async function sendToExtension(extId, name, args, { wake = false } = {}) {
   }
 }
 
+// ---- web pages talking to an extension (externally_connectable) ----
+// A site an extension lists (claude.ai, for Claude's) may send it messages with chrome.runtime.sendMessage(its id, …):
+// they reach the extension's runtime.onMessageExternal, waking its background, and its answer goes back to the page.
+// Electron has none of it, so page-compat.js gives such pages chrome.runtime and main.js carries the messages.
+const externalReplies = new Map(); // token → the page's answer
+let externalSeq = 0;
+const NO_RECEIVER = 'Could not establish connection. Receiving end does not exist.';
+// the extensions that let this page talk to them (none in private browsing, which has no extensions)
+function externallyConnectable(ses, url) {
+  if (!/^https?:\/\//i.test(url) || isPrivateSession(ses)) return [];
+  let all = [];
+  try { all = ses.extensions.getAllExtensions(); } catch { return []; }
+  return all.filter((x) => (x.manifest?.externally_connectable?.matches || []).some((p) => matchesPattern(p, url)));
+}
+// the ids a page may use for one: its Chrome Web Store id, and the one Electron gave it if that differs
+const externalIds = (x) => [...new Set([x.id, extensions?.list.find((en) => en.runtimeId === x.id)?.id].filter(Boolean))];
+// (asked as a page starts, when its frame doesn't know its address yet: the page says it. It only decides whether the
+// page gets chrome.runtime; each message is checked against the frame's real address.)
+ipcMain.on('ultima:ext-external-ids', (e, pageUrl) => {
+  try { e.returnValue = externallyConnectable(e.sender.session, e.senderFrame?.url || String(pageUrl || '')).flatMap(externalIds); } catch { e.returnValue = []; }
+});
+ipcMain.handle('ultima:ext-external-message', (e, id, message) => {
+  const url = e.senderFrame?.url || '';
+  const ext = externallyConnectable(e.sender.session, url).find((x) => externalIds(x).includes(id));
+  if (!ext) throw new Error(NO_RECEIVER);
+  // who's asking, as Chrome says it: a page in a tab gets its tab; a frame in an extension's page (a side panel) doesn't
+  const inTab = e.sender.getType() === 'webview' && /^https?:/i.test(e.sender.getURL()) && windowOf(e.sender);
+  const sender = { url, origin: originOf(url), frameId: e.senderFrame?.parent ? e.senderFrame.routingId : 0, ...(inTab && { tab: tabDetails(e.sender) }) };
+  externalSeq += 1;
+  const token = externalSeq;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { externalReplies.delete(token); reject(new Error(NO_RECEIVER)); }, 60000);
+    externalReplies.set(token, (response) => { clearTimeout(timer); externalReplies.delete(token); resolve(response); });
+    sendToExtension(ext.id, 'runtime.messageExternal', [token, message, sender], { wake: true });
+  });
+});
+// an extension's answer, from its background or one of its pages (the first one counts)
+const externalReply = (token, response) => externalReplies.get(Number(token))?.(response);
+ipcMain.on('ultima:ext-external-reply', (_e, token, response) => externalReply(token, response));
+
 // chrome.debugger. Electron has no such API, but every page has a DevTools protocol client (webContents.debugger),
 // which is what Chrome's API drives. Extensions that ask for "debugger" (Claude's, which clicks and types for you)
 // may attach to web pages in tabs; not to Ultima's own pages, other extensions' pages or private tabs, as in Chrome.
@@ -953,7 +1060,7 @@ function extensionSidePanel(ses, extId, op, args) {
   if (!asksFor(manifest, 'sidePanel')) throw new Error('This extension did not ask for the "sidePanel" permission.');
   const opts = panelOptions(extId, manifest);
   const entry = entryFor(extId);
-  const tabOf = (o) => (Number.isInteger(o?.tabId) ? o.tabId : null);
+  const tabOf = (o) => (Number.isInteger(o?.tabId) && o.tabId >= 0 ? o.tabId : null); // (-1, no tab: the window's panel)
   if (op === 'setOptions') {
     const o = args[0] || {};
     const tabId = tabOf(o);
@@ -1010,7 +1117,13 @@ function extensionActionClicked(id, tabWcId) {
   if (entry.sidePanelOnClick && showSidePanel(entry.runtimeId)) return 'panel';
   if (!extensions.info(entry).hasWorker) return 'none';
   const wc = Number.isInteger(tabWcId) ? webContents.fromId(tabWcId) : null;
-  const tab = wc && !wc.isDestroyed() && !isPrivate(wc) ? tabDetails(wc) : undefined;
+  // Chrome always passes the tab (extensions read its id at once: Claude's crashed without one). On one of Ultima's own
+  // pages, a sleeping tab or a private one, there's no page to name: a stand-in with Chrome's "no tab" id, -1, which
+  // side panels take as the window's
+  const tab = wc && !wc.isDestroyed() && !isPrivate(wc) ? tabDetails(wc) : {
+    id: -1, windowId: 0, index: 0, url: '', title: '', status: 'complete', active: true, highlighted: true, selected: true,
+    pinned: false, audible: false, mutedInfo: { muted: false }, discarded: false, autoDiscardable: true, incognito: false, groupId: -1,
+  };
   sendToExtension(entry.runtimeId, 'action.onClicked', [tab], { wake: true });
   return 'clicked';
 }
@@ -1528,6 +1641,9 @@ function setupSession(ses) {
   applyGpcPreload(ses);
   // Global Privacy Control, and no cookies sent to other sites than the page's while third-party cookies are blocked
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    // no service worker for a site with JavaScript or images blocked (see dropServiceWorkers)
+    const worker = Object.entries(details.requestHeaders).some(([k, v]) => k.toLowerCase() === 'service-worker' && v === 'script');
+    if (worker && siteContentPolicy(originOf(details.url))) return callback({ cancel: true });
     const gpc = settings.data.globalPrivacyControl;
     const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
     if (!gpc && !noCookies) return callback({});
@@ -1554,6 +1670,10 @@ function setupSession(ses) {
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-compat', filePath: path.join(__dirname, '..', 'page-compat.js') });
   // pages' and extensions' alert / confirm / prompt in Ultima's own dialog (see dialog-preload.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-dialogs', filePath: path.join(__dirname, '..', 'dialog-preload.js') });
+  // permissions you haven't decided on read as "prompt", not "denied" (see permission-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-permission-states', filePath: path.join(__dirname, '..', 'permission-preload.js') });
+  // a click in any frame lets its page open a pop-up (see activation-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-activation', filePath: path.join(__dirname, '..', 'activation-preload.js') });
   ses.serviceWorkers.on('console-message', (_e, d) => {
     const extId = extIdOf(d.sourceUrl || '');
     if (extId && d.level >= 2) extLog(extId, `background ${String(d.sourceUrl).split('/').pop()}:${d.lineNumber}`, d.level >= 3 ? 'error' : 'warning', d.message);
@@ -1586,6 +1706,7 @@ function setupSession(ses) {
       worker.ipc.handle('ultima:ext-alarms', (_e, op, args) => extensionAlarms(ses, extId, op, Array.isArray(args) ? args : []));
       worker.ipc.handle('ultima:ext-installed', () => extensions?.takeInstalled(ses, extId) || null);
       worker.ipc.on('ultima:ext-unsupported', (_e, name) => noteUnsupported(extId, name));
+      worker.ipc.on('ultima:ext-external-reply', (_e, token, response) => externalReply(token, response));
       const owner = `sw-${ses.storagePath || ''}|${versionId}`;
       const reply = (channel, ...a) => { try { worker.send(channel, ...a); } catch { /* stopped */ } };
       worker.ipc.handle('ultima:ext-call', (_e, area, op, args) => extensionCall(ses, extId, area, op, args, { reply, owner, hold: () => worker.startTask() }));
@@ -1613,13 +1734,23 @@ function setupSession(ses) {
     const keys = permission === 'media' ? [...new Set(details.mediaTypes.map((m) => (m === 'video' ? 'camera' : 'microphone')))] : [permission];
     const states = keys.map((k) => allowsIn(ses, origin, k));
     if (states.includes(false)) return callback(false);
+    // screen sharing asks in its picker, where you choose what to share (see pickScreenShare)
+    if (permission === 'display-capture') {
+      const chosen = await pickScreenShare(wc, origin).catch(() => null);
+      if (chosen) {
+        const id = wc.id;
+        chosenShares.set(id, chosen);
+        setTimeout(() => { if (chosenShares.get(id) === chosen) chosenShares.delete(id); }, 30000);
+      }
+      return callback(Boolean(chosen));
+    }
     if (states.every((v) => v === true)) return callback(true);
     const undecided = keys.filter((_k, i) => states[i] === undefined);
     let what = permission === 'media' ? `use your ${undecided.join(' and ')}`
       : SITE_PERMS.BY_KEY[permission]?.what || PERMISSION_LABELS[permission] || `use “${permission}”`;
     if (permission === 'openExternal' && details.externalURL) what = `open ${new URL(details.externalURL).protocol} links in another app`;
     // asked in Ultima's own dialog, in the page's window; no window to ask in means no
-    const answer = await askUi('permission', { site: hostOf(origin) || origin, what }, windowOf(wc));
+    const answer = await askUi('permission', { site: hostOf(origin) || origin, what }, askWindowOf(wc));
     const allow = Boolean(answer?.allow);
     if (answer?.remember) {
       const choices = Object.fromEntries(undecided.map((k) => [k, allow]));
@@ -1629,9 +1760,15 @@ function setupSession(ses) {
     callback(allow);
   });
 
+  ses.setDisplayMediaRequestHandler((request, callback) => {
+    // (called with nothing, it refuses as a "no" would; the callback throws once the page has gone)
+    const answer = (streams) => { try { if (streams) callback(streams); else callback(); } catch { /* gone */ } };
+    answer(sharedStreams(request));
+  });
+
   // A private download stays out of the other windows' download lists; only the window it started in shows it.
   ses.on('will-download', (_e, item, wc) => {
-    const from = windowOf(wc);
+    const from = homeWindowOf(wc); // (a pop-up's download shows in the window it came from)
     const priv = isPrivateSession(ses);
     const dir = downloadDir().dir;
     const parsed = path.parse(item.getFilename());
@@ -1807,7 +1944,9 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     delete prefs.preloadURL;
     prefs.preload = path.join(__dirname, '..', 'webview-preload.js'); // only reports text-box focus
     prefs.nodeIntegration = false;
-    prefs.nodeIntegrationInSubFrames = false;
+    // Ultima's page scripts (session preloads) run in a page's frames too: the ad blocker's rules, saved logins, pages'
+    // alerts and a click in a sign-in button's frame letting it open its pop-up. Still sandboxed: no Node in pages.
+    prefs.nodeIntegrationInSubFrames = true;
     prefs.contextIsolation = true;
     prefs.sandbox = true;
     prefs.spellcheck = true;
@@ -1911,24 +2050,139 @@ app.on('web-contents-created', (_e, wc) => {
   hookShortcuts(wc);
   hookTabEvents(wc);
   wc.on('context-menu', (_ev, params) => pageContextMenu(wc, params));
+  guardWindowOpen(wc);
+  dropBlockedWorkers(wc);
+});
+
+// Windows and tabs a page opens. A site may open one only within a few seconds of your click or key press, one per
+// click (as in Chrome), unless you allowed its pop-ups yourself. Real pop-ups (sign-in and payment windows) need
+// window.opener, so they get a window of their own (openPopup) unless the site's pop-ups are blocked; links opened in
+// a new tab aren't pop-ups, and open as tabs in the page's Ultima window.
+function guardWindowOpen(wc) {
+  let pressedAt = 0;
+  const id = wc.id;
+  wc.on('input-event', (_ev, input) => { if (ACTIVATING_INPUT.has(input.type)) pressedAt = Date.now(); });
+  wc.once('destroyed', () => framePressedAt.delete(id));
   wc.setWindowOpenHandler(({ url, disposition }) => {
-    // Real popups (OAuth, payment flows) need window.opener, so give them a window of their own, unless the site's
-    // pop-ups are blocked (tabs the user opens from links aren't pop-ups).
-    if (disposition === 'new-window' && allowsIn(wc.session, originOf(wc.getURL()), 'popups') === false) {
-      const origin = originOf(wc.getURL());
-      sendTo(windowOf(wc), 'popup-blocked', { origin, site: hostOf(origin) || origin, url });
+    const home = homeWindowOf(wc);
+    // Only Ultima's and extensions' own pages may open what they like. A blank page (a pop-up a site opened empty and
+    // fills in) counts as the site that opened it.
+    const pageUrl = wc.getURL();
+    const web = !/^(chrome-extension|devtools|chrome|file):/i.test(pageUrl);
+    const origin = /^https?:/i.test(pageUrl) ? originOf(pageUrl) : popups.get(id)?.openerOrigin || originOf(pageUrl);
+    const pressed = Date.now() - Math.max(pressedAt, framePressedAt.get(id) || 0) < 5000;
+    const outright = siteAllowsOutright(wc.session, origin, 'popups');
+    const blocked = web && (pressed ? disposition === 'new-window' && allowsIn(wc.session, origin, 'popups') === false : !outright);
+    if (blocked) {
+      sendTo(home, 'popup-blocked', { origin, site: hostOf(origin) || origin, url });
       return { action: 'deny' };
     }
-    if (disposition === 'new-window') {
-      return {
-        action: 'allow',
-        overrideBrowserWindowOptions: { width: 520, height: 720, autoHideMenuBar: true, backgroundColor: '#ffffff', icon: APP_ICON },
-      };
-    }
-    sendTo(windowOf(wc), 'open-url', { url, background: disposition === 'background-tab', private: priv });
+    if (web && !outright) { pressedAt = 0; framePressedAt.delete(id); } // that click is used up
+    if (disposition === 'new-window') return { action: 'allow', createWindow: (options) => openPopup(options, wc) };
+    sendTo(home, 'open-url', { url, background: disposition === 'background-tab', private: isPrivate(wc) });
     return { action: 'deny' };
   });
-});
+}
+
+// ---- a site's pop-up windows (sign-in and payment windows) ----
+// Drawn by Ultima like its other windows: a bar with the site's address (popup.html) over the page, which is a view of
+// its own. Its questions and right-click menu are Ultima's, drawn in it; links it opens in a new tab go to its Ultima
+// window. The size is the one the site asked for.
+const POPUP_BAR = 40;
+const popups = new Map(); // the pop-up page's webContents id → { win, page, view, home }
+const popupOfUi = (wc) => [...popups.values()].find((p) => !p.win.isDestroyed() && p.win.webContents === wc) || null;
+// the Ultima window a page belongs to: its tab's, or the one its pop-up was opened from
+const homeWindowOf = (wc) => windowOf(wc) || popups.get(wc?.id)?.home || null;
+// where to ask about a page or show its menu: the pop-up it's in, or its Ultima window
+const askWindowOf = (wc) => popups.get(wc?.id) || windowOf(wc);
+
+// x, y if that point is on a screen; else nothing (the window is placed as usual)
+function onScreenAt(x, y) {
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return {};
+  const on = screen.getAllDisplays().some(({ workArea: a }) => x >= a.x - 40 && x < a.x + a.width - 80 && y >= a.y - 8 && y < a.y + a.height - 60);
+  return on ? { x, y } : {};
+}
+
+function openPopup(options, opener) {
+  const page = options.webContents;
+  const home = homeWindowOf(opener);
+  const size = (v, fallback, min, max) => Math.round(Math.min(max, Math.max(min, Number(v) || fallback)));
+  const win = new BrowserWindow({
+    width: size(options.width, 520, 320, 1600),
+    height: size(options.height, 680, 240, 1200) + POPUP_BAR,
+    // where the site asked, kept on a screen (a pop-up placed off every screen would run unseen)
+    ...onScreenAt(options.x, options.y),
+    minWidth: 320,
+    minHeight: 200,
+    title: 'Pop-up',
+    icon: APP_ICON,
+    backgroundColor: GLASS ? CLEAR : '#111114',
+    backgroundMaterial: BACKDROPS ? settings.data.windowMaterial : undefined,
+    vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
+    visualEffectState: 'active',
+    titleBarStyle: 'hidden',
+    titleBarOverlay: process.platform === 'darwin' ? true : { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height: POPUP_BAR },
+    trafficLightPosition: { x: 14, y: 13 },
+    show: false,
+    webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true },
+  });
+  const view = new WebContentsView({ webContents: page, webPreferences: options.webPreferences });
+  view.setBackgroundColor('#ffffff');
+  win.contentView.addChildView(view);
+  const openerUrl = opener.getURL();
+  const popup = { win, page, view, home, openerOrigin: /^https?:/i.test(openerUrl) ? originOf(openerUrl) : popups.get(opener.id)?.openerOrigin };
+  const pageId = page.id;
+  if (isPrivate(page)) page.once('destroyed', () => setTimeout(endPrivateBrowsingIfUnused, 0));
+  popups.set(page.id, popup);
+  const layout = () => {
+    if (win.isDestroyed()) return;
+    const [width, height] = win.getContentSize();
+    view.setBounds({ x: 0, y: POPUP_BAR, width, height: Math.max(0, height - POPUP_BAR) });
+  };
+  layout();
+  win.on('resize', layout);
+  const report = () => { if (!page.isDestroyed()) sendTo(popup, 'popup-page', { url: page.getURL(), title: page.getTitle() }); };
+  for (const ev of ['did-navigate', 'did-navigate-in-page', 'page-title-updated']) page.on(ev, report);
+  // the page closing itself (a sign-in that's done) closes the window, and closing the window closes the page
+  page.once('destroyed', () => { popups.delete(pageId); if (!win.isDestroyed()) win.close(); });
+  win.on('closed', () => { if (!page.isDestroyed()) page.close(); });
+  win.once('ready-to-show', () => { win.show(); page.focus(); });
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'popup.html'));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  hookShortcuts(win.webContents);
+  hookShortcuts(page);
+  page.on('context-menu', (_ev, params) => pageContextMenu(page, params));
+  guardWindowOpen(page);
+  return page;
+}
+
+// Ultima's shortcuts in a pop-up: the ones for its page work there; the ones that open something open it in its
+// Ultima window
+const POPUP_COMMANDS = {
+  'close-tab': (p) => p.win.close(),
+  reload: (p) => p.page.reload(),
+  'hard-reload': (p) => p.page.reloadIgnoringCache(),
+  back: (p) => p.page.navigationHistory.canGoBack() && p.page.navigationHistory.goBack(),
+  forward: (p) => p.page.navigationHistory.canGoForward() && p.page.navigationHistory.goForward(),
+  'zoom-in': (p) => p.page.setZoomLevel(Math.min(5, p.page.getZoomLevel() + 0.5)),
+  'zoom-out': (p) => p.page.setZoomLevel(Math.max(-3, p.page.getZoomLevel() - 0.5)),
+  'zoom-reset': (p) => p.page.setZoomLevel(0),
+  'copy-url': (p) => clipboard.writeText(p.page.getURL()),
+  devtools: (p) => p.page.toggleDevTools(),
+};
+const POPUP_ELSEWHERE = new Set(['new-tab', 'new-window', 'new-private-window', 'new-private-tab', 'reopen-tab', 'palette',
+  'open-history', 'open-bookmarks', 'open-downloads', 'open-settings', 'open-passwords', 'open-extensions', 'task-manager']);
+// whether it was one of them (the others are left to the page)
+function popupCommand(popup, cmd) {
+  if (POPUP_COMMANDS[cmd]) { POPUP_COMMANDS[cmd](popup); return true; }
+  if (POPUP_ELSEWHERE.has(cmd) && popup.home && !popup.home.win.isDestroyed()) {
+    popup.home.win.focus();
+    sendTo(popup.home, 'command', cmd);
+    return true;
+  }
+  return false;
+}
 
 // ---- IPC ----
 function registerIpc() {
@@ -2178,26 +2432,47 @@ function registerIpc() {
   });
   // ---- site settings (see sitepermissions.js) ----
   const webOrigin = (o) => { try { const u = new URL(o); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } };
-  handle('site:get', (o) => {
+  // A private window's choices last only as long as private browsing (privatePermissions), over your saved ones
+  const privateUi = (e) => Boolean(windowOf(e.sender)?.private);
+  handleFrom('site:get', (e, o) => {
     const origin = webOrigin(o);
-    return origin && { origin, record: { ...settings.data.permissions[origin] }, defaults: { ...settings.data.siteDefaults } };
+    const own = privateUi(e) ? privatePermissions[origin] : null;
+    return origin && { origin, record: { ...settings.data.permissions[origin], ...own }, defaults: { ...settings.data.siteDefaults } };
   });
   handle('site:list', () => ({
     sites: Object.entries(settings.data.permissions).filter(([o, r]) => webOrigin(o) && r && Object.keys(r).length).map(([origin, record]) => ({ origin, record })),
     defaults: { ...settings.data.siteDefaults },
   }));
-  handle('site:set', ({ origin: o, key, value }) => {
+  handleFrom('site:set', (e, { origin: o, key, value }) => {
     const origin = webOrigin(o);
     if (!origin || !SITE_PERMS.BY_KEY[key] || !(value === true || value === false || value === null)) return;
+    if (privateUi(e)) {
+      privatePermissions[origin] = { ...privatePermissions[origin], [key]: value };
+      if (value === null) delete privatePermissions[origin][key];
+      return;
+    }
+    if (privatePermissions[origin]) delete privatePermissions[origin][key]; // what you choose now is what applies
     setSitePermissions(origin, { [key]: value });
+    if (siteContentPolicy(origin)) return dropServiceWorkers(origin);
   });
-  handle('site:reset', (o) => { const origin = webOrigin(o); if (origin) { delete settings.data.permissions[origin]; settings.save(); } });
+  handleFrom('site:reset', (e, o) => {
+    const origin = webOrigin(o);
+    if (!origin) return;
+    delete privatePermissions[origin];
+    if (!privateUi(e)) { delete settings.data.permissions[origin]; settings.save(); }
+  });
   handle('site:default', ({ key, value }) => {
     if (!SITE_PERMS.BY_KEY[key] || !(value === true || value === false || value === null)) return;
     // stored only when it differs from the built-in default (Ask for ask-kind, Allow for allow-kind): that's Block
     if (value === false) settings.data.siteDefaults[key] = false;
     else delete settings.data.siteDefaults[key];
     settings.save();
+    // blocked for every site: the sites open now lose their service workers at once, the others as they're visited
+    // (dropBlockedWorkers), never every site's and extension's at once
+    if (value === false && (key === 'javascript' || key === 'images')) {
+      const open = new Set(webContents.getAllWebContents().filter((w) => !w.isDestroyed()).map((w) => originOf(w.getURL())));
+      return Promise.all([...open].filter((o) => /^https?:/.test(o) && siteContentPolicy(o)).map(dropServiceWorkers));
+    }
   });
   // cookies the site has in this space, and clearing its cache, cookies and stored data, in every space
   handle('site:data', async ({ origin: o, partition }) => {
@@ -2394,17 +2669,41 @@ function registerIpc() {
   handleFrom('ui:edit', (e, action) => {
     if (['undo', 'redo', 'cut', 'copy', 'paste', 'pasteAndMatchStyle', 'selectAll'].includes(action)) e.sender[action]();
   });
+  handleFrom('popup:page', (e) => {
+    const popup = popupOfUi(e.sender);
+    return popup && !popup.page.isDestroyed() ? { url: popup.page.getURL(), title: popup.page.getTitle() } : { url: '', title: '' };
+  });
+  handleFrom('popup:shot', async (e) => {
+    const popup = popupOfUi(e.sender);
+    if (!popup || popup.page.isDestroyed()) return '';
+    // (a page waiting on its own alert() or confirm() draws nothing new, so its picture can't be taken: none then)
+    const timeout = new Promise((resolve) => { setTimeout(resolve, 300, null); });
+    const img = await Promise.race([popup.page.capturePage().catch(() => null), timeout]);
+    return img && !img.isEmpty() ? `data:image/jpeg;base64,${img.toJPEG(90).toString('base64')}` : '';
+  });
+  handleFrom('popup:cover', (e, on) => {
+    const popup = popupOfUi(e.sender);
+    if (!popup || popup.page.isDestroyed()) return;
+    popup.view.setVisible(!on);
+    if (!on) popup.page.focus(); // (edit commands from its menu act on the page's text box)
+  });
   handle('ask:answer', ({ id, answer }) => {
     pendingAsks.get(id)?.(answer);
     pendingAsks.delete(id);
   });
 }
 
+// Whether a frame's site still has to ask for a permission (permission-preload.js)
+ipcMain.on('ultima:permission-undecided', (e, key) => {
+  const origin = originOf(e.senderFrame?.url || '');
+  e.returnValue = Boolean(SITE_PERMS.BY_KEY[key]) && /^https?:/.test(origin) && allowsIn(e.sender.session, origin, key) === undefined;
+});
+
 // A page's alert(), confirm() or prompt() (dialog-preload.js): asked in Ultima's dialog in the page's window, titled
 // with the site or extension, as Chrome does. The page waits for the answer (a synchronous message, answered then).
 ipcMain.on('ultima:page-dialog', async (e, type, message, value) => {
   const empty = type === 'confirm' ? false : null;
-  const w = e.sender.getType() === 'webview' ? windowOf(e.sender) : null; // Ultima's own UI never asks itself
+  const w = popups.get(e.sender.id) || (e.sender.getType() === 'webview' ? windowOf(e.sender) : null); // Ultima's own UI never asks itself
   if (!w || !['alert', 'confirm', 'prompt'].includes(type)) { e.returnValue = empty; return; }
   let from = '';
   try {
@@ -2422,11 +2721,15 @@ let askSeq = 0;
 // (in the window the question comes from, or the one you're using)
 function askUi(kind, payload, w = null) {
   const target = w || currentWindow();
-  if (!target) return Promise.resolve(null);
+  if (!target || target.win.isDestroyed()) return Promise.resolve(null);
   return new Promise((resolve) => {
     askSeq += 1;
-    pendingAsks.set(askSeq, resolve);
-    sendTo(target, 'ask', { id: askSeq, kind, payload });
+    const id = askSeq;
+    // the window closing with the question open answers it with nothing (a sign-in waiting on it would wait for good)
+    const gone = () => { pendingAsks.delete(id); resolve(null); };
+    target.win.once('closed', gone);
+    pendingAsks.set(id, (answer) => { if (!target.win.isDestroyed()) target.win.removeListener('closed', gone); resolve(answer); });
+    sendTo(target, 'ask', { id, kind, payload });
   });
 }
 
@@ -2480,7 +2783,8 @@ function setTaskbarTasks() {
 const pendingLogins = new Map(); // host|realm|proxy → Promise of the answer
 app.on('login', (event, wc, details, authInfo, callback) => {
   event.preventDefault();
-  const key = `${authInfo.host}:${authInfo.port}|${authInfo.realm}|${authInfo.isProxy}`;
+  // (private pages and the others are asked apart: what you type for one isn't handed to the other)
+  const key = `${authInfo.host}:${authInfo.port}|${authInfo.realm}|${authInfo.isProxy}|${isPrivate(wc)}`;
   let answer = pendingLogins.get(key);
   if (!answer) {
     const defaultPort = { http: 80, https: 443 }[authInfo.scheme] || (authInfo.isProxy ? 0 : 443);
@@ -2490,7 +2794,7 @@ app.on('login', (event, wc, details, authInfo, callback) => {
       proxy: authInfo.isProxy,
       retry: details.firstAuthAttempt === false,
       insecure: !authInfo.isProxy && /^http:/i.test(details.url || ''),
-    }, windowOf(wc)).finally(() => pendingLogins.delete(key));
+    }, askWindowOf(wc)).finally(() => pendingLogins.delete(key));
     pendingLogins.set(key, answer);
   }
   answer.then((a) => (a?.username ? callback(a.username, a.password || '') : callback()), () => callback());

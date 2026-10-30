@@ -310,10 +310,12 @@ function tabFolderMenuItems(tab) {
 }
 
 // returns true when the choice was a folder one
+// (a tab in a split view takes the split along: its tabs share one folder)
 function runTabFolderChoice(tab, choice) {
-  if (choice === 'folder-new') newTabFolder(tab);
-  else if (choice === 'folder-remove') removeTabFromFolder(tab);
-  else if (choice?.startsWith('folder:')) addTabToFolder(tab, choice.slice(7));
+  const tabs = tab.splitId ? splitTabs(tab.splitId) : [tab];
+  if (choice === 'folder-new') newTabFolder(tabs.length > 1 ? tabs : tab);
+  else if (choice === 'folder-remove') tabs.forEach((t) => removeTabFromFolder(t));
+  else if (choice?.startsWith('folder:')) tabs.forEach((t) => addTabToFolder(t, choice.slice(7)));
   else return false;
   return true;
 }

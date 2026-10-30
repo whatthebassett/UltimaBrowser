@@ -76,7 +76,8 @@ function renderSidebarSheet() {
   if (!lib) return;
   const layout = sidebarLayout();
   const used = new Set([...layout.head, ...layout.foot]);
-  const free = [SIDEBAR_DIVIDER, SIDEBAR_SPACE, ...Object.keys(SIDEBAR_BUTTONS).filter((k) => !used.has(k))];
+  // (the compact sidebar button does nothing in the toolbar of horizontal tabs, which has no sidebar)
+  const free = [SIDEBAR_DIVIDER, SIDEBAR_SPACE, ...Object.keys(SIDEBAR_BUTTONS).filter((k) => !used.has(k) && !(k === 'collapse' && tabsAcross()))];
   lib.innerHTML = free.map((k) => `<button class="sbx-tile" data-sbx-add="${k}" title="Drag onto the ${tabsAcross() ? 'toolbar' : 'sidebar'}, or click to add it">
     ${sbxIcon(k, 22)}<span>${esc(sbxLabel(k))}</span></button>`).join('')
     + (free.length === 2 ? '<div class="sbx-empty">Every button is in use.</div>' : '');

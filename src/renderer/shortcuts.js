@@ -84,10 +84,11 @@ function pageShortcuts(root, tab) {
     const { extId, extCmd } = row.dataset;
     window.ultima.setKeyRecording(true);
     recording = extCmd;
-    const box = h('<button class="key-recorder">Press a shortcut… <span class="key-hint">click elsewhere to cancel</span></button>');
+    const box = h('<button class="key-recorder">Press a shortcut… <span class="key-hint">Esc to cancel</span></button>');
     $('.key-add', row).replaceWith(box);
     box.focus();
     box.addEventListener('keydown', (e) => {
+      if (recorderEscape(e)) return;
       e.preventDefault();
       e.stopPropagation();
       const combo = KEYMAP.comboFromEvent(e);
@@ -108,6 +109,14 @@ function pageShortcuts(root, tab) {
     }
   };
 
+  // Esc cancels recording and Tab moves on, as everywhere else (bound by mistake, Esc would stop closing every dialog
+  // and menu); a shortcut with them in it, like Ctrl+Tab, is recorded as usual
+  const recorderEscape = (e) => {
+    const bare = !e.ctrlKey && !e.altKey && !e.metaKey;
+    if (bare && e.key === 'Escape' && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); stopRecording(); return true; }
+    return bare && e.key === 'Tab';
+  };
+
   const stopRecording = () => {
     if (!recording) return;
     recording = null;
@@ -120,10 +129,11 @@ function pageShortcuts(root, tab) {
     recording = id;
     window.ultima.setKeyRecording(true); // main stops intercepting, so even Ctrl+T etc. reach the recorder
     const cmd = commandOf(id);
-    const box = h('<button class="key-recorder">Press a shortcut… <span class="key-hint">click elsewhere to cancel</span></button>');
+    const box = h('<button class="key-recorder">Press a shortcut… <span class="key-hint">Esc to cancel</span></button>');
     $('.key-add', row).replaceWith(box);
     box.focus();
     box.addEventListener('keydown', (e) => {
+      if (recorderEscape(e)) return;
       e.preventDefault();
       e.stopPropagation();
       const combo = KEYMAP.comboFromEvent(e);

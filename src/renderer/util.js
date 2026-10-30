@@ -106,12 +106,12 @@ function dayLabel(ms) {
   return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric' });
 }
 
-// Highlights the query tokens inside text (already-escaped output).
+// Highlights the query tokens inside text (already-escaped output). The text is matched as it is and escaped piece by
+// piece, so a match never lands inside an escape ("Q&A" searched for "a" stays "Q&A", not "&amp;").
 function highlight(text, query) {
-  const safe = esc(text);
   const tokens = query.toLowerCase().split(/\s+/).filter((t) => t.length > 0).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-  if (!tokens.length) return safe;
-  return safe.replace(new RegExp(`(${tokens.map(esc).join('|')})`, 'gi'), '<mark>$1</mark>');
+  if (!tokens.length) return esc(text);
+  return String(text ?? '').split(new RegExp(`(${tokens.join('|')})`, 'gi')).map((part, i) => (i % 2 ? `<mark>${esc(part)}</mark>` : esc(part))).join('');
 }
 
 // ---------- keyboard shortcuts (bindings live in keymap.js + settings.keybindings) ----------

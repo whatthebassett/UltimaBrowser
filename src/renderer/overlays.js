@@ -6,7 +6,15 @@
 //               type?: 'separator' | 'checkbox', checked?, danger?, submenu?: [items] }
 // or a row of icon buttons: { type: 'actions', buttons: [{ id, label, icon, enabled?, on?, shortcut?, hint? }] }
 
-const OV = { pointer: { x: 0, y: 0 }, menu: null, dialog: null };
+const OV = { pointer: { x: 0, y: 0 }, menu: null, dialog: null, queue: Promise.resolve() };
+
+// One dialog at a time: a question that comes while another is open waits its turn (it never answers the open one,
+// as a site's second permission request or a page's alert() during "Clear all history?" would otherwise)
+function dialogTurn(open) {
+  const turn = OV.queue.then(open);
+  OV.queue = turn.then(() => {}, () => {});
+  return turn;
+}
 
 // remember where the pointer was, so menus opened by a click or right-click appear there
 document.addEventListener('mousedown', (e) => { OV.pointer = { x: e.clientX, y: e.clientY }; }, true);
@@ -168,8 +176,7 @@ window.addEventListener('resize', () => closeMenu(null));
 //              fields?: [{ id, label, value }] })
 //   -> Promise<{ id, checked, values }>   (id is null when dismissed)
 function showDialog({ title, message, buttons, checkbox, fields, icon: ic }) {
-  OV.dialog?.finish(null);
-  return new Promise((resolve) => {
+  return dialogTurn(() => new Promise((resolve) => {
     const el = h(`<div class="dlg-backdrop"><div class="dlg" role="dialog" aria-modal="true">
       ${ic ? `<div class="dlg-icon">${icon(ic, 22)}</div>` : ''}
       <div class="dlg-title">${esc(title)}</div>
@@ -204,7 +211,49 @@ function showDialog({ title, message, buttons, checkbox, fields, icon: ic }) {
     document.body.append(el);
     const first = el.querySelector('[data-field]');
     if (first) { first.focus(); first.select(); } else (el.querySelector('.btn.primary') || el.querySelector('.btn')).focus();
-  });
+  }));
+}
+
+// A question from main (main.js askUi), asked in a dialog; resolves the answer main expects. Used by Ultima's windows
+// and its pop-up windows (popup.js). Screen sharing has its own picker (sitesettings.js).
+async function askDialog(kind, payload) {
+  if (kind === 'permission') {
+    const r = await showDialog({
+      icon: 'shield',
+      title: `${payload.site} wants to ${payload.what}`,
+      buttons: [{ id: 'block', label: 'Block' }, { id: 'allow', label: 'Allow', primary: true }],
+      checkbox: { label: 'Remember my decision for this site', checked: true },
+    });
+    return { allow: r.id === 'allow', remember: r.checked && r.id !== null };
+  }
+  if (kind === 'login') {
+    // a server or proxy asking for a username and password (see the app 'login' handler in main.js)
+    const r = await showDialog({
+      icon: 'key',
+      title: payload.proxy ? `The proxy ${payload.host} needs you to sign in` : `${payload.host} needs you to sign in`,
+      message: [
+        payload.retry && 'That username or password didn’t work. Try again.',
+        payload.realm && `It says: “${payload.realm}”`,
+        payload.insecure && 'Your sign-in will be sent over a connection that isn’t private.',
+      ].filter(Boolean).join(' '),
+      fields: [{ id: 'username', label: 'Username' }, { id: 'password', label: 'Password', type: 'password' }],
+      buttons: [{ id: 'cancel', label: 'Cancel' }, { id: 'signin', label: 'Sign in', primary: true }],
+    });
+    return r.id === 'signin' && r.values.username ? { username: r.values.username, password: r.values.password } : null;
+  }
+  if (kind === 'page-dialog') {
+    // a page's alert(), confirm() or prompt() (see dialog-preload.js)
+    const { type, message, value, from } = payload;
+    const r = await showDialog({
+      title: from ? `${from} says` : 'This page says',
+      message,
+      fields: type === 'prompt' ? [{ id: 'value', label: '', value }] : undefined,
+      buttons: type === 'alert' ? [{ id: 'ok', label: 'OK', primary: true }] : [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'OK', primary: true }],
+    });
+    if (type === 'prompt') return r.id === 'ok' ? r.values.value : null;
+    return type === 'confirm' ? r.id === 'ok' : null;
+  }
+  return null;
 }
 
 // Drop-in replacement for window.confirm(): resolves true/false.

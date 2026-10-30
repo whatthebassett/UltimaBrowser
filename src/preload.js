@@ -98,6 +98,10 @@ contextBridge.exposeInMainWorld('ultima', {
   showDownload: invoke('download:show'),
   clearDownloads: invoke('download:clear'),
   choosePageMenu: invoke('page-menu:choose'),
+  // a site's pop-up window (popup.js): its page's address and title, and swapping the page for a picture of itself
+  popupPage: invoke('popup:page'),
+  popupShot: invoke('popup:shot'),
+  popupCover: invoke('popup:cover'),
   uiEdit: invoke('ui:edit'),
   answerAsk: invoke('ask:answer'),
 
@@ -120,7 +124,7 @@ contextBridge.exposeInMainWorld('ultima', {
   setActiveTab: invoke('tabs:active'),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate'];
+    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

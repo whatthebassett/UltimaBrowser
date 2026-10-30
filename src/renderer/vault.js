@@ -45,7 +45,10 @@ async function pagePasswords(root) {
   page.addEventListener('click', vaultDetailClick);
   page.addEventListener('input', vaultDetailInput);
   await loadVault();
-  if (VAULT.sel && VAULT.all.some((l) => l.id === VAULT.sel)) openVaultLogin(VAULT.sel); else drawVaultDetail();
+  // drawn again (back on the page, or redrawn while open): the generator, or a login being edited, stays as it was
+  if (VAULT.mode === 'generator') showVaultGenerator();
+  else if (VAULT.mode === 'edit') drawVaultDetail();
+  else if (VAULT.sel && VAULT.all.some((l) => l.id === VAULT.sel)) openVaultLogin(VAULT.sel); else drawVaultDetail();
 }
 
 async function loadVault() {
@@ -200,8 +203,10 @@ async function vaultDetailClick(e) {
     input.type = input.type === 'password' ? 'text' : 'password';
     b.innerHTML = icon(input.type === 'password' ? 'eye' : 'eyeOff', 15);
   } else if (act === 'edit-generate') {
-    const box = $('#vgen-inline');
-    if (!box.hidden) { box.hidden = true; return; }
+    const old = $('#vgen-inline');
+    if (!old.hidden) { old.hidden = true; return; }
+    const box = old.cloneNode(false); // a fresh box each time, so its listeners don't pile up
+    old.replaceWith(box);
     box.hidden = false;
     box.innerHTML = `${generatorHtml()}<div class="vd-gen-use"><button class="btn primary" data-vact="edit-use">Use this password</button></div>`;
     VAULT.genCurrent = mountGenerator(box);

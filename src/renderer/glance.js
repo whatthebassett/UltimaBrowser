@@ -124,7 +124,8 @@ function glanceToTab() {
   GL.open = null;
   try { window.ultima.watchGlance(g.wv.getWebContentsId(), false); } catch { /* never attached */ }
   const url = (() => { try { return g.wv.getURL() || g.url; } catch { return g.url; } })();
-  const tab = createTab({ url, title: g.title || url, favicon: g.favicon, opener: g.source.zone === 'normal' ? g.source : undefined, spaceId: g.source.zone === 'essential' ? B.activeSpaceId : g.source.spaceId, activate: false, lazy: true });
+  // (a glance from a private tab stays private as a tab)
+  const tab = createTab({ url, title: g.title || url, favicon: g.favicon, opener: g.source.zone === 'normal' ? g.source : undefined, spaceId: g.source.zone === 'essential' ? B.activeSpaceId : g.source.spaceId, activate: false, lazy: true, private: Boolean(g.source.private) });
   const box = g.box;
   g.frame.remove();
   g.backdrop.remove();

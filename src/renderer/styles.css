@@ -103,9 +103,12 @@ body.mac .sb-head { padding-left: 76px; }
 .sb-div { flex: none; width: 9px; height: 30px; display: grid; place-items: center; }
 .sb-div::before { content: ""; width: 1px; height: 18px; border-radius: 1px; background: var(--glass-edge); }
 body.sb-editing .sb-div:hover::before { background: var(--accent); }
-/* a blank space: an empty cell a button wide, outlined only while the sidebar is being arranged */
-.sb-space { flex: none; width: 30px; height: 30px; border-radius: 8px; }
-body.sb-editing .sb-space { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--text) 7%, transparent) 4px 5px); }
+/* a blank space: it shares out the room left on its row, so the buttons after it keep their place as the sidebar gets
+   wider or narrower (and gives way before a button has to drop to the next row). Outlined, and at least a button wide
+   to grab, only while the sidebar is being arranged; a fixed button's width in the compact sidebar and the toolbar. */
+.sb-space { flex: 1 1 0; min-width: 0; height: 30px; border-radius: 8px; }
+body.collapsed .sb-space, .htoolbar .sb-space { flex: none; width: 30px; }
+body.sb-editing .sb-space { min-width: 30px; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent); background: repeating-linear-gradient(135deg, transparent 0 4px, color-mix(in srgb, var(--text) 7%, transparent) 4px 5px); }
 body.sb-editing .sb-space:hover { box-shadow: inset 0 0 0 1px var(--accent); }
 
 .icon-btn {
@@ -325,6 +328,10 @@ body.sb-hidden.sb-peek #sidebar {
   transform: none; visibility: visible; box-shadow: var(--shadow);
   transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1), width 0.18s ease, visibility 0s;
 }
+/* Nothing drags the window while it's out: the page's top bar under it would otherwise (a window drag area takes the
+   pointer whatever is drawn over it), so pointing at the sidebar's top buttons put it away and pressing one moved the
+   window. Its own top strip doesn't either, so the gaps between those buttons don't put it away. */
+body.sb-hidden.sb-peek #topbar, body.sb-hidden #sidebar .sb-head { -webkit-app-region: no-drag; }
 body.fullscreen #sb-hotzone { display: none !important; }
 @media (prefers-reduced-motion: reduce) { body.sb-hidden #sidebar { transition: none; } }
 
@@ -553,6 +560,20 @@ body.tw.acrylic { background: color-mix(in srgb, var(--chrome-solid) 82%, transp
 .tw-bar { flex: none; display: flex; align-items: center; gap: 9px; height: 40px; padding: 0 150px 0 16px; font-size: 13px; font-weight: 650; -webkit-app-region: drag; }
 body.tw.mac .tw-bar { padding: 0 16px 0 84px; }
 .tw-logo { display: grid; place-items: center; }
+/* a site's pop-up window (popup.js): the site's address over its page */
+body.pop { display: flex; flex-direction: column; background: var(--chrome-solid); }
+body.pop.glass { background: color-mix(in srgb, var(--chrome-solid) 72%, transparent); }
+body.pop.acrylic { background: color-mix(in srgb, var(--chrome-solid) 82%, transparent); }
+.pop-bar { flex: none; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 150px 0 14px; font-size: 12.5px; -webkit-app-region: drag; min-width: 0; }
+body.pop.mac .pop-bar { padding: 0 14px 0 84px; }
+.pop-ic { flex: none; display: grid; place-items: center; color: var(--text-2); -webkit-app-region: no-drag; }
+.pop-ic.warn { color: #f59e0b; }
+.pop-text { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; }
+.pop-host { font-weight: 650; color: var(--text); overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 100%; -webkit-app-region: no-drag; user-select: text; }
+.pop-title { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.pop-page { flex: 1; min-height: 0; position: relative; background: #fff; }
+.pop-shot { position: absolute; inset: 0; width: 100%; height: 100%; display: none; }
+body.pop.covered .pop-shot[src] { display: block; }
 .tw-logo .logo { width: 18px; height: 18px; }
 .tw-main { flex: 1; min-height: 0; overflow-y: auto; padding: 4px 20px 20px; user-select: text; }
 .tw .page.tm-page { max-width: none; margin: 0; padding: 0; }
@@ -793,6 +814,22 @@ body.a11y-contrast .toast { background: var(--surface-2); -webkit-backdrop-filte
 .dlg-check input { accent-color: var(--accent); }
 .dlg-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
 .btn.danger-fill { background: var(--danger); color: #fff; box-shadow: none; }
+/* the screen sharing picker (sitesettings.js) */
+.dlg.share-dlg { width: min(640px, 100%); }
+.share-kinds { align-self: flex-start; }
+.share-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; max-height: min(360px, 50vh); overflow-y: auto; padding: 2px; }
+.share-list.rows { grid-template-columns: 1fr; gap: 2px; }
+.share-item { display: flex; flex-direction: column; gap: 6px; padding: 6px; border-radius: 10px; text-align: left; color: var(--text); min-width: 0; }
+.share-item:hover { background: var(--surface-2); }
+.share-item.on { background: var(--accent-soft); box-shadow: inset 0 0 0 2px var(--accent); }
+.share-thumb { aspect-ratio: 16 / 9; border-radius: 6px; background: var(--surface-2); overflow: hidden; display: grid; place-items: center; }
+.share-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.share-name { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 12px; }
+.share-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.share-list.rows .share-item { padding: 8px 10px; }
+.share-list.rows .share-name { font-size: 13px; }
+.share-ic { width: 16px; height: 16px; flex: none; object-fit: contain; }
+.share-none { color: var(--text-2); padding: 18px 4px; }
 .btn.danger-fill:hover { filter: brightness(1.08); }
 
 /* ---------- tooltips ---------- */
@@ -1395,6 +1432,8 @@ body.card-dragging .tab:hover, body.card-dragging .pin:hover { background: none;
   transition: box-shadow 0.12s ease; /* never its position: the outline must stay on its pane */
 }
 .split-frame.on { box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 70%, transparent); }
+/* one of Ultima's own pages as a pane (placed like a webview by split.js; its outline is the frame's) */
+#viewport .pane-page { outline: none; }
 .split-handle { position: absolute; top: 0; bottom: 0; width: 6px; z-index: 3; cursor: col-resize; }
 .split-handle::after {
   content: ""; position: absolute; left: 2px; top: 50%; width: 2px; height: 36px; margin-top: -18px; border-radius: 2px;
@@ -1813,4 +1852,18 @@ body.tl-switching #sidebar { pointer-events: none; }
   .vault-filters { grid-column: 1 / -1; position: static; flex-direction: row; flex-wrap: wrap; gap: 4px; }
   .vault-filters-head { margin: 0; padding: 0; } .vault-filters-head span { display: none; }
   .vault-filter { height: 30px; border-radius: 15px; box-shadow: inset 0 0 0 1px var(--border); }
+}
+
+/* Ultima's pages in a narrow page area (a pane of a split view): a row's control drops below its text when they don't
+   fit side by side, and pages with columns stack them */
+@container (max-width: 640px) {
+  .page { padding: 32px 18px 48px; }
+  .s-main { padding: 28px 16px 48px; }
+  .s-row { flex-wrap: wrap; row-gap: 10px; }
+  .s-row .s-text { flex: 1 1 180px; }
+  .s-row .s-control { flex-wrap: wrap; max-width: 100%; }
+  .s-row select.field { min-width: 0; max-width: 100%; }
+  .bm-layout { grid-template-columns: minmax(0, 1fr); }
+  .bm-tree { position: static; max-height: 220px; }
+  .vault-layout, .s-embed .vault-layout { grid-template-columns: minmax(0, 1fr); }
 }

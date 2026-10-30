@@ -1,6 +1,7 @@
 // Split view: 2–4 regular tabs side by side in the page area, as rounded panes with draggable dividers. The pane
 // you're working in is the active tab (the address bar, back/forward and every command act on it); clicking another
-// pane makes it the active one. In the sidebar a split shows as one row with a part per pane.
+// pane makes it the active one. In the sidebar a split shows as one row with a part per pane. A pane can be a web page
+// or one of Ultima's own pages (Settings, History…), each of those once per split (their parts have ids of their own).
 // Splitting animates: the page eases into its share while the new pane sweeps in, and the new divider flashes; in
 // the sidebar the tabs glide together into the split row. Separating plays it the other way.
 B.splits = []; // { id, sizes: [fractions, one per pane, in order] }
@@ -9,7 +10,12 @@ const SPLIT_GAP = 6; // px between panes
 const SPLIT_MIN = 0.15; // the smallest share a pane can be dragged down to
 const splitById = (id) => B.splits.find((s) => s.id === id) || null;
 const splitTabs = (id) => B.tabs.filter((t) => t.splitId === id);
-const canSplit = (t) => t && t.zone === 'normal' && !isInternal(t.url);
+const canSplit = (t) => t && t.zone === 'normal';
+// An Ultima page shown in a pane is drawn in an element of its own (a web page's pane is its webview)
+const paneRootOf = (t) => $(`#viewport .pane-page[data-pane-page="${t.id}"]`);
+const paneEl = (t) => (isInternal(t.url) ? paneRootOf(t) : t.webview);
+// a split already showing the same Ultima page as `t` (two of one page can't be side by side)
+const pageTwice = (tabs, t) => isInternal(t.url) && tabs.some((x) => x !== t && isInternal(x.url) && internalName(x.url) === internalName(t.url));
 let holdSplits = false;
 
 function initSplits(saved) {
@@ -34,6 +40,7 @@ function normalizeSplits() {
     const tabs = splitTabs(s.id);
     for (const t of tabs.slice(SPLIT_MAX)) t.splitId = undefined;
     for (const t of tabs) if (t.spaceId !== tabs[0].spaceId) t.splitId = undefined;
+    splitTabs(s.id).forEach((t, i, all) => { if (pageTwice(all.slice(0, i), t)) t.splitId = undefined; });
   }
   const placed = new Set();
   const out = [];
@@ -94,11 +101,13 @@ function layoutPanes(tab, anim) {
   // while a divider is being dragged only positions change: keep its elements (the one held keeps the pointer)
   const frames = $$('.split-frame', vp);
   const handles = $$('.split-handle', vp);
-  if (split && !anim && frames.length === n && handles.length === n - 1 && frames.every((f, i) => Number(f.dataset.pane) === splitTabs(split.id)[i].id)) {
+  if (split && !anim && frames.length === n && handles.length === n - 1 && frames.every((f, i) => Number(f.dataset.pane) === splitTabs(split.id)[i].id)
+    && splitTabs(split.id).every((t) => paneEl(t))
+    && $$('.pane-page', vp).every((el) => { const t = tabById(Number(el.dataset.panePage)); return t && isInternal(t.url) && internalName(t.url) === el.dataset.page; })) {
     B.paneKey = paneKey(tab);
     splitTabs(split.id).forEach((t, i) => {
       const box = paneBox(split.sizes, i);
-      Object.assign(t.webview.style, box);
+      Object.assign(paneEl(t).style, box);
       Object.assign(frames[i].style, box);
       frames[i].classList.toggle('on', t.id === B.activeId);
       if (i > 0) handles[i - 1].style.left = `calc(${box.left} - ${SPLIT_GAP}px)`;
@@ -109,6 +118,13 @@ function layoutPanes(tab, anim) {
   handles.forEach((x) => x.remove());
   vp.classList.toggle('is-split', Boolean(split));
   B.paneKey = paneKey(tab);
+  // Ultima's pages in the panes: an element each, drawn afresh when the split comes on screen or the page changes
+  const wasShowing = Boolean(split) && vp.dataset.split === split.id;
+  if (split) vp.dataset.split = split.id; else delete vp.dataset.split;
+  const shown = split ? splitTabs(split.id) : [];
+  for (const el of $$('.pane-page', vp)) {
+    if (!shown.some((t) => t.id === Number(el.dataset.panePage) && isInternal(t.url))) { clearInterval(el.pageTimer); el.remove(); }
+  }
   if (!split) {
     for (const t of B.tabs) if (t.webview) Object.assign(t.webview.style, { left: '', width: '', clipPath: '', transform: '', opacity: '', transition: '' });
     if (tab?.webview && anim?.from) animatePanes([tab], anim.from, vp, []);
@@ -116,10 +132,18 @@ function layoutPanes(tab, anim) {
   }
   const panes = splitTabs(split.id);
   panes.forEach((t, i) => {
-    ensureWebview(t);
     const box = paneBox(split.sizes, i);
-    Object.assign(t.webview.style, box, { clipPath: 'inset(0 round 10px)', transform: '', opacity: '' });
-    t.webview.classList.remove('hidden');
+    if (isInternal(t.url)) {
+      let root = paneRootOf(t);
+      const fresh = !root;
+      if (fresh) { root = h(`<div class="internal pane-page" data-pane-page="${t.id}" tabindex="-1"></div>`); vp.prepend(root); }
+      Object.assign(root.style, box, { clipPath: 'inset(0 round 10px)', transform: '', opacity: '' });
+      if (fresh || !wasShowing || root.dataset.page !== internalName(t.url)) { root.dataset.page = internalName(t.url); renderInternal(t); }
+    } else {
+      ensureWebview(t);
+      Object.assign(t.webview.style, box, { clipPath: 'inset(0 round 10px)', transform: '', opacity: '' });
+      t.webview.classList.remove('hidden');
+    }
     // a frame shows which pane is the one you're working in
     vp.append(h(`<div class="split-frame ${t.id === B.activeId ? 'on' : ''}" data-pane="${t.id}" style="left:${box.left};width:${box.width}">${paneControlsHtml(t, i, panes.length)}</div>`));
     if (i > 0) vp.append(h(`<div class="split-handle ${anim?.flash === i ? 'flash' : ''}" data-split-handle="${i}" style="left:calc(${box.left} - ${SPLIT_GAP}px)" title="Drag to resize"></div>`));
@@ -135,8 +159,8 @@ function animatePanes(panes, from, vp, frames) {
   const finalClip = panes.length > 1 ? 'inset(0 round 10px)' : 'inset(0 round 0px)';
   const plans = panes.map((t, i) => {
     const f = from.get(t.id);
-    if (!f) return null;
-    const r = t.webview.getBoundingClientRect();
+    if (!f || !paneEl(t)) return null;
+    const r = paneEl(t).getBoundingClientRect();
     const x = r.left - area.left;
     if (f.enter) {
       const dx = Math.min(140, r.width * 0.35) * (f.enter === 'left' ? -1 : 1);
@@ -153,7 +177,7 @@ function animatePanes(panes, from, vp, frames) {
   }).filter(Boolean);
   if (!plans.length) return;
   for (const p of plans) {
-    for (const el of [p.t.webview, p.frame].filter(Boolean)) {
+    for (const el of [paneEl(p.t), p.frame].filter(Boolean)) {
       el.style.transition = 'none';
       Object.assign(el.style, el === p.frame ? { transform: p.start.transform || '', opacity: p.start.opacity || '' } : p.start);
     }
@@ -161,13 +185,13 @@ function animatePanes(panes, from, vp, frames) {
   void vp.offsetWidth; // one style pass for every pane
   const transition = `transform ${SPLIT_MS}ms ${SPLIT_EASE}, opacity ${SPLIT_MS - 40}ms ease, clip-path ${SPLIT_MS}ms ${SPLIT_EASE}`;
   for (const p of plans) {
-    for (const el of [p.t.webview, p.frame].filter(Boolean)) {
+    for (const el of [paneEl(p.t), p.frame].filter(Boolean)) {
       el.style.transition = transition;
       Object.assign(el.style, el === p.frame ? { transform: '', opacity: '' } : p.end);
     }
   }
   clearTimeout(animatePanes.timer);
-  animatePanes.timer = setTimeout(() => { for (const p of plans) for (const el of [p.t.webview, p.frame].filter(Boolean)) el.style.transition = ''; }, SPLIT_MS + 60);
+  animatePanes.timer = setTimeout(() => { for (const p of plans) for (const el of [paneEl(p.t), p.frame].filter(Boolean)) el.style.transition = ''; }, SPLIT_MS + 60);
 }
 
 // ---------- each pane's control box ----------
@@ -293,8 +317,9 @@ function paneRects(tabs) {
   const area = $('#viewport').getBoundingClientRect();
   const out = new Map();
   for (const t of tabs) {
-    if (!t.webview || t.webview.classList.contains('hidden')) continue;
-    const r = t.webview.getBoundingClientRect();
+    const el = isInternal(t.url) ? paneRootOf(t) || (t.id === B.activeId && !$('#internal').hidden && $('#internal')) : t.webview;
+    if (!el || el.classList.contains('hidden')) continue;
+    const r = el.getBoundingClientRect();
     if (r.width) out.set(t.id, { x: r.left - area.left, w: r.width });
   }
   return out;
@@ -302,17 +327,19 @@ function paneRects(tabs) {
 
 // What the page area should be showing for `tab`: its panes and their sizes.
 function paneKey(tab) {
-  if (!tab || isInternal(tab.url)) return '';
-  const split = tab.splitId && splitById(tab.splitId);
-  return split ? `${splitTabs(split.id).map((t) => t.id).join(',')}|${split.sizes.map((x) => x.toFixed(4)).join(',')}` : String(tab.id);
+  const split = tab?.splitId && splitById(tab.splitId);
+  if (!tab || (isInternal(tab.url) && !split)) return '';
+  const part = (t) => (isInternal(t.url) ? `${t.id}:${internalName(t.url)}` : String(t.id));
+  return split ? `${splitTabs(split.id).map(part).join(',')}|${split.sizes.map((x) => x.toFixed(4)).join(',')}` : String(tab.id);
 }
 
 // After the tabs change (a pane closed, a tab left its split…), the page area catches up.
 function syncPanes() {
   const tab = activeTab();
-  if (!tab || isInternal(tab.url) || paneKey(tab) === B.paneKey) return;
+  if (tab && isInternal(tab.url) && !tab.splitId && $('#viewport').classList.contains('is-split')) { showContent(tab); return; } // the split ended around it
+  if (!tab || (isInternal(tab.url) && !tab.splitId) || paneKey(tab) === B.paneKey) return;
   const shown = tab.splitId ? splitTabs(tab.splitId) : [tab];
-  for (const t of B.tabs) t.webview?.classList.toggle('hidden', !shown.includes(t));
+  for (const t of B.tabs) t.webview?.classList.toggle('hidden', !shown.includes(t) || isInternal(t.url));
   layoutPanes(tab);
 }
 
@@ -331,9 +358,10 @@ function focusPane(tab) {
 // ---------- splitting and separating ----------
 // Puts `tab` in a split with `base` (the one showing), on `side` ('left' | 'right'), or adds it to base's split.
 function splitWith(base, tab, side = 'right') {
-  if (!canSplit(base) || !canSplit(tab) || base === tab) return toast('Split view works with web pages in regular tabs');
+  if (!canSplit(base) || !canSplit(tab) || base === tab) return toast('Split view works with regular tabs');
   const existing = base.splitId && splitById(base.splitId);
   if (existing && splitTabs(existing.id).length >= SPLIT_MAX) return toast(`Split view holds up to ${SPLIT_MAX} tabs`);
+  if (pageTwice(existing ? splitTabs(existing.id) : [base], tab)) return toast(`${tab.title} is already in this split view`);
   const before = sidebarRects([base, tab, ...(existing ? splitTabs(existing.id) : [])]);
   // where the panes were: the split as it was, or the page filling the whole area; the new one comes in from its side
   const from = paneRects(existing ? splitTabs(existing.id) : [base]);
@@ -351,6 +379,7 @@ function splitWith(base, tab, side = 'right') {
   const group = splitTabs(split.id);
   B.tabs.splice(side === 'left' ? B.tabs.indexOf(group[0]) : B.tabs.indexOf(group[group.length - 1]) + 1, 0, tab);
   tab.splitId = split.id;
+  tab.folderId = base.folderId; // in the split's folder (a split's tabs share one)
   const n = splitTabs(split.id).length;
   split.sizes = Array.from({ length: n }, () => 1 / n);
   B.activeId = tab.id;
@@ -415,22 +444,30 @@ function swapSplit(splitId) {
 
 // Shows `tab` (and its panes) with an animation; the page area's other bits (internal pages) are hidden.
 function showSplit(tab, anim) {
-  for (const t of B.tabs) t.webview?.classList.toggle('hidden', !((t.splitId && t.splitId === tab.splitId) || t === tab));
+  if (isInternal(tab.url) && !tab.splitId) { showContent(tab); notifyActiveTab(tab); updateChrome(); return; } // an Ultima page on its own
+  for (const t of B.tabs) t.webview?.classList.toggle('hidden', !((t.splitId && t.splitId === tab.splitId) || t === tab) || isInternal(t.url));
   $('#internal').hidden = true;
   $('#internal').innerHTML = '';
   layoutPanes(tab, anim);
   notifyActiveTab(tab);
   updateChrome();
-  setTimeout(() => tab.webview?.focus(), 0);
+  setTimeout(() => focusPaneContent(tab), 0);
+}
+
+// Keys go to the pane's page: its webview, or the element an Ultima page is drawn in
+function focusPaneContent(tab) {
+  if (!isInternal(tab.url)) { tab.webview?.focus(); return; }
+  if (document.activeElement?.tagName === 'WEBVIEW') document.activeElement.blur();
+  paneRootOf(tab)?.focus({ preventScroll: true });
 }
 
 // "Split view": the active tab with the regular tab you used last (that isn't in a split with it).
 function splitActive() {
   const tab = activeTab();
-  if (!canSplit(tab)) return toast('Open a web page to split its tab');
-  const other = spaceTabs().filter((t) => t !== tab && canSplit(t) && (!tab.splitId || t.splitId !== tab.splitId))
+  if (!canSplit(tab)) return toast('Split view works with regular tabs');
+  const other = spaceTabs().filter((t) => t !== tab && canSplit(t) && (!tab.splitId || t.splitId !== tab.splitId) && !pageTwice(tab.splitId ? splitTabs(tab.splitId) : [tab], t))
     .sort((a, b) => (b.lastActive || 0) - (a.lastActive || 0))[0];
-  if (!other) return toast('Open another web page to split this tab with');
+  if (!other) return toast('Open another tab to split this one with');
   return splitWith(tab, other, 'right');
 }
 
@@ -439,7 +476,7 @@ function focusNextPane(dir = 1) {
   if (!tab?.splitId) return;
   const panes = splitTabs(tab.splitId);
   focusPane(panes[(panes.indexOf(tab) + dir + panes.length) % panes.length]);
-  activeTab().webview?.focus();
+  focusPaneContent(activeTab());
 }
 
 // ---------- the sidebar animation: tabs glide from their rows into the split row (FLIP) ----------
@@ -555,6 +592,19 @@ function initSplitView() {
     else if (act === 'right') movePane(tab, 1);
     else if (act === 'out') unsplitTab(tab);
     else if (act === 'close') closeTab(tab.id);
+  });
+  const pagePane = (e) => {
+    const el = e.target.closest?.('.pane-page');
+    return el ? { el, tab: tabById(Number(el.dataset.panePage)) } : null;
+  };
+  vp.addEventListener('pointerdown', (e) => { const p = pagePane(e); if (p?.tab) focusPane(p.tab); }, true);
+  vp.addEventListener('pointermove', (e) => {
+    const p = pagePane(e);
+    if (p?.tab) setPaneHover(p.tab, e.clientY - p.el.getBoundingClientRect().top < 48);
+  });
+  vp.addEventListener('pointerout', (e) => {
+    const p = pagePane(e);
+    if (p?.tab && !p.el.contains(e.relatedTarget)) setPaneHover(p.tab, false);
   });
   vp.addEventListener('mouseleave', (e) => {
     const ctl = e.target.closest?.('.split-ctl');

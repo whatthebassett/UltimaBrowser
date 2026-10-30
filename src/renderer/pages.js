@@ -1,20 +1,47 @@
 // Built-in ultima:// pages, rendered directly in the browser UI.
-let pageTimer = null;
 
 // (`tab` null: a space with nothing open shows the new tab page on its own)
-function renderInternal(tab) {
-  clearInterval(pageTimer);
-  const root = $('#internal');
+// (`keepScroll`: redrawn in place, where it was scrolled to)
+function renderInternal(tab, { keepScroll = false } = {}) {
+  // its own element when it's a pane of a split (split.js), else the page area's
+  const root = (tab?.splitId && paneRootOf(tab)) || $('#internal');
+  clearInterval(root.pageTimer);
   const name = tab ? internalName(tab.url) : 'newtab';
   const pages = { newtab: pageNewTab, settings: pageSettings, history: pageHistory, waypoints: pageBookmarks, import: pageImport, passwords: pagePasswords, downloads: pageDownloads, shortcuts: pageShortcuts, tasks: pageTasks };
+  const top = keepScroll ? root.scrollTop : 0;
   root.scrollTop = 0;
-  (pages[name] || pageNewTab)(root, tab);
+  const drawn = (pages[name] || pageNewTab)(root, tab);
+  if (top) Promise.resolve(drawn).then(() => { root.scrollTop = top; });
 }
 
+// Every one on screen (the tab you're on, or a pane of its split) is redrawn when what it shows changes: where it was
+// scrolled to, and not while you're typing in one of its boxes or pressing on it (it's redrawn once you're done, so
+// what you're typing isn't lost and a click isn't swallowed by a row being replaced under it)
+const PAGE_REDRAW = { pressing: false, later: new Set() };
+const typingInPage = (root) => root.contains(document.activeElement)
+  && document.activeElement.matches('textarea, [contenteditable="true"], input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color])');
+function redrawPage(tab) {
+  const root = (tab.splitId && paneRootOf(tab)) || $('#internal');
+  if (PAGE_REDRAW.pressing || typingInPage(root)) { PAGE_REDRAW.later.add(tab.id); return; }
+  renderInternal(tab, { keepScroll: true });
+}
 const rerenderIfShowing = (name) => {
   const t = activeTab();
-  if (t && isInternal(t.url) && internalName(t.url) === name) renderInternal(t);
+  for (const s of t?.splitId ? splitTabs(t.splitId) : t ? [t] : []) if (isInternal(s.url) && internalName(s.url) === name) redrawPage(s);
 };
+// the redraws held back, once you've let go or left the box (if their page is still on screen)
+function redrawLater() {
+  setTimeout(() => {
+    const ids = [...PAGE_REDRAW.later];
+    PAGE_REDRAW.later.clear();
+    const t = activeTab();
+    const shown = t?.splitId ? splitTabs(t.splitId) : t ? [t] : [];
+    for (const s of shown) if (ids.includes(s.id) && isInternal(s.url)) redrawPage(s);
+  }, 0);
+}
+document.addEventListener('pointerdown', () => { PAGE_REDRAW.pressing = true; }, true);
+document.addEventListener('pointerup', () => { PAGE_REDRAW.pressing = false; if (PAGE_REDRAW.later.size) redrawLater(); }, true);
+document.addEventListener('focusout', () => { if (PAGE_REDRAW.later.size) redrawLater(); }, true);
 
 // ---------- new tab ----------
 async function pageNewTab(root, tab) {
@@ -39,7 +66,7 @@ async function pageNewTab(root, tab) {
     $('#ntp-greet').textContent = `${hr < 5 ? 'Good night' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'} · ${now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' })}`;
   };
   tick();
-  pageTimer = setInterval(tick, 10000);
+  root.pageTimer = setInterval(tick, 10000);
   const q = $('#ntp-q');
   q.addEventListener('keydown', (e) => {
     if (matchesKey(e, 'field.submit') && q.value.trim()) go(resolveInput(q.value, B.settings.searchEngine));

@@ -39,6 +39,7 @@ const hostApi = {
   storageChanged: (changes, area) => send('ultima:ext-storage-changed', changes, String(area)),
   alarms: (op, args) => invoke('ultima:ext-alarms', String(op), Array.isArray(args) ? args : []),
   unsupported: (name) => send('ultima:ext-unsupported', String(name)),
+  externalReply: (token, response) => send('ultima:ext-external-reply', Number(token), response),
   call: (area, op, args) => invoke('ultima:ext-call', String(area), String(op), Array.isArray(args) ? args : []),
   onEvent: (cb) => {
     onHostEvent = cb;
@@ -370,7 +371,40 @@ install(
     // ---- runtime extras ----
     if (chrome.runtime) {
       const manifest = chrome.runtime.getManifest?.() || {};
+      // Messages from the web pages it lets talk to it (externally_connectable: claude.ai, for Claude's extension).
+      // Electron never delivers them; Ultima does (main.js), to each of the extension's contexts, and the first answer
+      // goes back to the page. One that comes before anything listens waits for the first listener, as its background
+      // may have been woken for it.
+      const externalListeners = new Set();
+      const heldExternal = [];
+      const deliverExternal = (token, message, sender) => {
+        let answered = false;
+        const respond = (response) => { if (!answered) { answered = true; host?.externalReply?.(token, response); } };
+        let later = false;
+        for (const f of [...externalListeners]) {
+          try {
+            const r = f(message, sender, respond);
+            if (r === true) later = true;
+            else if (r && typeof r.then === 'function') { later = true; r.then(respond, () => respond(undefined)); }
+          } catch (err) { setTimeout(() => { throw err; }); }
+        }
+        if (!later) respond(undefined);
+      };
+      liveEvent('runtime.messageExternal').addListener((token, message, sender) => {
+        if (externalListeners.size) deliverExternal(token, message, sender);
+        else if (heldExternal.length < 20) heldExternal.push([token, message, sender]);
+      });
+      const onMessageExternal = {
+        addListener: (f) => {
+          externalListeners.add(f);
+          while (heldExternal.length) { const args = heldExternal.shift(); setTimeout(() => deliverExternal(...args)); }
+        },
+        removeListener: (f) => externalListeners.delete(f),
+        hasListener: (f) => externalListeners.has(f),
+        hasListeners: () => externalListeners.size > 0,
+      };
       define('runtime', patched(chrome.runtime, {
+        onMessageExternal,
         // real answers from Ultima: which popups, tabs, offscreen documents and workers this extension has open
         onInstalled: liveEvent('runtime.onInstalled'), // Electron never fires it; Ultima does (see announceInstall)
         getContexts: async (filter, ...a) => done(typeof filter === 'function' ? [filter] : a, host?.getContexts ? await host.getContexts(typeof filter === 'object' ? filter : {}) : []),

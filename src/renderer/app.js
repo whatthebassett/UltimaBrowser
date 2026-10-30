@@ -286,41 +286,8 @@ async function onPageMenu({ token, webContentsId, x, y, items }) {
 }
 
 async function onAsk({ id, kind, payload }) {
-  let answer = null;
-  if (kind === 'permission') {
-    const r = await showDialog({
-      icon: 'shield',
-      title: `${payload.site} wants to ${payload.what}`,
-      buttons: [{ id: 'block', label: 'Block' }, { id: 'allow', label: 'Allow', primary: true }],
-      checkbox: { label: 'Remember my decision for this site', checked: true },
-    });
-    answer = { allow: r.id === 'allow', remember: r.checked && r.id !== null };
-  } else if (kind === 'login') {
-    // a server or proxy asking for a username and password (see the app 'login' handler in main.js)
-    const r = await showDialog({
-      icon: 'key',
-      title: payload.proxy ? `The proxy ${payload.host} needs you to sign in` : `${payload.host} needs you to sign in`,
-      message: [
-        payload.retry && 'That username or password didn’t work. Try again.',
-        payload.realm && `It says: “${payload.realm}”`,
-        payload.insecure && 'Your sign-in will be sent over a connection that isn’t private.',
-      ].filter(Boolean).join(' '),
-      fields: [{ id: 'username', label: 'Username' }, { id: 'password', label: 'Password', type: 'password' }],
-      buttons: [{ id: 'cancel', label: 'Cancel' }, { id: 'signin', label: 'Sign in', primary: true }],
-    });
-    answer = r.id === 'signin' && r.values.username ? { username: r.values.username, password: r.values.password } : null;
-  } else if (kind === 'page-dialog') {
-    // a page's alert(), confirm() or prompt() (see dialog-preload.js)
-    const { type, message, value, from } = payload;
-    const r = await showDialog({
-      title: from ? `${from} says` : 'This page says',
-      message,
-      fields: type === 'prompt' ? [{ id: 'value', label: '', value }] : undefined,
-      buttons: type === 'alert' ? [{ id: 'ok', label: 'OK', primary: true }] : [{ id: 'cancel', label: 'Cancel' }, { id: 'ok', label: 'OK', primary: true }],
-    });
-    if (type === 'prompt') answer = r.id === 'ok' ? r.values.value : null;
-    else answer = type === 'confirm' ? r.id === 'ok' : null;
-  }
+  // screen sharing has its own picker (sitesettings.js); the rest are dialogs (askDialog in overlays.js)
+  const answer = kind === 'screen-share' ? await pickScreenShare(payload) : await askDialog(kind, payload);
   window.ultima.answerAsk({ id, answer });
 }
 
@@ -536,7 +503,7 @@ async function boot() {
   $('#brand').innerHTML = `${LOGO}<span>Ultima</span>${B.private ? `<span class="private-badge" title="Pages you visit here aren’t saved">${icon('incognito', 13)} Private</span>` : ''}`;
   // the sidebar's customizable buttons are set up in sidebarbuttons.js
   const buttons = {
-    'btn-collapse': ['sidebar', 'toggle-sidebar'], 'btn-star': ['star', 'bookmark'], 'btn-find': ['find', 'find'], 'btn-key': ['key', 'fill-login'],
+    'btn-star': ['star', 'bookmark'], 'btn-find': ['find', 'find'], 'btn-key': ['key', 'fill-login'],
   };
   for (const [id, [ic, cmd]] of Object.entries(buttons)) {
     const b = document.getElementById(id);
@@ -551,6 +518,10 @@ async function boot() {
   $('#btn-url-menu').innerHTML = icon('sliders', 16);
   initExtensionsUi();
   initSiteSettings();
+  // what Settings shows about them, asked now: asked while Settings draws, the answer redraws it (and a search typed
+  // meanwhile is lost)
+  refreshDefaultBrowser();
+  refreshDownloadDir();
   initBlocking();
   initTabHistory();
   initWidgets();

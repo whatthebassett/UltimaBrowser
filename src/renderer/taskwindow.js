@@ -31,9 +31,10 @@ function describeProcess(p) {
   if (p.contents.some((c) => c.type === 'window')) return { ...row, icon: icon('sidebar', 18), title: 'Ultima window', sub: 'The sidebar, toolbar and built-in pages', canEnd: false };
   if (!p.contents.length) return { ...row, icon: icon('puzzle', 18), title: 'Background process', sub: 'Extension or page getting ready' };
   const pages = p.contents.map((c) => {
+    // (a private page, a glance of one too, never shows what it is)
+    if (c.private) return { kind: c.glance ? 'Glance' : 'Private tab', title: c.glance ? 'Private glance' : 'Private tab', fav: icon('incognito', 16), open: c.glance ? undefined : c.id };
     if (c.glance) return { kind: 'Glance', title: c.title || c.url, fav: favHtml(c.favicon, c.url, c.title) };
     if (c.extension) return { kind: 'Extension', title: c.extension, fav: icon('puzzle', 16) };
-    if (c.private) return { kind: 'Private tab', title: 'Private tab', fav: icon('incognito', 16), open: c.id };
     return { kind: 'Tab', title: c.title || c.url, fav: favHtml(c.favicon, c.url, c.title), open: c.id };
   });
   const first = pages[0];

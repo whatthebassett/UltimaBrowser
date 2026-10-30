@@ -1,6 +1,7 @@
 // Site settings (definitions in sitepermissions.js, enforced in main.js): what each site may do, its cookies and
 // stored data. Shown for the current site in the address bar menu and for every site in Settings → Site settings.
-const SITE = { panel: null }; // the address bar menu's site view: { origin, record, defaults, cookies, reload }
+const SITE = { panel: null, shareThumbs: null }; // panel: the address bar menu's site view ({ origin, record, defaults, cookies, reload });
+// shareThumbs: the open screen sharing picker takes the previews of windows and screens as they arrive
 
 const siteOrigin = (url) => { try { const u = new URL(url); return /^https?:$/.test(u.protocol) ? u.origin : null; } catch { return null; } };
 const siteHost = (origin) => { try { return new URL(origin).host; } catch { return origin; } };
@@ -38,6 +39,72 @@ async function applySiteSound(tab) {
   const site = origin ? await window.ultima.siteGet(origin) : null;
   tab.siteMuted = Boolean(site) && SITE_PERMS.effective(site.record, 'sound', site.defaults) === false;
   if (ready(tab)) tab.webview.setAudioMuted(Boolean(tab.muted || tab.siteMuted));
+}
+
+// ---------- screen sharing: choosing a tab, a window or a screen (asked by shareScreen in main.js) ----------
+const SHARE_KINDS = [['tab', 'Tab'], ['window', 'Window'], ['screen', 'Entire screen']];
+
+// Resolves { id, audio } for what to share, or null
+function pickScreenShare({ site, screenAudio, choices }) {
+  return dialogTurn(() => new Promise((resolve) => {
+    const kinds = SHARE_KINDS.filter(([k]) => choices.some((c) => c.kind === k));
+    let kind = kinds[0]?.[0];
+    let chosen = null;
+    const el = h(`<div class="dlg-backdrop"><div class="dlg share-dlg" role="dialog" aria-modal="true">
+      <div class="dlg-icon">${icon('monitor', 22)}</div>
+      <div class="dlg-title">${esc(site)} wants to see your screen</div>
+      <div class="dlg-msg">Choose what to share.</div>
+      <div class="seg share-kinds">${kinds.map(([k, label]) => `<button data-kind="${k}">${label}</button>`).join('')}</div>
+      <div class="share-list"></div>
+      <label class="dlg-check share-audio"><input type="checkbox" checked> Share sound too</label>
+      <div class="dlg-buttons"><button class="btn" data-id="cancel">Cancel</button><button class="btn primary" data-id="share">Share</button></div>
+    </div></div>`);
+    const list = $('.share-list', el);
+    const shareBtn = $('[data-id="share"]', el);
+    const render = () => {
+      const focused = document.activeElement?.dataset?.cid;
+      $$('[data-kind]', el).forEach((b) => b.classList.toggle('on', b.dataset.kind === kind));
+      const shown = choices.filter((c) => c.kind === kind);
+      list.classList.toggle('rows', kind === 'tab');
+      list.innerHTML = shown.map((c) => `<button class="share-item ${c.id === chosen ? 'on' : ''}" data-cid="${esc(c.id)}" title="${esc(c.name)}">
+          ${kind === 'tab' ? '' : `<span class="share-thumb">${c.thumb ? `<img src="${c.thumb}" alt="">` : ''}</span>`}
+          <span class="share-name">${c.icon ? `<img class="share-ic" src="${esc(c.icon)}" alt="">` : ''}<span>${esc(c.name)}</span></span>
+        </button>`).join('') || '<div class="share-none">Nothing to share here</div>';
+      shareBtn.disabled = !shown.some((c) => c.id === chosen);
+      if (focused) $(`[data-cid="${CSS.escape(focused)}"]`, list)?.focus();
+      // a window has no sound of its own to share; a screen's sound is shared only on Windows
+      const sound = $('.share-audio', el);
+      if (sound) sound.hidden = kind === 'window' || (kind === 'screen' && !screenAudio);
+    };
+    const restoreFocus = document.activeElement;
+    const finish = (id) => {
+      if (!OV.dialog) return;
+      OV.dialog = null;
+      SITE.shareThumbs = null;
+      el.remove();
+      if (restoreFocus && document.contains(restoreFocus)) restoreFocus.focus();
+      const sound = $('.share-audio', el);
+      resolve(id ? { id, audio: Boolean(sound && !sound.hidden && $('input', sound).checked) } : null);
+    };
+    OV.dialog = { finish };
+    SITE.shareThumbs = (thumbs) => { choices.forEach((c) => Object.assign(c, thumbs[c.id])); render(); };
+    el.addEventListener('click', (e) => {
+      const k = e.target.closest('[data-kind]');
+      const item = e.target.closest('[data-cid]');
+      const b = e.target.closest('[data-id]');
+      if (k) { kind = k.dataset.kind; render(); } else if (item) { chosen = item.dataset.cid; render(); } else if (b) finish(b.dataset.id === 'share' ? chosen : null);
+      else if (e.target === el) finish(null);
+    });
+    el.addEventListener('dblclick', (e) => { const item = e.target.closest('[data-cid]'); if (item) finish(item.dataset.cid); });
+    el.addEventListener('keydown', (e) => {
+      if (matchesKey(e, 'dialog.cancel')) { e.preventDefault(); e.stopPropagation(); finish(null); } else if (matchesKey(e, 'dialog.confirm') && chosen && !e.target.closest('[data-kind]')) {
+        e.preventDefault(); e.stopPropagation(); finish(e.target.closest('[data-cid]')?.dataset.cid || chosen);
+      }
+    });
+    render();
+    document.body.append(el);
+    ($('.share-item', el) || $('[data-id="cancel"]', el)).focus();
+  }));
 }
 
 // ---------- the address bar menu's site view ----------
@@ -176,6 +243,7 @@ async function pageSiteSettings(el) {
   let filter = '';
 
   const render = async () => {
+    const refocus = document.activeElement?.matches?.('[data-site-filter]'); // (typing in the filter, even emptying it)
     const { sites, defaults } = await window.ultima.siteList();
     const shown = sites.filter((s) => !filter || s.origin.toLowerCase().includes(filter)).sort((a, b) => siteHost(a.origin).localeCompare(siteHost(b.origin)));
     el.innerHTML = [
@@ -202,7 +270,7 @@ async function pageSiteSettings(el) {
       </section>`,
       sites.length ? `<div class="s-actions"><button class="btn danger" data-site-reset-all>Reset all sites</button></div>` : '',
     ].join('');
-    if (filter) { const input = $('[data-site-filter]', el); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
+    if (refocus) { const input = $('[data-site-filter]', el); input?.focus(); input?.setSelectionRange(input.value.length, input.value.length); }
   };
 
   el.addEventListener('change', async (e) => {
@@ -232,6 +300,7 @@ async function pageSiteSettings(el) {
 }
 
 function initSiteSettings() {
+  window.ultima.on('share-thumbs', (thumbs) => SITE.shareThumbs?.(thumbs));
   window.ultima.on('popup-blocked', ({ origin, site }) => {
     toast(`Pop-up blocked on ${site}`, { label: 'Always allow', run: () => window.ultima.siteSet({ origin, key: 'popups', value: true }) });
   });

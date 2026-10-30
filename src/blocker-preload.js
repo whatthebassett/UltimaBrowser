@@ -155,13 +155,18 @@ function runScriptlets(list) {
     const make = (owner, path) => {
       const pos = path.indexOf('.');
       if (pos === -1) {
-        const desc = Object.getOwnPropertyDescriptor(owner, path);
-        let value = desc && !desc.get ? owner[path] : undefined;
+        // the property where it really is: on the object or up its prototype chain (document.getElementsByTagName is
+        // Document.prototype's), so every script but the one aborted still gets the real thing
+        let desc;
+        for (let o = owner; o && !desc; o = Object.getPrototypeOf(o)) desc = Object.getOwnPropertyDescriptor(o, path);
+        const getter = desc && typeof desc.get === 'function' ? desc.get : null;
+        const setter = desc && typeof desc.set === 'function' ? desc.set : null;
+        let value = getter ? undefined : owner[path];
         try {
           Object.defineProperty(owner, path, {
             configurable: true,
-            get() { onRead(); return desc && desc.get ? desc.get.call(owner) : value; },
-            set(a) { onWrite(); if (desc && desc.set) desc.set.call(owner, a); else value = a; },
+            get() { onRead(); return getter ? getter.call(owner) : value; },
+            set(a) { onWrite(); if (setter) setter.call(owner, a); else value = a; },
           });
         } catch { /* not configurable */ }
         return;

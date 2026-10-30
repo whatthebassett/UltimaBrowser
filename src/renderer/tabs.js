@@ -250,12 +250,17 @@ function notifyActiveTab(tab) {
 // with nothing open in it), the new tab page shows, without a tab of its own: what you open from it gets one.
 function showContent(tab) {
   if (!tab) { showNoTab(); return; }
-  const panes = tab.splitId && !isInternal(tab.url) ? splitTabs(tab.splitId) : [tab];
+  // (a split's panes can be Ultima's own pages too: split.js draws those in the panes)
+  const panes = tab.splitId ? splitTabs(tab.splitId) : [tab];
   for (const t of B.tabs) t.webview?.classList.toggle('hidden', !(panes.includes(t) && !isInternal(t.url)));
-  layoutPanes(isInternal(tab.url) ? null : tab);
+  layoutPanes(isInternal(tab.url) && !tab.splitId ? null : tab);
   const internal = $('#internal');
   window.ultima.setKeyRecording(false); // leaving the shortcut recorder, however it happens, re-arms shortcuts
-  if (isInternal(tab.url)) {
+  if (tab.splitId) {
+    internal.hidden = true;
+    internal.innerHTML = '';
+    if ($('#palette-backdrop').hidden) setTimeout(() => { if (!B.renaming) focusPaneContent(tab); }, 0);
+  } else if (isInternal(tab.url)) {
     // keystrokes must not keep going to a page that is now hidden
     if (document.activeElement?.tagName === 'WEBVIEW') document.activeElement.blur();
     internal.hidden = false;
@@ -285,6 +290,7 @@ function showNoTab() {
 // unloading or moving it), the window closes too, as in Chrome.
 function leaveEmpty({ closing = false } = {}) {
   B.activeId = null;
+  closeGlance({ instant: true }); // (a glance belongs to the tab that's gone, not to the empty space)
   if (closing && windowHasNothingOpen()) { closeEmptyWindow(); return; }
   showContent(null);
   notifyActiveTab(null);
@@ -332,6 +338,7 @@ function navigate(tab, url) {
     tab.webview.loadURL(url).catch(() => {});
   }
   if (tab.id === B.activeId) showContent(tab);
+  else if (tab.splitId && tab.splitId === activeTab()?.splitId) showContent(activeTab());
   renderTabs();
   updateChrome();
   saveSession();
@@ -442,6 +449,7 @@ function unloadTab(tab, { closing = false } = {}) {
   const next = B.activeId === tab.id ? pickNextTab(tab) : undefined;
   if (next) activateTab(next.id);
   dropWebview(tab);
+  if (tab.splitId) tab.splitId = undefined; // out of its split view (its pane would stay blank)
   sendHome(tab);
   if (next === null || !B.activeId) { leaveEmpty({ closing }); if (B.closing) return; }
   renderTabs();
@@ -773,6 +781,7 @@ async function tabContextMenu(tab) {
   if (choice?.startsWith('space:')) return moveTabToSpace(tab, choice.slice(6));
   if (choice === 'space-new') {
     const s = createSpace(false);
+    if (!s?.id) return undefined; // (a private window has no spaces: it said so)
     moveTabToSpace(tab, s.id);
     switchSpace(s.id, tab);
     return startRenameSpace();
