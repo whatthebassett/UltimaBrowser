@@ -122,6 +122,13 @@ function openLevel(items, pos, parentItemEl) {
     const itemEl = e.target.closest('.ctx-item');
     if (itemEl) activateItem(level, Number(itemEl.dataset.i), itemEl);
   });
+  // middle-click: an item's `middle` choice, when it has one (a Waypoint: in a new tab)
+  el.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+  el.addEventListener('auxclick', (e) => {
+    const itemEl = e.button === 1 && e.target.closest('.ctx-item');
+    const it = itemEl && items[Number(itemEl.dataset.i)];
+    if (it?.middle && it.enabled !== false) closeMenu(it.middle);
+  });
   return level;
 }
 

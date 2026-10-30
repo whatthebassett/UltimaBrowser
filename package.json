@@ -1,7 +1,7 @@
 {
   "name": "ultima-browser",
   "productName": "Ultima Browser",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Ultima Browser — a vertical-tabs browser with a Control Palette and one-click import from Chrome, Edge, Firefox and Zen.",
   "main": "src/main/main.js",
   "author": "UltimaBass <me@ultimabass.com>",

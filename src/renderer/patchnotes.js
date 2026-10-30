@@ -5,6 +5,14 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.3.1',
+    date: '2026-10-30',
+    fixed: [
+      ['Middle-clicking Waypoints', 'Middle-clicking a Waypoint in a folder’s menu opens it in a new tab.'],
+      ['Middle-clicking closed pinned tabs', 'Middle-clicking a closed pinned tab removes it from the sidebar.'],
+    ],
+  },
+  {
     version: '0.3.0',
     date: '2026-10-29',
     highlights: [

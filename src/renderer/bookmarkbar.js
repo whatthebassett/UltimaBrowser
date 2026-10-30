@@ -64,16 +64,17 @@ function fitBookmarkBar() {
   for (const el of items) if (el.getBoundingClientRect().right > limit + 0.5) el.classList.add('bmb-over');
 }
 
-// Menu items for a folder's contents; subfolders become submenus. Ids: "bm:<id>" opens, "all:<folder>" opens all.
+// Menu items for a folder's contents; subfolders become submenus. Ids: "bm:<id>" opens, "bg:<id>" (middle-click)
+// opens in a background tab, "all:<folder>" opens all (middle-clicking a folder too).
 function bmMenuItems(parent, only) {
   const kids = only || bmChildren(parent);
   const items = kids.map((n) => (n.type === 'folder'
-    ? { label: n.title, icon: 'folder', submenu: bmMenuItems(n.id) }
-    : { id: `bm:${n.id}`, label: n.title || n.url, leadHtml: favHtml(bmFavicon(n), n.url, n.title) }));
+    ? { label: n.title, icon: 'folder', submenu: bmMenuItems(n.id), middle: `all:${n.id}` }
+    : { id: `bm:${n.id}`, middle: `bg:${n.id}`, label: n.title || n.url, leadHtml: favHtml(bmFavicon(n), n.url, n.title) }));
   if (!items.length) return [{ label: '(empty)', enabled: false }];
   if (only) return items;
   const urls = kids.filter((n) => n.type === 'url').length;
-  return [...items, { type: 'separator' }, { id: `all:${parent}`, label: `Open all (${urls})`, icon: 'external', enabled: urls > 0 }];
+  return [...items, { type: 'separator' }, { id: `all:${parent}`, middle: `all:${parent}`, label: `Open all (${urls})`, icon: 'external', enabled: urls > 0 }];
 }
 
 async function openBookmarkFolderMenu(anchor, items) {
@@ -82,6 +83,7 @@ async function openBookmarkFolderMenu(anchor, items) {
   const choice = await showMenu(items, { x: r.left, y: r.bottom + 3 });
   anchor.classList.remove('open');
   if (choice?.startsWith('bm:')) openBookmark(bmNode(choice.slice(3)), 'here');
+  else if (choice?.startsWith('bg:')) openBookmark(bmNode(choice.slice(3)), 'background');
   else if (choice?.startsWith('all:')) openAllBookmarks(choice.slice(4));
 }
 

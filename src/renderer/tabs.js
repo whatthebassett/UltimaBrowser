@@ -823,7 +823,11 @@ function initTabStrip() {
     const zone = zoneOf[container.id];
     container.addEventListener('mousedown', (e) => {
       const el = e.target.closest('[data-tab]');
-      if (el && e.button === 1) { e.preventDefault(); closeTab(Number(el.dataset.tab)); }
+      if (!el || e.button !== 1) return;
+      e.preventDefault();
+      // a pinned tab that's already closed: out of the sidebar
+      const tab = tabById(Number(el.dataset.tab));
+      closeTab(tab.id, { remove: tab.zone === 'pinned' && isUnloaded(tab) });
     });
     container.addEventListener('click', (e) => {
       const el = e.target.closest('[data-tab]');
