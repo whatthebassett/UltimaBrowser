@@ -15,7 +15,7 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 <br>
 
-<img src="docs/images/welcome.jpg" alt="Ultima's welcome" width="860">
+<img src="docs/images/browser.jpg" alt="Ultima with vertical tabs, Essentials and a tab folder" width="860">
 
 </div>
 
