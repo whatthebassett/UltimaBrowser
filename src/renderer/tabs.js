@@ -642,6 +642,7 @@ function renderTabs() {
   restoreTabRename();
   pruneTabSelection();
   syncPanes();
+  renderMiniPlayer(); // a tab you left playing (miniplayer.js)
 }
 
 // ---------- renaming tabs ----------

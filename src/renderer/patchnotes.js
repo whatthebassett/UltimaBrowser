@@ -5,6 +5,22 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.4.0',
+    date: '2026-11-02',
+    new: [
+      ['Automatic updates', 'Ultima downloads new versions by itself and installs them when you close it.'],
+      ['Mini player', 'Control what your other tabs are playing, and watch their videos, from a small player you can put anywhere.'],
+      ['Browser sounds', 'An experimental soft tick when you click things in Ultima.'],
+    ],
+    improved: [
+      ['Address bar menu', 'With tabs across the top, the address bar menu opens under its button.'],
+    ],
+    fixed: [
+      ['Passkey pop-ups', 'Windows’ passkey prompt no longer pops up when your password manager extension handles passkeys.'],
+      ['Data folder in Settings', 'A long folder path no longer squeezes its name in Settings → About.'],
+    ],
+  },
+  {
     version: '0.3.1',
     date: '2026-10-30',
     fixed: [

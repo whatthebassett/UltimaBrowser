@@ -243,9 +243,19 @@ function openUrlMenu() {
   EXT.menu = el;
   renderUrlMenu();
   const r = $('#urlbar').getBoundingClientRect();
-  el.style.left = `${r.left}px`;
   el.style.top = `${r.bottom + 6}px`;
-  el.style.minWidth = `${Math.max(280, r.width)}px`;
+  if (document.body.classList.contains('htabs')) {
+    // horizontal tabs' address bar spans the window: the menu opens under its button (kept on screen) instead of stretching across
+    const b = $('#btn-url-menu').getBoundingClientRect();
+    const mid = b.width ? b.left + b.width / 2 : r.left + r.width / 2;
+    const left = Math.min(Math.max(8, mid - 180), window.innerWidth - 368);
+    el.classList.add('centered');
+    el.style.left = `${left}px`;
+    el.style.transformOrigin = `${mid - left}px 0`;
+  } else {
+    el.style.left = `${r.left}px`;
+    el.style.minWidth = `${Math.max(280, r.width)}px`;
+  }
   el.focus();
   el.addEventListener('keydown', (e) => {
     if (matchesKey(e, 'popover.close')) { e.preventDefault(); e.stopPropagation(); closeUrlMenu(); }

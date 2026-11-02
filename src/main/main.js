@@ -13,6 +13,7 @@ const defaultBrowser = require('./defaultbrowser');
 const taskManager = require('./taskmanager');
 const tearoff = require('./tearoff');
 const { initPasswords } = require('./passwords');
+const { initUpdater } = require('./updater');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -51,6 +52,7 @@ let sessionStore;
 let data;
 let extensions;
 let passwords; // filling and saving logins in pages (passwords.js)
+let updater; // Ultima's own updates (updater.js)
 const downloads = new Map();
 
 const DEFAULT_SETTINGS = {
@@ -77,6 +79,11 @@ const DEFAULT_SETTINGS = {
   essentialsHeight: 44,
   // sidebar style, in every space and window (renderer/sidebarstyle.js)
   widgetOpen: 'dropdown', // what the Waypoints, History and Downloads buttons open: a dropdown, or the page (widgets.js)
+  tabGlow: true, // tabs glow in the accent color when you point at them
+  miniPlayer: true, // what other tabs are playing, with its controls, in a window of its own (renderer/miniplayer.js, player.js)
+  miniPlayerAt: null, // where its bottom right corner is: { right, bottom }
+  miniPlayerWidth: 400, // a video's width in it
+  miniPlayerDocked: false, // docked in the sidebar (dragged there), not floating
   tabLayout: 'vertical', // vertical (the sidebar) or horizontal (a tab strip across the top): renderer/tablayout.js
   sidebarFont: 'inter', // inter, system, serif, mono, or "font:<family>" for an installed font
   sidebarTextSize: 13, // px
@@ -110,6 +117,7 @@ const DEFAULT_SETTINGS = {
   caretBrowsing: false, // a text cursor in pages (caret-preload.js), F7
   uiContrast: false,
   reduceMotion: false,
+  browserSounds: false, // experimental: a tick when you click things in Ultima
   hardwareAcceleration: true, // read at startup (HARDWARE_ACCELERATION above); a change applies after a restart
   taskManagerWindow: null, // where the task manager's window was last: { x, y, width, height }
   // passwords (passwords.js, renderer/vault.js)
@@ -267,6 +275,15 @@ function pageContextMenu(wc, p) {
       ...(p.linkText?.trim() ? [item('Copy link text', () => clipboard.writeText(p.linkText.trim()), { icon: 'copy' })] : []),
       sep,
     );
+  }
+  // a video: into the mini player (or back to the page), as its own button over it does (media-preload.js)
+  if (p.mediaType === 'video' && settings.data.miniPlayer !== false && p.mediaFlags?.canShowPictureInPicture !== false) {
+    const frame = p.frame && !p.frame.detached ? p.frame : wc.mainFrame;
+    const popped = Boolean(mediaFrames.get(wc.id)?.get(frameKey(frame))?.state.popout);
+    t.push(item(popped ? 'Back to the page' : 'Open in mini player', () => {
+      try { if (!frame.detached) frame.send('ultima:media-control', 'pop', 0); } catch { /* the frame has gone */ }
+    }, { icon: 'pip' }));
+    if (!p.srcURL || p.srcURL.startsWith('blob:')) t.push(sep);
   }
   if (p.mediaType === 'image' && p.srcURL) {
     t.push(
@@ -440,6 +457,307 @@ function dropBlockedWorkers(wc) {
 // a click or key press in any of a page's frames (activation-preload.js), by the page's webContents id
 const framePressedAt = new Map();
 ipcMain.on('ultima:user-activation', (e) => { framePressedAt.set(e.sender.id, Date.now()); });
+// ---------- the mini player ----------
+// What each page is playing (media-preload.js), by the page's webContents id: an entry for each of its frames that
+// has a player. Its window hears about the one that counts (the latest to play, or else the latest to report) and
+// picks the tab to show (renderer/miniplayer.js). The player is a window of its own (renderer/player.html), above
+// every other window, that you can drag onto any screen. Its buttons go back to the page's frame, and a video's
+// picture comes from that frame over a connection inside this computer: this only passes each end's description on.
+const mediaFrames = new Map(); // webContents id → Map(frame key → { frame, state, at })
+const frameKey = (frame) => `${frame.processId}:${frame.routingId}`;
+function pageMedia(id) {
+  const list = [...(mediaFrames.get(id)?.values() || [])].sort((a, b) => b.at - a.at);
+  return list.find((m) => m.state.playing) || list[0] || null;
+}
+function sendPageMedia(wc, id) {
+  const m = pageMedia(id);
+  sendTo(windowOf(wc), 'media-state', { webContentsId: id, state: m ? { ...m.state, at: m.at } : null });
+}
+const clip = (v, n) => String(v || '').slice(0, n);
+ipcMain.on('ultima:media', (e, json) => {
+  const wc = e.sender;
+  const frame = e.senderFrame;
+  if (!frame || wc.getType() !== 'webview') return;
+  let s = null;
+  try { s = JSON.parse(String(json)); } catch { return; }
+  const id = wc.id;
+  let frames = mediaFrames.get(id);
+  if (!frames) {
+    frames = new Map();
+    mediaFrames.set(id, frames);
+    wc.once('destroyed', () => mediaFrames.delete(id));
+    wc.on('render-process-gone', () => { mediaFrames.delete(id); sendPageMedia(wc, id); });
+  }
+  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+  if (s && typeof s === 'object') {
+    frames.set(frameKey(frame), {
+      frame,
+      at: Date.now(),
+      state: {
+        playing: Boolean(s.playing), title: clip(s.title, 300), artist: clip(s.artist, 300),
+        artwork: /^(https?:|data:image\/)/.test(s.artwork || '') ? clip(s.artwork, 100000) : '',
+        duration: num(s.duration), position: num(s.position), rate: num(s.rate) || 1,
+        video: Boolean(s.video), width: num(s.width), height: num(s.height), popout: Boolean(s.popout),
+        next: Boolean(s.next), prev: Boolean(s.prev), seek: Boolean(s.seek),
+      },
+    });
+  } else frames.delete(frameKey(frame));
+  sendPageMedia(wc, id);
+});
+const PAGE_MEDIA_ACTIONS = new Set(['toggle', 'next', 'prev', 'seek', 'skip', 'unpop', 'stream', 'stream-stop']);
+function controlPage(wc, action, arg) {
+  const frame = wc && !wc.isDestroyed() ? pageMedia(wc.id)?.frame : null;
+  try {
+    if (!frame || frame.detached) return;
+    // while its video is in the player, the page counts as shown even with its window minimized or covered, so
+    // Chromium doesn't stop its video to save power (it would freeze in the player); its sound plays on either way
+    if (action === 'stream' || action === 'stream-stop') wc.setBackgroundThrottling(action === 'stream-stop');
+    if (PAGE_MEDIA_ACTIONS.has(action)) frame.send('ultima:media-control', action, Number(arg) || 0);
+    else if (action === 'answer' && typeof arg === 'string') frame.send('ultima:media-control', 'answer', arg.slice(0, 200000));
+  } catch { /* the frame has gone */ }
+}
+
+// The player: one, for every Ultima window. Each window says which of its tabs it would show (or none); the player
+// shows a page's picture-in-picture video first, then one playing, then the window you used last's.
+// It floats in a window of its own, or, dragged into a sidebar, sits docked there (miniplayer.js draws it then, with
+// the same code: player.js); dragged out of the sidebar, it floats again. Docked, it's in the sidebar of the window
+// with the tab it shows, while that sidebar is out (not hidden or compact) and the window isn't minimized.
+const PLAYER = {
+  win: null,
+  wants: new Map(), // Ultima window id → what it would show
+  shown: null,
+  host: null, // the webContents drawing it now: the player window's, or a sidebar's
+  zones: new Map(), // Ultima window id → its sidebar, where the player can dock ({ x, y, width, height } in the window)
+  over: null, // the window whose sidebar a dragged player is over
+  grab: null, // dragged out of a sidebar: where the pointer holds it ({ fx, fy } of its size), where the pointer is, and who drags it
+  noVideo: new Set(), // pages whose video can't be shown here (protected video): the player shows their artwork
+  at: null, // where its bottom right corner is, on the screen (kept in settings.miniPlayerAt)
+  bounds: null, // where it is now
+};
+const playerWindow = () => (PLAYER.win && !PLAYER.win.isDestroyed() ? PLAYER.win : null);
+
+function openPlayerWindow() {
+  if (playerWindow()) return PLAYER.win;
+  const win = new BrowserWindow({
+    width: 360, height: 220, show: false, frame: false, transparent: true, backgroundColor: '#00000000', hasShadow: false,
+    resizable: false, maximizable: false, minimizable: false, fullscreenable: false, skipTaskbar: true, alwaysOnTop: true,
+    title: 'Mini player', icon: APP_ICON,
+    webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true, backgroundThrottling: false },
+  });
+  win.setAlwaysOnTop(true, 'floating');
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'player.html'));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.on('closed', () => { if (PLAYER.win === win) PLAYER.win = null; });
+  PLAYER.win = win;
+  return win;
+}
+
+function pickPlayerWant() {
+  const live = new Set(liveWindows().map((w) => w.win.id));
+  for (const id of PLAYER.wants.keys()) if (!live.has(id)) PLAYER.wants.delete(id);
+  const rank = (w) => [w.state?.popout ? 1 : 0, w.playing ? 1 : 0, w.winId === lastFocusedId ? 1 : 0, w.at];
+  const list = [...PLAYER.wants.values()].sort((a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    for (let i = 0; i < ra.length; i += 1) if (ra[i] !== rb[i]) return rb[i] - ra[i];
+    return 0;
+  });
+  return list[0] || null;
+}
+
+function stopPlayerVideo(want) {
+  if (want) controlPage(webContents.fromId(want.webContentsId), 'stream-stop');
+}
+
+// the sidebar it's docked in, if it can be there now
+function dockedIn(want) {
+  if (!settings.data.miniPlayerDocked || !want) return null;
+  const w = liveWindows().find((x) => x.win.id === want.winId);
+  return w && PLAYER.zones.get(w.win.id) && !w.win.isMinimized() ? w : null;
+}
+
+function updatePlayer() {
+  const want = pickPlayerWant();
+  const before = PLAYER.shown;
+  if (before && before.webContentsId !== want?.webContentsId) stopPlayerVideo(before);
+  PLAYER.shown = want;
+  const dock = dockedIn(want);
+  const host = want ? (dock ? dock.win.webContents : openPlayerWindow().webContents) : null;
+  // whoever drew it before forgets it (a new one starts the video again)
+  const old = PLAYER.host;
+  PLAYER.host = host;
+  if (old && old !== host && !old.isDestroyed()) {
+    old.send('player-state', null);
+    if (old === playerWindow()?.webContents) PLAYER.win.hide();
+  }
+  if (!host) return;
+  const payload = { ...want, video: Boolean(want.state?.video) && !PLAYER.noVideo.has(want.webContentsId), videoWidth: settings.data.miniPlayerWidth || 400, accent: settings.data.accent, docked: Boolean(dock) };
+  const send = () => { if (!host.isDestroyed() && PLAYER.host === host) host.send('player-state', payload); };
+  if (host.isLoading()) host.once('did-finish-load', send);
+  else send();
+}
+
+ipcMain.on('player:want', (e, want) => {
+  const w = windowOf(e.sender);
+  if (!w || e.sender !== w.win.webContents) return;
+  if (want && typeof want === 'object' && Number.isInteger(want.webContentsId)) {
+    PLAYER.wants.set(w.win.id, { ...want, winId: w.win.id, at: PLAYER.wants.get(w.win.id)?.tabId === want.tabId ? PLAYER.wants.get(w.win.id).at : Date.now() });
+  } else PLAYER.wants.delete(w.win.id);
+  updatePlayer();
+});
+
+// a window's sidebar, from the window: where the player can dock (null while it's hidden or compact)
+ipcMain.on('player:zone', (e, zone) => {
+  const w = windowOf(e.sender);
+  if (!w || e.sender !== w.win.webContents) return;
+  const n = (v) => Math.round(Number(v) || 0);
+  const z = zone && typeof zone === 'object' && n(zone.width) > 40 && n(zone.height) > 40
+    ? { x: n(zone.x), y: n(zone.y), width: n(zone.width), height: n(zone.height) } : null;
+  const had = Boolean(PLAYER.zones.get(w.win.id));
+  if (z) PLAYER.zones.set(w.win.id, z); else PLAYER.zones.delete(w.win.id);
+  if (had !== Boolean(z) && settings.data.miniPlayerDocked) updatePlayer();
+});
+
+// the sidebar under the pointer, while the player is dragged
+function dockZoneAt(point) {
+  const list = liveWindows().filter((w) => PLAYER.zones.get(w.win.id) && w.win.isVisible() && !w.win.isMinimized());
+  list.sort((a, b) => (b.win.id === lastFocusedId) - (a.win.id === lastFocusedId));
+  return list.find((w) => {
+    const c = w.win.getContentBounds();
+    const z = PLAYER.zones.get(w.win.id);
+    return point.x >= c.x + z.x && point.x < c.x + z.x + z.width && point.y >= c.y + z.y && point.y < c.y + z.y + z.height;
+  }) || null;
+}
+// the sidebar under it lights up, to say it would dock there (the pointer's point on the screen comes with the drag)
+const screenPoint = (x, y) => (Number.isFinite(x) && Number.isFinite(y) ? { x, y } : screen.getCursorScreenPoint());
+function dragOverDock(point) {
+  const over = dockZoneAt(point);
+  if (over?.win.id === PLAYER.over) return;
+  const old = liveWindows().find((w) => w.win.id === PLAYER.over);
+  if (old) sendTo(old, 'player-dock-hover', false);
+  PLAYER.over = over ? over.win.id : null;
+  if (over) sendTo(over, 'player-dock-hover', true);
+  playerWindow()?.webContents.send('player-dock-hover', Boolean(over));
+}
+function dropPlayer(point) {
+  dragOverDock(point);
+  const over = PLAYER.over;
+  PLAYER.grab = null;
+  if (over) {
+    sendTo(liveWindows().find((w) => w.win.id === over), 'player-dock-hover', false);
+    playerWindow()?.webContents.send('player-dock-hover', false);
+    PLAYER.over = null;
+    settings.data.miniPlayerDocked = true;
+    settings.save();
+    updatePlayer();
+  } else if (PLAYER.bounds) rememberPlayerCorner();
+}
+
+// Its corner stays where you left it; at first, the bottom right of the screen Ultima is on.
+function playerCorner() {
+  const saved = PLAYER.at || settings.data.miniPlayerAt;
+  if (saved && screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    return saved.right > a.x + 40 && saved.right <= a.x + a.width + 1 && saved.bottom > a.y + 40 && saved.bottom <= a.y + a.height + 1;
+  })) return saved;
+  const near = currentWindow()?.win;
+  const a = (near ? screen.getDisplayMatching(near.getBounds()) : screen.getPrimaryDisplay()).workArea;
+  return { right: a.x + a.width - 12, bottom: a.y + a.height - 12 };
+}
+// (its bounds are kept here and always set whole: on a scaled screen, Windows rounds a moved window's size, and it
+// would creep a pixel at a time)
+function setPlayerBounds(win, bounds) {
+  PLAYER.bounds = { x: Math.round(bounds.x), y: Math.round(bounds.y), width: Math.round(bounds.width), height: Math.round(bounds.height) };
+  win.setBounds(PLAYER.bounds);
+}
+function rememberPlayerCorner() {
+  const b = PLAYER.bounds;
+  PLAYER.at = { right: b.x + b.width, bottom: b.y + b.height };
+  settings.data.miniPlayerAt = PLAYER.at;
+  settings.save();
+}
+// held by the pointer, just out of a sidebar: it goes where the pointer goes
+function followGrab(win, width, height) {
+  const p = PLAYER.grab.point;
+  setPlayerBounds(win, { x: p.x - PLAYER.grab.fx * width, y: p.y - PLAYER.grab.fy * height, width, height });
+}
+
+// the player's size, from the player: its card, or its video at the width you gave it (`keep`: resized by its
+// corner grip, so its top left corner stays put)
+ipcMain.on('player:fit', (e, { width, height, keep, user } = {}) => {
+  const win = playerWindow();
+  if (!win || e.sender !== win.webContents || PLAYER.host !== win.webContents || !PLAYER.shown) return;
+  const w = Math.max(120, Math.min(1600, Number(width) || 0));
+  const h = Math.max(80, Math.min(1200, Number(height) || 0));
+  if (PLAYER.grab) followGrab(win, w, h);
+  else if (keep && PLAYER.bounds) {
+    setPlayerBounds(win, { ...PLAYER.bounds, width: w, height: h });
+    rememberPlayerCorner();
+  } else {
+    const at = playerCorner();
+    setPlayerBounds(win, { x: at.right - w, y: at.bottom - h, width: w, height: h });
+  }
+  if (user && Number(user) > 0) { settings.data.miniPlayerWidth = Math.round(Number(user)); settings.save(); }
+  if (!win.isVisible()) win.showInactive();
+});
+// dragged by hand (player.js moves it as the pointer goes, so the player keeps its hover effects)
+ipcMain.on('player:move', (e, x, y, px, py) => {
+  const win = playerWindow();
+  if (!win || e.sender !== win.webContents || !PLAYER.bounds) return;
+  setPlayerBounds(win, { ...PLAYER.bounds, x: Number(x) || 0, y: Number(y) || 0 });
+  dragOverDock(screenPoint(px, py));
+});
+// let go: in a sidebar, it docks there
+ipcMain.on('player:drop', (e, px, py) => {
+  if (e.sender !== PLAYER.host && e.sender !== PLAYER.grab?.by) return;
+  dropPlayer(screenPoint(px, py));
+});
+// dragged out of the sidebar it's docked in: it floats, under the pointer, and the sidebar's window drags it on
+ipcMain.on('player:undock', (e, fx, fy, px, py) => {
+  if (e.sender !== PLAYER.host || !settings.data.miniPlayerDocked) return;
+  const frac = (v) => Math.max(0, Math.min(1, Number(v) || 0));
+  PLAYER.grab = { fx: frac(fx), fy: frac(fy), point: screenPoint(px, py), by: e.sender };
+  settings.data.miniPlayerDocked = false;
+  settings.save();
+  updatePlayer();
+});
+ipcMain.on('player:drag', (e, px, py) => {
+  const win = playerWindow();
+  if (!PLAYER.grab || e.sender !== PLAYER.grab.by) return;
+  PLAYER.grab.point = screenPoint(px, py);
+  if (win && PLAYER.bounds && win.isVisible()) followGrab(win, PLAYER.bounds.width, PLAYER.bounds.height);
+  dragOverDock(PLAYER.grab.point);
+});
+
+ipcMain.on('player:action', (e, act, arg) => {
+  const want = PLAYER.shown;
+  if (!want || e.sender !== PLAYER.host) return;
+  const wc = webContents.fromId(want.webContentsId);
+  const w = liveWindows().find((x) => x.win.id === want.winId);
+  if (act === 'open' || act === 'close' || act === 'mute') {
+    if (act === 'open' && w) { if (w.win.isMinimized()) w.win.restore(); w.win.show(); w.win.focus(); }
+    // (a video the page sent to the player goes back to the page, even on the tab you're on)
+    if ((act === 'close' || act === 'open') && want.state?.popout) controlPage(wc, 'unpop');
+    sendTo(w, 'player-tab', { tabId: want.tabId, act });
+  } else if (act === 'video-failed') {
+    PLAYER.noVideo.add(want.webContentsId);
+    updatePlayer();
+  } else controlPage(wc, act, arg);
+});
+
+// the video's picture: the page's offer, for the player to answer (player:action 'answer')
+ipcMain.on('ultima:media-signal', (e, json) => {
+  const want = PLAYER.shown;
+  const host = PLAYER.host;
+  if (!host || host.isDestroyed() || !want || e.sender.id !== want.webContentsId) return;
+  const m = pageMedia(e.sender.id);
+  if (!m || !e.senderFrame || frameKey(m.frame) !== frameKey(e.senderFrame)) return;
+  host.send('player-signal', clip(json, 200000));
+});
+// whether pages show their button for the mini player over a video (media-preload.js)
+ipcMain.handle('ultima:media-config', (e) => e.sender.getType() === 'webview' && Boolean(windowOf(e.sender)) && settings.data.miniPlayer !== false);
+
 // input that lets a page open a pop-up (Chrome's "user activation")
 const ACTIVATING_INPUT = new Set(['mouseDown', 'mouseUp', 'rawKeyDown', 'keyDown', 'touchStart', 'touchEnd', 'gestureTap']);
 
@@ -1670,10 +1988,14 @@ function setupSession(ses) {
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-compat', filePath: path.join(__dirname, '..', 'page-compat.js') });
   // pages' and extensions' alert / confirm / prompt in Ultima's own dialog (see dialog-preload.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-page-dialogs', filePath: path.join(__dirname, '..', 'dialog-preload.js') });
+  // no Windows passkey prompt for what a password manager extension hands back (see passkey-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-passkeys', filePath: path.join(__dirname, '..', 'passkey-preload.js') });
   // permissions you haven't decided on read as "prompt", not "denied" (see permission-preload.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-permission-states', filePath: path.join(__dirname, '..', 'permission-preload.js') });
   // a click in any frame lets its page open a pop-up (see activation-preload.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-activation', filePath: path.join(__dirname, '..', 'activation-preload.js') });
+  // what pages are playing, and the mini player's controls (see media-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-media', filePath: path.join(__dirname, '..', 'media-preload.js') });
   ses.serviceWorkers.on('console-message', (_e, d) => {
     const extId = extIdOf(d.sourceUrl || '');
     if (extId && d.level >= 2) extLog(extId, `background ${String(d.sourceUrl).split('/').pop()}:${d.lineNumber}`, d.level >= 3 ? 'error' : 'warning', d.message);
@@ -1937,6 +2259,9 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     if (!priv) announceActiveTab(w); // to extensions, the window you're in is "the" window, so its tab is the active one
   });
   win.on('blur', () => dispatchExtEvent('windows.onFocusChanged', [-1]));
+  // a player docked in its sidebar floats while it's minimized
+  win.on('minimize', () => { if (settings.data.miniPlayerDocked) updatePlayer(); });
+  win.on('restore', () => { if (settings.data.miniPlayerDocked) updatePlayer(); });
   win.on('leave-full-screen', () => { w.immersive = false; sendTo(w, 'window-fullscreen', { on: false, immersive: false }); });
 
   // Lock down every <webview> the UI creates.
@@ -1971,7 +2296,10 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     windows.delete(win.id);
     if (lastFocusedId === win.id) lastFocusedId = null;
     if (!priv && !quitting && liveWindows().some((x) => !x.private)) forgetWindow(w.key);
-    if (!liveWindows().length) { taskWindow()?.close(); tearoff.destroy(); } // the task manager goes with the last window
+    PLAYER.wants.delete(win.id);
+    PLAYER.zones.delete(win.id);
+    updatePlayer();
+    if (!liveWindows().length) { taskWindow()?.close(); tearoff.destroy(); playerWindow()?.destroy(); } // the task manager and mini player go with the last window
   });
   return w;
 }
@@ -2314,6 +2642,13 @@ function registerIpc() {
     if ('globalPrivacyControl' in patch) siteSessions().forEach(applyGpcPreload);
     // caret browsing on or off in the pages already open
     if ('caretBrowsing' in patch) for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('ultima:caret', Boolean(patch.caretBrowsing));
+    // the button over videos, for the mini player, goes with it
+    if ('miniPlayer' in patch) {
+      for (const wc of webContents.getAllWebContents()) {
+        if (wc.getType() !== 'webview' || wc.isDestroyed()) continue;
+        for (const f of wc.mainFrame.framesInSubtree) { try { f.send('ultima:media-control', 'button', patch.miniPlayer === false ? 0 : 1); } catch { /* gone */ } }
+      }
+    }
     broadcast('settings-changed', patch, { except: windowOf(e.sender) });
     toTaskWindow('settings-changed', patch);
     return settings.data;
@@ -2570,6 +2905,10 @@ function registerIpc() {
   handle('ext:remove', (id) => { release(id); return extChanged(extensions.remove(id)); });
   handle('ext:action', ({ id, tabId }) => extensionActionClicked(id, tabId));
   handle('ext:check-updates', async () => extChanged(await extensions.checkForUpdates()));
+  // Ultima's own updates (updater.js)
+  handle('update:state', () => updater.state());
+  handle('update:check', () => updater.check());
+  handle('update:restart', () => updater.restart());
   // each window reports which tab is showing in it, for chrome.tabs.onActivated
   handleFrom('tabs:active', (e, id) => {
     const w = windowOf(e.sender);
@@ -2822,6 +3161,7 @@ app.whenReady().then(async () => {
   data.onBookmarksChanged = () => broadcast('bookmarks-changed');
   passwords = initPasswords({ data, settings, windowOf, sendTo, broadcast });
   extensions = new ExtensionManager(dir);
+  updater = initUpdater({ app, net, broadcast });
   extLogFile = path.join(dir, 'logs', 'extensions.log');
   fs.mkdirSync(path.dirname(extLogFile), { recursive: true });
   setAppMenu();
@@ -2846,7 +3186,8 @@ app.whenReady().then(async () => {
   setInterval(checkExtensions, 5 * 60 * 60 * 1000);
   // every window that was open last time comes back (its regular tabs only when "Restore tabs" is on; the shared
   // sidebar always does); a link Ultima was started with opens in the last of them
-  if (!settings.data.restoreSession && !process.argv.includes(RESTART_SWITCH)) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
+  const restarted = process.argv.includes(RESTART_SWITCH) || updater.restarted();
+  if (!settings.data.restoreSession && !restarted) sessionStore.data.windows = savedWindows().slice(0, 1).map((s) => ({ key: s.key, bounds: s.bounds }));
   const restore = savedWindows();
   if (restore.length) restore.forEach((r, i) => createWindow({ restore: r, url: i === restore.length - 1 ? launchUrl : null }));
   else createWindow({ url: launchUrl });
@@ -2870,7 +3211,10 @@ app.on('before-quit', () => {
   for (const s of [settings, sessionStore]) if (s?.timer) s.flush();
 });
 // apps extensions were talking to (native messaging) end with Ultima, as with Chrome
-app.on('will-quit', () => { for (const id of [...nativePorts.keys()]) closeNativePort(id); });
+app.on('will-quit', () => {
+  for (const id of [...nativePorts.keys()]) closeNativePort(id);
+  updater?.installOnQuit(); // a downloaded Ultima update installs as Ultima closes
+});
 
 app.on('window-all-closed', () => {
   data?.flush();

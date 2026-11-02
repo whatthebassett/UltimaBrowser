@@ -117,6 +117,8 @@ src/caret-preload.js  caret browsing: the text cursor in pages
 src/password-preload.js login fields in pages: the saved-logins menu, filling, noticing sign-ins (with src/main/passwords.js)
 src/extension-compat.js fills gaps in Electron's extension APIs inside extension workers and pages (with src/extension-api.json)
 src/dialog-preload.js pages' alert/confirm/prompt in Ultima's own dialog
+src/passkey-preload.js no Windows passkey prompt for what a password manager extension hands back
+src/main/updater.js   Ultima's own updates from the latest GitHub release (Settings → About; src/renderer/updates.js)
 src/preload.js        the window.ultima bridge
 src/renderer/         UI: tabs.js (sidebar + webviews), palette.js, pages.js (ultima:// pages), app.js
 installer/            the cinematic installer: src/ (C# host: install, uninstall, shortcuts), ui/ (the film), build.js

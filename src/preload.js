@@ -116,15 +116,27 @@ contextBridge.exposeInMainWorld('ultima', {
   sidePanelShown: (webContentsId, open, tabId) => ipcRenderer.send('ultima:side-panel', Number(webContentsId), Boolean(open), Number.isInteger(tabId) ? tabId : null),
   extensionAction: invoke('ext:action'),
   checkExtensionUpdates: invoke('ext:check-updates'),
+  updateState: invoke('update:state'),
+  checkForUpdate: invoke('update:check'),
+  restartToUpdate: invoke('update:restart'),
   extensionActionMenu: invoke('ext:action-menu'),
   chooseExtensionActionMenu: invoke('ext:action-menu-choose'),
   setExtensionShortcut: invoke('ext:set-shortcut'),
   focusGuest: (webContentsId, point) => ipcRenderer.send('ultima:focus-guest', Number(webContentsId), point && { x: Number(point.x), y: Number(point.y) }),
   openExtensionLog: invoke('ext:open-log'),
   setActiveTab: invoke('tabs:active'),
+  // the mini player: what a window would show in it (miniplayer.js), and the player window's own calls (player.js)
+  playerWant: (want) => ipcRenderer.send('player:want', want),
+  playerAction: (act, arg) => ipcRenderer.send('player:action', String(act), typeof arg === 'string' ? arg : Number(arg) || 0),
+  playerFit: (size) => ipcRenderer.send('player:fit', size),
+  playerMove: (x, y, px, py) => ipcRenderer.send('player:move', Number(x), Number(y), Number(px), Number(py)),
+  playerDrop: (px, py) => ipcRenderer.send('player:drop', Number(px), Number(py)),
+  playerUndock: (fx, fy, px, py) => ipcRenderer.send('player:undock', Number(fx), Number(fy), Number(px), Number(py)),
+  playerDrag: (px, py) => ipcRenderer.send('player:drag', Number(px), Number(py)),
+  playerZone: (zone) => ipcRenderer.send('player:zone', zone),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page'];
+    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

@@ -229,6 +229,16 @@ body.card-dragging .pin::before { opacity: 0; }
 }
 .tab:hover { background: var(--glass-chip); color: var(--text); }
 .tab.active { background: var(--glass-active); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), inset 0 0 0 1px var(--glass-edge); }
+/* hovering a tab: a soft glow in the accent color (the open one keeps its shadow under it); Settings → Appearance →
+   Glow on hover turns it off (body.no-tab-glow) */
+.tab {
+  --tab-glow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent), 0 0 10px -2px color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: box-shadow 0.18s ease, background 0.15s ease;
+}
+.tab:hover { box-shadow: var(--tab-glow); }
+.tab.active:hover { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), var(--tab-glow); }
+body.card-dragging .tab:hover, body.no-tab-glow .tab:hover { box-shadow: none; }
+body.card-dragging .tab.active:hover, body.no-tab-glow .tab.active:hover { box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18), inset 0 0 0 1px var(--glass-edge); }
 .tab.unloaded .title { opacity: 0.65; }
 .tab .title { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .tab .tab-close, .tab .tab-audio, .tab .tab-home { width: 22px; height: 22px; border-radius: 6px; display: grid; place-items: center; color: var(--text-3); flex: none; }
@@ -1045,6 +1055,9 @@ body.lc-moving, body.lc-moving * { cursor: grabbing !important; user-select: non
 .s-control { display: flex; align-items: center; gap: 8px; flex: none; }
 .s-row[data-stack] .s-control { justify-content: flex-start; }
 .s-value { color: var(--text-2); font-variant-numeric: tabular-nums; user-select: text; }
+/* a long value (a folder's path) shortens with … instead of squeezing its row's name */
+.s-control:has(> .s-value) { flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.s-control > .s-value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .s-value.s-ok { display: inline-flex; align-items: center; gap: 6px; color: var(--ok); }
 .s-path { color: var(--text-2); overflow-wrap: anywhere; user-select: text; }
 .s-warn { color: #fbbf24; }
@@ -1139,6 +1152,7 @@ body.collapsed .url-shield { display: none; }
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.42), 0 0 0 1px var(--border); animation: ctx-in 0.12s ease-out; transform-origin: top left;
 }
 .url-menu { padding: 8px; display: flex; flex-direction: column; gap: 6px; max-width: 360px; }
+.url-menu.centered { width: 360px; }
 .um-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .um-tile {
   position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 6px 10px; border-radius: 10px;
@@ -1867,3 +1881,128 @@ body.tl-switching #sidebar { pointer-events: none; }
   .bm-tree { position: static; max-height: 220px; }
   .vault-layout, .s-embed .vault-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ---------- mini player (miniplayer.js) ----------
+   A card of smoky glass tinted by the artwork (blurred behind it), and controls of liquid glass: clear, thick-looking
+   buttons with a bright rim on top, light pooled along the bottom, a specular highlight, and the card bending through
+   them (backdrop blur). They swell a little under the pointer and give when pressed. */
+.mp {
+  position: relative; flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 10px 12px;
+  border-radius: 16px; overflow: hidden; isolation: isolate; color: #fff;
+  background: color-mix(in srgb, var(--accent) 34%, rgb(18 18 26 / 0.82));
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.18), 0 10px 28px -8px rgb(0 0 0 / 0.45);
+  animation: mp-in 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.15);
+}
+.mp[hidden] { display: none; }
+@keyframes mp-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+.mp-bg { position: absolute; inset: -40px; z-index: -2; background-size: cover; background-position: center; filter: blur(28px) saturate(1.8) brightness(0.62); }
+.mp::after { /* a sheen across the glass */
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(155deg, rgb(255 255 255 / 0.16), transparent 38%, transparent 70%, rgb(255 255 255 / 0.05));
+}
+.mp-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mp-cover { flex: none; padding: 0; width: 42px; height: 42px; border-radius: 10px; overflow: hidden; display: grid; place-items: center;
+  background: rgb(255 255 255 / 0.12); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16), 0 4px 10px -4px rgb(0 0 0 / 0.5); }
+.mp-cover { position: relative; }
+.mp-cover img:not(.fav) { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.mp-cover .fav, .mp-cover .fav-letter { width: 22px; height: 22px; }
+.mp-text { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; color: inherit; }
+.mp-title, .mp-sub { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.mp-title { font-size: 13px; font-weight: 600; text-shadow: 0 1px 2px rgb(0 0 0 / 0.3); }
+.mp-sub { font-size: 11.5px; color: rgb(255 255 255 / 0.7); }
+.mp-icon { flex: none; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; color: rgb(255 255 255 / 0.75);
+  opacity: 0; transition: opacity 0.15s, background 0.15s; }
+.mp-icon svg { width: 14px; height: 14px; fill: currentColor; }
+.mp:hover .mp-icon, .mp-icon:focus-visible, .mp-icon.on { opacity: 1; }
+.mp-icon:hover { background: rgb(255 255 255 / 0.16); color: #fff; }
+.mp-icon.on { color: #fff; }
+/* the seek bar: a groove in the glass, the played part lit */
+.mp-seek { position: relative; height: 14px; margin: -2px 0 -6px; cursor: pointer; }
+.mp-seek::before, .mp-fill { content: ""; position: absolute; left: 0; top: 5px; height: 4px; border-radius: 3px; transition: height 0.12s, top 0.12s; }
+.mp-seek::before { right: 0; background: rgb(255 255 255 / 0.2); box-shadow: inset 0 1px 1px rgb(0 0 0 / 0.25); }
+.mp-fill { background: linear-gradient(90deg, rgb(255 255 255 / 0.75), #fff); box-shadow: 0 0 8px rgb(255 255 255 / 0.55); }
+.mp-seek:hover::before, .mp-seek:hover .mp-fill { top: 4px; height: 6px; }
+.mp-times { display: flex; justify-content: space-between; font-size: 10.5px; color: rgb(255 255 255 / 0.62); font-variant-numeric: tabular-nums; }
+.mp-controls { display: flex; justify-content: center; align-items: center; gap: 14px; }
+.mp-btn {
+  position: relative; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.24), rgb(255 255 255 / 0.05) 55%, rgb(255 255 255 / 0.12));
+  backdrop-filter: blur(8px) saturate(1.9) brightness(1.1);
+  box-shadow:
+    inset 0 1.5px 0.5px rgb(255 255 255 / 0.6),
+    inset 0 -1px 0.5px rgb(255 255 255 / 0.22),
+    inset 0 0 0 1px rgb(255 255 255 / 0.14),
+    inset 0 -9px 12px -9px rgb(255 255 255 / 0.5),
+    0 6px 14px -6px rgb(0 0 0 / 0.55);
+  transition: transform 0.22s cubic-bezier(0.3, 1.6, 0.5, 1), background 0.15s, box-shadow 0.15s;
+}
+.mp-btn::before { /* the specular highlight */
+  content: ""; position: absolute; left: 18%; right: 18%; top: 7%; height: 38%; border-radius: 50%; pointer-events: none;
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.55), rgb(255 255 255 / 0)); opacity: 0.75;
+}
+.mp-btn svg { position: relative; width: 16px; height: 16px; fill: currentColor; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35)); }
+.mp-btn .ic { position: relative; filter: drop-shadow(0 1px 1.5px rgb(0 0 0 / 0.35)); }
+.mp-btn.mp-main { width: 46px; height: 46px; }
+.mp-btn.mp-main svg { width: 20px; height: 20px; }
+.mp-btn:hover {
+  transform: scale(1.08);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.34), rgb(255 255 255 / 0.09) 55%, rgb(255 255 255 / 0.18));
+}
+.mp-btn:active { transform: scale(0.92); transition-duration: 0.08s; }
+/* (its own layer, so the glass doesn't flicker as it swells) */
+.mp-btn { will-change: transform; }
+/* dragged, from a button or anywhere: the buttons stay as they are, not pressed or lit under the moving pointer */
+.mp.mp-dragging .mp-btn, .mp.mp-dragging .mp-icon { transform: none; transition: none; pointer-events: none; }
+.mp.mp-dragging .mp-icon:hover { background: none; }
+.mp.mp-dragging .mp-seek { pointer-events: none; }
+/* over a video, the glass has a little shade in it, so it reads on a bright picture */
+.mp-video .mp-btn { background-color: rgb(18 18 26 / 0.3); }
+.mp-video .mp-icon { background: rgb(18 18 26 / 0.28); }
+.mp-video .mp-icon:hover { background: rgb(255 255 255 / 0.2); }
+
+/* the mini player's window (player.html, player.js): the card floats on a clear window, with room for its shadow.
+   A video fills the card; its controls fade in over it when you point at it (and stay while it's paused). */
+html:has(body.player), body.player { background: transparent; }
+body.player { padding: 14px; height: auto; }
+body.player .mp { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.18), 0 8px 22px -6px rgb(0 0 0 / 0.6); }
+.mp-ui { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.mpv, .mpv-grip { display: none; }
+.mp.mp-video { padding: 0; background: #000; }
+.mp-video::after { display: none; }
+.mp-video .mp-bg { transition: opacity 0.3s; }
+.mp-video.live .mp-bg { opacity: 0; }
+.mp-video .mpv { display: block; position: absolute; inset: 0; z-index: -1; width: 100%; height: 100%; object-fit: contain; opacity: 0; transition: opacity 0.3s; }
+.mp-video.live .mpv { opacity: 1; }
+/* rounded on the video itself, and masked: with the controls faded, nothing is drawn over the video, so Chromium can
+   hand it to a hardware overlay that ignores the card's rounded clip (the corners went square) */
+.mp-video .mpv { border-radius: inherit; -webkit-mask-image: linear-gradient(#000, #000); }
+.mp-video .mp-ui {
+  position: absolute; inset: 0; justify-content: space-between; padding: 10px 12px 8px;
+  background: linear-gradient(180deg, rgb(0 0 0 / 0.55), transparent 32%, transparent 60%, rgb(0 0 0 / 0.62));
+  opacity: 0; transition: opacity 0.2s;
+}
+.mp-video:hover .mp-ui, .mp-video.paused .mp-ui, .mp-video:not(.live) .mp-ui { opacity: 1; }
+.mp-video .mp-controls { flex: 1; }
+.mp-video .mp-icon { opacity: 1; }
+.mpv-foot { display: flex; flex-direction: column; gap: 2px; }
+.mp-video .mpv-grip {
+  display: block; position: absolute; right: 0; bottom: 0; z-index: 2; width: 20px; height: 20px; cursor: nwse-resize; opacity: 0; transition: opacity 0.2s;
+  background: linear-gradient(135deg, transparent 52%, rgb(255 255 255 / 0.6) 52% 58%, transparent 58% 68%, rgb(255 255 255 / 0.6) 68% 74%, transparent 74%);
+}
+.mp-video:hover .mpv-grip { opacity: 1; }
+/* a floating player dragged over a sidebar gives a little: let go, and it docks there */
+.mp { transition: transform 0.18s ease, opacity 0.18s ease; }
+.mp.mp-docking { transform: scale(0.94); opacity: 0.82; }
+/* docked in the sidebar, under the tabs: as wide as the sidebar, a video at its own shape */
+.mp-docked { margin-top: 2px; max-height: 60vh; }
+.mp-docked .mpv-grip { display: none; }
+.mp-docked.mp-video .mp-ui { padding: 8px 10px 6px; }
+.mp-docked .mp-controls { gap: 10px; }
+.mp-docked.mp-video .mp-btn { width: 30px; height: 30px; }
+.mp-docked.mp-video .mp-btn.mp-main { width: 40px; height: 40px; }
+.mp-dock-hint {
+  flex: none; display: grid; place-items: center; height: 64px; border-radius: 16px; font-size: 12px; color: var(--text-2);
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 70%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  animation: mp-in 0.2s ease;
+}
+.mp-dock-hint[hidden] { display: none; }

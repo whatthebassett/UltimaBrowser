@@ -75,7 +75,7 @@ A short welcome sets Ultima up with you: light or dark, your colors, your first 
 1. Download the **.dmg** from the [latest release](https://github.com/whatthebassett/UltimaBrowser/releases/latest) and drag Ultima to Applications.
 2. The first time you open it, macOS asks you to allow it: go to **System Settings → Privacy & Security** and click **Open Anyway**.
 
-**Updating:** install the new version over the old one. Your tabs, Waypoints, passwords and settings stay right where they are.
+**Updating:** Ultima updates itself. New versions download in the background and install when you close Ultima, or right away from **Settings → About → Restart to update**. Your tabs, Waypoints, passwords and settings stay right where they are.
 
 ## Roadmap
 

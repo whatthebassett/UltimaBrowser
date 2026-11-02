@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' https: http: data:; media-src 'self' blob: mediastream:; style-src 'self' 'unsafe-inline'; script-src 'self'">
   <title>Ultima Browser</title>
   <link rel="stylesheet" href="fonts/inter.css">
   <link rel="stylesheet" href="welcome.css">
@@ -31,6 +31,8 @@
       <div class="zone-sep"></div>
       <button id="btn-newtab" class="newtab-row"><span class="nt-icon"></span><span class="label">New Tab</span><span class="kbds" data-kbd="new-tab"></span></button>
       <div id="tabs" class="tabs"></div>
+      <div id="mp-dock-hint" class="mp-dock-hint" hidden>Drop to keep it here</div>
+      <section id="mp-dock" class="mp mp-docked" aria-label="Mini player" hidden></section><!-- the mini player, docked (miniplayer.js) -->
       <div id="space-bar" class="space-bar"></div>
       <div class="sb-foot">
         <button class="icon-btn" id="btn-palette" data-cmd="palette" data-label="Control Palette"></button>
@@ -134,7 +136,10 @@
   <script src="vault.js"></script>
   <script src="patchnotes.js"></script>
   <script src="settings.js"></script>
+  <script src="updates.js"></script>
   <script src="swipe.js"></script>
+  <script src="player.js"></script>
+  <script src="miniplayer.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

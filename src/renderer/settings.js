@@ -172,6 +172,9 @@ const SETTINGS_TABS = [
         sRow('Open links in a glance with', 'Preview a link over the page without leaving it.',
           `<select class="field" data-setting="glanceTrigger">${GLANCE_TRIGGERS.map(([v, label]) => `<option value="${v}" ${(B.settings.glanceTrigger || 'any') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`),
       ]),
+      sGroup('Mini player', [
+        sRow('Mini player', 'Control what your other tabs are playing.', sSwitch('miniPlayer')),
+      ]),
       sGroup('Downloads', downloadRows()),
       sGroup('Search', [
         sRow('Search engine', 'Used by the Control Palette and the new tab page.',
@@ -200,6 +203,7 @@ const SETTINGS_TABS = [
         sGroup('Tabs', [
           sRow('Tab layout', `Click one to switch.${keyText('toggle-tab-layout') ? ` Shortcut: ${esc(keyText('toggle-tab-layout'))}.` : ''}`,
             tabLayoutCards(), 'data-stack'),
+          sRow('Glow on hover', 'Tabs glow in your accent color when you point at them.', sSwitch('tabGlow')),
         ]),
         sGroup('Waypoints bar', [
           sRow('Show Waypoints bar', `Your Waypoints under the toolbar.${keyText('toggle-bookmarks-bar') ? ` Shortcut: ${esc(keyText('toggle-bookmarks-bar'))}.` : ''}`, sSwitch('showBookmarksBar')),
@@ -264,6 +268,9 @@ const SETTINGS_TABS = [
         sGroup('Ultima', [
           sRow('Increase contrast', 'Stronger text and edges, and less glass, in Ultima.', sSwitch('uiContrast')),
           sRow('Reduce motion', 'Turn off Ultima’s animations. Always on if Windows animations are off.', sSwitch('reduceMotion')),
+        ]),
+        sGroup('Experimental', [
+          sRow('Browser sounds', 'A soft tick when you click things in Ultima.', sSwitch('browserSounds')),
         ]),
       ].join('');
     },
@@ -356,10 +363,11 @@ const SETTINGS_TABS = [
     render: () => `<div class="s-about">${LOGO.replace('class="logo"', 'class="logo s-about-logo"')}
       <div class="s-about-name">Ultima Browser</div><div class="s-desc">Version ${esc(B.versions.app)}</div></div>
       ${sGroup('', [
+        updateRowHtml(),
         sRow('Chromium', '', `<span class="s-value">${esc(B.versions.chrome)}</span>`),
         sRow('Electron', '', `<span class="s-value">${esc(B.versions.electron)}</span>`),
         sRow('Node.js', '', `<span class="s-value">${esc(B.versions.node)}</span>`),
-        sRow('Data folder', 'Settings, history, Waypoints and session.', `<span class="s-value">${esc(B.dataFolder || '')}</span>`),
+        sRow('Data folder', 'Settings, history, Waypoints and session.', `<span class="s-value" title="${esc(B.dataFolder || '')}">${esc(B.dataFolder || '')}</span>`),
         sRow('Welcome', 'Watch the welcome and setup again.', `<button class="btn" data-run="welcome">${icon('sparkle', 14)} Replay welcome</button>`),
       ])}
       <section class="s-group"><h3 class="s-group-title">Patch notes</h3><div class="s-card pn">${patchNotesHtml(B.versions.app)}</div></section>`,

@@ -393,6 +393,7 @@ function applyTheme() {
   applySidebarStyle(); // font, text size and tab height (sidebarstyle.js)
   applyTabLayout(); // vertical or horizontal tabs (tablayout.js)
   document.body.classList.toggle('loader-line', s.loadingStyle === 'line');
+  document.body.classList.toggle('no-tab-glow', s.tabGlow === false);
   document.body.classList.toggle('addr-classic', addressMode() === 'classic'); // a text cursor over the address bar // the loading animation as a line under the toolbar
   document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed) && !tabsAcross()); // (a compact sidebar is a vertical-tabs thing)
   const wasHidden = document.body.classList.contains('sb-hidden');
@@ -402,6 +403,7 @@ function applyTheme() {
   // kept open again: it slides in from the left edge (unless it was already out, peeking)
   if (wasHidden && !sidebarHidden() && !wasPeeking) slideSidebarIn();
   document.body.classList.toggle('acrylic', Boolean(B.backdrops) && s.windowMaterial === 'acrylic');
+  renderMiniPlayer(); // (turned on or off)
   if (document.body.classList.contains('bm-bar-center') !== Boolean(s.centerBookmarksBar)) {
     document.body.classList.toggle('bm-bar-center', Boolean(s.centerBookmarksBar));
     fitBookmarkBar();
@@ -517,6 +519,7 @@ async function boot() {
   $('#urlbar').onclick = (e) => runCommand(e.target.closest('#btn-url-menu') ? 'url-menu' : 'edit-url');
   $('#btn-url-menu').innerHTML = icon('sliders', 16);
   initExtensionsUi();
+  initUpdates();
   initSiteSettings();
   // what Settings shows about them, asked now: asked while Settings draws, the answer redraws it (and a search typed
   // meanwhile is lost)
@@ -535,6 +538,7 @@ async function boot() {
   initTabCardDrag();
   initTabSelection();
   initTabSleep();
+  initMiniPlayer();
   initTabDock();
   initSplitView();
   initGlance();

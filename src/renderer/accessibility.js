@@ -5,7 +5,8 @@
 //           an SVG filter, so that one goes on the page's root element)
 //   Ultima: higher contrast, a focus highlight, and reduced motion (also on while Windows' animations are off)
 // Text size, minimum font size and caret browsing are set where pages are created (main.js).
-const A11Y = { css: null, base: null };
+// Browser sounds (experimental): a soft tick when you click or press something in Ultima (not in pages).
+const A11Y = { css: null, base: null, audio: null };
 
 const reducedMotion = () => Boolean(B.settings.reduceMotion) || matchMedia('(prefers-reduced-motion: reduce)').matches;
 // the default page zoom as a zoom level (Chromium's: each level is 20% more)
@@ -107,7 +108,38 @@ function applyAccessibility() {
   A11Y.base = base;
 }
 
+// A short, quiet tick: a sine that drops in pitch and dies away in a few hundredths of a second
+function tick() {
+  try {
+    if (!A11Y.audio) A11Y.audio = new AudioContext();
+    const ctx = A11Y.audio;
+    if (ctx.state === 'suspended') ctx.resume();
+    const t = ctx.currentTime;
+    const o = ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(2400, t);
+    o.frequency.exponentialRampToValueAtTime(900, t + 0.03);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.12, t + 0.002);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    o.connect(g); g.connect(ctx.destination);
+    o.start(t); o.stop(t + 0.05);
+  } catch { /* no audio device */ }
+}
+// what a tick is for: something you can click or press (or anything with a hand cursor), unless it's switched off
+const TICK_TARGETS = 'button, a[href], select, summary, input[type="checkbox"], input[type="radio"], [role="button"], [role="switch"], [role="menuitem"], [role="option"], [role="tab"], [data-tab]';
+function tickTarget(el) {
+  if (!(el instanceof Element) || el.closest('webview')) return false;
+  const hit = el.closest(TICK_TARGETS);
+  if (hit ? hit.matches(':disabled, .disabled, [aria-disabled="true"]') : getComputedStyle(el).cursor !== 'pointer') return false;
+  return true;
+}
+
 function initAccessibility() {
+  // Browser sounds: a tick on press for the mouse, and on the click a key makes (Enter or Space on a button)
+  document.addEventListener('pointerdown', (e) => { if (B.settings.browserSounds && e.button === 0 && tickTarget(e.target)) tick(); }, true);
+  document.addEventListener('click', (e) => { if (B.settings.browserSounds && e.detail === 0 && tickTarget(e.target)) tick(); }, true);
   // Reduced motion: Ultima's own animations finish the moment they start (CSS ones are switched off in styles.css)
   const animate = Element.prototype.animate;
   Element.prototype.animate = function animateUnlessReduced(...args) {
