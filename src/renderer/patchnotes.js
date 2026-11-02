@@ -5,6 +5,13 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.4.1',
+    date: '2026-11-02',
+    new: [
+      ['Mac menu bar', 'On a Mac, the menu bar has Ultima’s commands and shortcuts, like Chrome’s.'],
+    ],
+  },
+  {
     version: '0.4.0',
     date: '2026-11-02',
     new: [

@@ -172,6 +172,7 @@ function rebuildKeymap() {
     for (const combo of bindings[c.id]) if (!globalKeys.has(combo)) globalKeys.set(combo, c.id);
   }
   rebuildExtensionKeys(); // extensions get only the keys Ultima doesn't use
+  if (process.platform === 'darwin' && app.isReady()) setAppMenu(); // the menu bar shows the shortcuts
 }
 
 // Is the user typing in a text box right now? Reported per page by webview-preload.js and by the UI itself.
@@ -2134,12 +2135,156 @@ function syncNativeTheme() {
 // Ultima draws its own menus and handles its own shortcuts, so Windows and Linux get no menu bar. macOS keeps a small
 // one: there the menu bar is what makes Quit, Hide and copy/paste in text boxes work. Its items are system roles only,
 // so they never compete with Ultima's shortcuts (whose Mac defaults leave Cmd+H and Cmd+Q to the system).
+// A command's first shortcut as a menu accelerator ("Meta+Shift+T" → "Cmd+Shift+T"), or none Electron can show
+const MENU_KEYS = { Meta: 'Cmd', NumAdd: 'numadd', NumSub: 'numsub', Num0: 'num0' };
+const MENU_KEY_OK = /^(Cmd|Ctrl|Alt|Shift|Esc|Tab|Space|Enter|Delete|Backspace|Up|Down|Left|Right|Home|End|PageUp|PageDown|F\d{1,2}|num\w+|[A-Z0-9]|[=,./;'[\]\\-])$/;
+function menuAccelerator(id) {
+  const bindings = keymap.resolve(settings.data.keybindings, process.platform);
+  for (const combo of bindings[id] || []) {
+    const parts = combo.split('+').map((p) => MENU_KEYS[p] || p);
+    if (parts.every((p) => MENU_KEY_OK.test(p))) return parts.join('+');
+  }
+  return undefined;
+}
+
+// macOS's menu bar, laid out like Chrome's. Its items run Ultima's own commands (what the keyboard shortcuts and the
+// Control Palette run) in the window in front. Their shortcuts are only shown there: Ultima catches the keys itself
+// (hookShortcuts), so ones you change in Settings → Keyboard shortcuts show here too (rebuildKeymap redraws this).
 function setAppMenu() {
   if (process.platform !== 'darwin') { Menu.setApplicationMenu(null); return; }
+  const run = (id, { needsWindow = true } = {}) => () => {
+    const w = currentWindow();
+    if (w) { w.win.show(); sendTo(w, 'command', id); return; }
+    if (needsWindow) return;
+    // every window closed (the app stays open on a Mac): these open one
+    if (id === 'new-private-window') createWindow({ private: true });
+    else createWindow({ restore: savedWindows()[0] });
+  };
+  const cmd = (label, id, opts = {}) => ({ label, click: run(id, opts), accelerator: menuAccelerator(id), registerAccelerator: false });
+  const open = (url) => () => {
+    const w = currentWindow({ normal: true });
+    if (w) sendTo(w, 'open-url', { url, background: false });
+    else createWindow({ url });
+  };
+  const sep = { type: 'separator' };
   Menu.setApplicationMenu(Menu.buildFromTemplate([
-    { role: 'appMenu' },
-    { role: 'editMenu' },
-    { label: 'Window', submenu: [{ role: 'minimize' }, { role: 'zoom' }, { type: 'separator' }, { role: 'front' }] },
+    { label: app.name, submenu: [
+      { label: `About ${app.name}`, click: open('ultima://settings#about') },
+      { label: 'Check for Updates…', click: () => { updater?.check(); open('ultima://settings#about')(); } },
+      sep,
+      cmd('Settings…', 'open-settings'),
+      cmd('Make Ultima Your Default Browser', 'make-default-browser'),
+      cmd('Import Browser Data…', 'open-import'),
+      sep,
+      { role: 'services' },
+      sep,
+      { role: 'hide' }, { role: 'hideOthers' }, { role: 'unhide' },
+      sep,
+      { role: 'quit' },
+    ] },
+    { label: 'File', submenu: [
+      cmd('New Tab', 'new-tab', { needsWindow: false }),
+      cmd('New Window', 'new-window', { needsWindow: false }),
+      cmd('New Private Window', 'new-private-window', { needsWindow: false }),
+      cmd('New Private Tab', 'new-private-tab'),
+      cmd('Reopen Closed Tab', 'reopen-tab'),
+      cmd('Open Location…', 'edit-url'),
+      sep,
+      cmd('Close Tab', 'close-tab'),
+      { role: 'close', label: 'Close Window', accelerator: 'Cmd+Shift+W' }, // as in Chrome: Cmd+W is Close Tab
+      sep,
+      cmd('Print…', 'print'),
+    ] },
+    { label: 'Edit', submenu: [
+      { role: 'undo' }, { role: 'redo' },
+      sep,
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'pasteAndMatchStyle' }, { role: 'delete' }, { role: 'selectAll' },
+      sep,
+      cmd('Find…', 'find'),
+      cmd('Copy Page Address', 'copy-url'),
+      cmd('Fill Saved Login', 'fill-login'),
+      sep,
+      { label: 'Speech', submenu: [{ role: 'startSpeaking' }, { role: 'stopSpeaking' }] },
+    ] },
+    { label: 'View', submenu: [
+      cmd('Control Palette', 'palette'),
+      sep,
+      cmd('Vertical or Horizontal Tabs', 'toggle-tab-layout'),
+      cmd('Compact Sidebar', 'toggle-sidebar'),
+      cmd('Hide Sidebar', 'toggle-sidebar-hidden'),
+      cmd('Edit Sidebar…', 'customize-sidebar'),
+      sep,
+      cmd('Reload Page', 'reload'),
+      cmd('Hard Reload', 'hard-reload'),
+      sep,
+      cmd('Actual Size', 'zoom-reset'),
+      cmd('Zoom In', 'zoom-in'),
+      cmd('Zoom Out', 'zoom-out'),
+      sep,
+      cmd('Full Screen', 'toggle-fullscreen'),
+      sep,
+      { label: 'Appearance', submenu: [cmd('Dark', 'theme-dark'), cmd('Light', 'theme-light'), cmd('Match System', 'theme-system')] },
+      { label: 'Developer', submenu: [cmd('Developer Tools', 'devtools'), cmd('Caret Browsing', 'caret-browsing')] },
+    ] },
+    { label: 'History', submenu: [
+      cmd('Back', 'back'),
+      cmd('Forward', 'forward'),
+      cmd('Home', 'home'),
+      sep,
+      cmd('Tab History', 'tab-history'),
+      cmd('Show Full History', 'open-history'),
+      cmd('Clear Browsing Data…', 'clear-data'),
+    ] },
+    { label: 'Waypoints', submenu: [
+      cmd('Add This Page to Waypoints', 'bookmark'),
+      cmd('Show All Waypoints', 'open-bookmarks'),
+      cmd('Show or Hide Waypoints Bar', 'toggle-bookmarks-bar'),
+      cmd('Import Bookmarks Bar…', 'import-bookmarks-bar'),
+    ] },
+    { label: 'Tab', submenu: [
+      cmd('Select Next Tab', 'next-tab'),
+      cmd('Select Previous Tab', 'prev-tab'),
+      sep,
+      cmd('Duplicate Tab', 'duplicate-tab'),
+      cmd('Rename Tab…', 'rename-tab'),
+      cmd('Pin or Unpin Tab', 'pin-tab'),
+      cmd('Add or Remove Essential', 'essential-tab'),
+      cmd('Mute or Unmute Tab', 'mute-tab'),
+      cmd('Unload Tab', 'unload-tab'),
+      sep,
+      cmd('Split View', 'split-tab'),
+      cmd('Leave Split View', 'unsplit-tab'),
+      cmd('Add to New Folder', 'tab-folder-new'),
+      sep,
+      cmd('Close Other Tabs', 'close-others'),
+    ] },
+    { label: 'Spaces', submenu: [
+      cmd('Next Space', 'next-space'),
+      cmd('Previous Space', 'prev-space'),
+      sep,
+      cmd('New Space', 'new-space'),
+      cmd('Rename Space…', 'rename-space'),
+      cmd('Edit Space Theme…', 'space-theme'),
+      cmd('Delete Space…', 'delete-space'),
+    ] },
+    { role: 'windowMenu', submenu: [
+      { role: 'minimize' }, { role: 'zoom' },
+      sep,
+      cmd('Downloads', 'open-downloads'),
+      cmd('Extensions', 'open-extensions'),
+      cmd('Passwords', 'open-passwords'),
+      cmd('Task Manager', 'task-manager'),
+      sep,
+      { role: 'front' },
+    ] },
+    { role: 'help', submenu: [
+      cmd('Keyboard Shortcuts', 'open-shortcuts'),
+      { label: 'What’s New in Ultima', click: open('ultima://settings#about') },
+      cmd('Replay the Welcome', 'welcome'),
+      sep,
+      { label: 'Ultima on GitHub', click: open('https://github.com/whatthebassett/UltimaBrowser') },
+      { label: 'Report a Problem…', click: open('https://github.com/whatthebassett/UltimaBrowser/issues/new') },
+    ] },
   ]));
   // run from source the Dock shows Electron's icon; the built app has its own .icns
   if (!app.isPackaged) app.dock?.setIcon(path.join(__dirname, '..', '..', 'assets', 'icon-mac.png'));
