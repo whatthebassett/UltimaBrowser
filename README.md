@@ -77,6 +77,36 @@ A short welcome sets Ultima up with you: light or dark, your colors, your first 
 
 **Updating:** install the new version over the old one. Your tabs, Waypoints, passwords and settings stay right where they are.
 
+## Roadmap
+
+What's still to come, roughly in order.
+
+**Safety**
+- [ ] Warnings for dangerous sites and downloads, like Chrome's Safe Browsing.
+- [ ] Signed installers, so Windows and macOS stop warning on first install.
+
+**Everyday browsing**
+- [ ] Translate pages.
+- [ ] Reader view for articles.
+- [ ] Screenshots of a page or part of one.
+- [ ] Bring over open tabs from Chrome and Edge.
+
+**Passwords and forms**
+- [ ] Fill logins inside embedded sign-in forms.
+- [ ] Save and fill addresses and payment cards.
+
+**Extensions**
+- [ ] Userscript managers like Tampermonkey.
+- [ ] Extensions that act on the current tab when you click them (activeTab), like Google Translate.
+- [ ] Extension shortcuts that work when Ultima isn't in front.
+
+**Your stuff everywhere**
+- [ ] Sync Waypoints, passwords, spaces and settings across your devices, end-to-end encrypted.
+
+**Under the hood**
+- [ ] Opt-in crash reports.
+- [ ] Automated tests for tabs, sessions, the ad blocker and import.
+
 ## Questions
 
 **Is Ultima free?** Yes.
