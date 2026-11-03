@@ -113,7 +113,7 @@ function applySpaceVars() {
 
 // ---------- address bar loading animation ----------
 const LOADER_THEMES = {
-  space: { name: 'Space' },
+  space: { name: 'Orbit' }, // (its key stays 'space': it's saved in settings)
   accent: { name: 'Accent' },
   aurora: { name: 'Aurora', colors: ['#22c55e', '#06b6d4', '#a855f7'] },
   sunset: { name: 'Sunset', colors: ['#f97316', '#ec4899', '#8b5cf6'] },
@@ -172,9 +172,16 @@ function applyLoaderVars() {
 // Plays the animation for a moment so a new choice can be seen without loading a page.
 function previewLoader() {
   const els = [$('#urlbar'), $('#load-line')]; // (whichever style is on shows it)
-  for (const el of els) el.classList.add('loading');
+  for (const el of els) el.classList.add('loading', 'finishing');
+  // the Glow style shows a pretend load going from start to end
+  const bar = els[0];
+  for (const t of previewLoader.steps || []) clearTimeout(t);
+  previewLoader.steps = [0.1, 0.35, 0.6, 0.75, 0.85, 1].map((p, i) => setTimeout(() => bar.style.setProperty('--load-p', p), i * 280));
   clearTimeout(previewLoader.timer);
-  previewLoader.timer = setTimeout(() => { for (const el of els) el.classList.remove('loading'); updateChrome(); }, 1800);
+  previewLoader.timer = setTimeout(() => {
+    for (const el of els) el.classList.remove('loading');
+    previewLoader.timer = setTimeout(() => { for (const el of els) el.classList.remove('finishing'); updateChrome(); }, 600);
+  }, 1800);
 }
 
 // ---------- editor ----------
@@ -187,7 +194,7 @@ function openThemeEditor(space = activeSpace()) {
   TE.space = space;
   TE.sel = 0;
   TE.before = JSON.parse(JSON.stringify(spaceTheme(space)));
-  const el = h(`<div class="theme-editor" role="dialog" aria-label="Space theme" tabindex="-1">
+  const el = h(`<div class="theme-editor" role="dialog" aria-label="Orbit theme" tabindex="-1">
     <div class="te-head"><span class="te-title"></span><button class="icon-btn" data-act="done" title="Close">${icon('close', 15)}</button></div>
     <div class="seg te-modes">
       <button data-mode="auto">Auto</button><button data-mode="light">${icon('sun', 13)}Light</button><button data-mode="dark">${icon('moon', 13)}Dark</button>

@@ -62,7 +62,7 @@ function chromiumProfiles(root) {
       return {
         profile: names[dir] || dir,
         path: p,
-        has: { bookmarks: exists(path.join(p, 'Bookmarks')), history: exists(path.join(p, 'History')), tabs: false, cookies: false },
+        has: { bookmarks: exists(path.join(p, 'Bookmarks')), history: exists(path.join(p, 'History')), tabs: chromiumSessionFiles(p).length > 0, cookies: false },
       };
     });
 }
@@ -163,6 +163,84 @@ function chromiumHistory(src) {
     .prepare('SELECT url, title, visit_count AS visits, last_visit_time / 1000 - 11644473600000 AS t FROM urls WHERE hidden = 0 ORDER BY last_visit_time DESC LIMIT ?')
     .all(HISTORY_IMPORT_LIMIT)
     .map((r) => ({ url: r.url, title: r.title, visits: Number(r.visits) || 1, lastVisit: Number(r.t) || Date.now() })));
+}
+
+// Open tabs, from the profile's session file (Sessions/Session_<time>, the newest one; Chrome, Edge, Brave and
+// Vivaldi all keep it). It's Chromium's SNSS format: "SNSS", a version, then commands, each a uint16 size, a uint8 id
+// and its payload: a C struct for most, a Pickle (a uint32 size, then 4-byte-aligned values) for a tab's pages. Played
+// in order they rebuild the windows: which window each tab is in and where, its pages and which one it's on, whether
+// it's pinned, and which tabs and windows have closed since.
+const SNSS = {
+  setTabWindow: 0, setTabIndexInWindow: 2, updateTabNavigation: 6, setSelectedNavigationIndex: 7,
+  setPinnedState: 12, tabClosed: 16, windowClosed: 17,
+};
+
+function chromiumSessionFiles(profileDir) {
+  const dir = path.join(profileDir, 'Sessions');
+  try {
+    return fs.readdirSync(dir).filter((f) => /^Session_\d+$/.test(f)).sort().reverse().map((f) => path.join(dir, f));
+  } catch { return []; }
+}
+
+function readSnss(buf) {
+  if (buf.length < 8 || buf.toString('latin1', 0, 4) !== 'SNSS') throw new Error('not a Chromium session file');
+  const version = buf.readInt32LE(4);
+  if (version === 2 || version === 4) throw new Error('this browser encrypts its session file');
+  const tabs = new Map(); // tab id → { window, index, pinned, pages: index → { url, title }, current }
+  const closedWindows = new Set();
+  const tabOf = (id) => {
+    if (!tabs.has(id)) tabs.set(id, { window: null, index: 0, pinned: false, pages: new Map(), current: null, closed: false });
+    return tabs.get(id);
+  };
+  let at = 8;
+  while (at + 3 <= buf.length) {
+    const size = buf.readUInt16LE(at);
+    if (size < 1 || at + 2 + size > buf.length) break;
+    const id = buf.readUInt8(at + 2);
+    const p = buf.subarray(at + 3, at + 2 + size);
+    at += 2 + size;
+    const int = (o) => (p.length >= o + 4 ? p.readInt32LE(o) : null);
+    if (id === SNSS.setTabWindow) tabOf(int(4)).window = int(0);
+    else if (id === SNSS.setTabIndexInWindow) tabOf(int(0)).index = int(4);
+    else if (id === SNSS.setSelectedNavigationIndex) tabOf(int(0)).current = int(4);
+    else if (id === SNSS.setPinnedState) tabOf(int(0)).pinned = p.length > 4 && p[4] !== 0;
+    else if (id === SNSS.tabClosed) tabOf(int(0)).closed = true;
+    else if (id === SNSS.windowClosed) closedWindows.add(int(0));
+    else if (id === SNSS.updateTabNavigation) {
+      // the Pickle: its size, then the tab, the page's place in its history, its address and its title (UTF-16)
+      try {
+        let o = 4;
+        const tabId = p.readInt32LE(o); o += 4;
+        const index = p.readInt32LE(o); o += 4;
+        const urlLen = p.readInt32LE(o); o += 4;
+        const url = p.toString('utf8', o, o + urlLen); o += (urlLen + 3) & ~3;
+        const titleLen = p.readInt32LE(o); o += 4;
+        const title = p.toString('utf16le', o, o + titleLen * 2);
+        tabOf(tabId).pages.set(index, { url, title });
+      } catch { /* a cut-off record */ }
+    }
+  }
+  const out = [];
+  for (const t of tabs.values()) {
+    if (t.closed || t.window === null || closedWindows.has(t.window) || !t.pages.size) continue;
+    const page = t.pages.get(t.current) || t.pages.get(Math.max(...t.pages.keys()));
+    if (page?.url && /^https?:/i.test(page.url)) out.push({ ...t, page });
+  }
+  // window by window, in the order they were opened, and each window's tabs in its order
+  const windows = [...new Set(out.map((t) => t.window))];
+  return out.sort((a, b) => windows.indexOf(a.window) - windows.indexOf(b.window) || a.index - b.index)
+    .map((t) => ({ url: t.page.url, title: t.page.title || t.page.url, favicon: '', zone: t.pinned ? 'pinned' : 'normal' }));
+}
+
+function chromiumTabs(src) {
+  const [file] = chromiumSessionFiles(src.path);
+  if (!file) return [];
+  let buf;
+  try { buf = fs.readFileSync(file); } catch (err) {
+    if (err.code === 'EBUSY' || err.code === 'EPERM') throw new Error(`${src.label} is using its session file: close it and try again.`);
+    throw err;
+  }
+  return readSnss(buf);
 }
 
 // ---- Gecko (Firefox / Zen) ----
@@ -358,7 +436,7 @@ async function runImport(src, what, data, ses) {
   what = Object.fromEntries(Object.entries(what).map(([k, v]) => [k, v && src.has[k]]));
   if (what.bookmarks) await attempt('Bookmarks', () => { result.bookmarks = data.mergeBookmarks(chromium ? chromiumBookmarks(src) : geckoBookmarks(src)); });
   if (what.history) await attempt('History', () => { result.history = data.mergeHistory(chromium ? chromiumHistory(src) : geckoHistory(src)); });
-  if (what.tabs && !chromium) await attempt('Open tabs', () => { result.tabs = geckoTabs(src); });
+  if (what.tabs) await attempt('Open tabs', () => { result.tabs = chromium ? chromiumTabs(src) : geckoTabs(src); });
   if (what.cookies && !chromium) await attempt('Cookies', async () => { result.cookies = await importCookies(src, ses); });
   return result;
 }
@@ -377,4 +455,4 @@ function chromiumBookmarksBar(src) {
   return out;
 }
 
-module.exports = { detect, runImport, passwordsFromCsv, bookmarksFromHtml, decodeMozLz4, chromiumBookmarksBar };
+module.exports = { detect, runImport, passwordsFromCsv, bookmarksFromHtml, decodeMozLz4, chromiumBookmarksBar, readSnss };

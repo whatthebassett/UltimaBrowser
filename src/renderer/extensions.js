@@ -281,6 +281,11 @@ function renderUrlMenu() {
       ${tile('downloads', 'download', 'Downloads', 'open-downloads', downloading ? `<span class="um-badge">${downloading}</span>` : '')}
       ${tile('extensions', 'puzzle', 'Extensions', 'open-extensions')}
     </div>
+    <div class="um-tiles">
+      ${tile('screenshot', 'camera', 'Screenshot', 'screenshot')}
+      ${tile('reader', 'book', activeTab()?.reader ? 'Leave reader' : 'Reader view', 'reader')}
+      ${tile('translate', 'translate', activeTab()?.translated ? 'Original' : 'Translate', 'translate')}
+    </div>
     ${storeId && !EXT.list.some((e) => e.id === storeId) ? `<button class="um-install" data-act="install">${icon('plus', 15)} Add this extension to Ultima</button>` : ''}
     ${exts.length ? `<div class="um-head">Extensions</div><div class="um-list">${exts.map((e) => `
       <div class="um-ext ${e.error ? 'broken' : ''}" data-ext="${esc(e.id)}" title="${esc(e.error || e.name)}">
@@ -307,6 +312,7 @@ async function onUrlMenuClick(e) {
   if (act === 'history') runCommand('open-history');
   else if (act === 'downloads') runCommand('open-downloads');
   else if (act === 'extensions') runCommand('open-extensions');
+  else if (['screenshot', 'reader', 'translate'].includes(act)) runCommand(act);
   else if (act === 'store') createTab({ url: STORE_HOME });
   else if (act === 'install') installFromStore(activeTab().url);}
 

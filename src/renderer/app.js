@@ -126,6 +126,9 @@ function runCommand(cmd) {
       if (tab) copyText(tab.url, 'URL copied');
       return undefined;
     case 'find': return openFind();
+    case 'screenshot': return openScreenshot();
+    case 'reader': return toggleReader();
+    case 'translate': return toggleTranslation();
     case 'fill-login': return fillLogin(tab);
     case 'zoom-in': return zoom(tab, 0.5);
     case 'zoom-out': return zoom(tab, -0.5);
@@ -183,8 +186,31 @@ function setUrlbarLoading(loading) {
   if (was && !loading) {
     for (const el of els) el.classList.add('finishing');
     clearTimeout(setUrlbarLoading.timer);
-    setUrlbarLoading.timer = setTimeout(() => { for (const el of els) el.classList.remove('finishing'); }, 600);
+    setUrlbarLoading.timer = setTimeout(() => { for (const el of els) el.classList.remove('finishing'); showLoadProgress(false); }, 600);
   }
+  showLoadProgress(loading);
+}
+
+// The Glow style (Settings → Address bar) grows with the load instead of looping: from the left end of the address
+// bar toward the right. It jumps as the page starts, answers and has its document in (tabs.js: tab.progress), creeps on
+// in between, and fills the bar as it finishes, fading out.
+function showLoadProgress(loading) {
+  const bar = $('#urlbar');
+  const step = () => {
+    const tab = activeTab();
+    if (!tab?.loading) return;
+    const p = tab.progress || 0.1;
+    tab.progress = p + (0.92 - p) * 0.04;
+    bar.style.setProperty('--load-p', tab.progress.toFixed(3));
+  };
+  if (loading) {
+    step();
+    showLoadProgress.timer ||= setInterval(step, 200);
+    return;
+  }
+  clearInterval(showLoadProgress.timer);
+  showLoadProgress.timer = null;
+  bar.style.setProperty('--load-p', bar.classList.contains('finishing') ? '1' : '0'); // (back to 0 once it has faded)
 }
 
 
@@ -192,6 +218,9 @@ const updateChrome = debounce(async () => {
   const tab = activeTab();
   if (!tab) { // a space with nothing open: an empty address bar, nothing to go back to
     setUrlbarLoading(false);
+    renderStatus();
+    updateReaderButton(null);
+    updateTranslateButton(null);
     $('.url-icon').innerHTML = icon('search', 14);
     $('.url-icon').classList.remove('secure');
     $('.url-text').textContent = 'Search or enter address';
@@ -204,8 +233,11 @@ const updateChrome = debounce(async () => {
   const wv = ready(tab) && !internal ? tab.webview : null;
   const secure = tab.url.startsWith('https://');
   setUrlbarLoading(B.settings.loadingIndicator !== false && tab.loading && !internal);
+  renderStatus(); // (or the loading status at the bottom, with the animation off)
   updateStoreButton();
   updateShield();
+  updateReaderButton(tab);
+  updateTranslateButton(tab);
   $('.url-icon').innerHTML = icon(internal ? 'sparkle' : secure ? 'lock' : tab.url.startsWith('http://') ? 'unlock' : 'search', 14);
   $('.url-icon').classList.toggle('secure', secure);
   // (the whole address in a traditional address bar: Settings → Address bar)
@@ -249,6 +281,38 @@ function closeFind() {
   $('#find-count').textContent = '';
   for (const t of B.tabs) if (ready(t)) t.webview.stopFindInPage('clearSelection');
   activeTab()?.webview?.focus();
+}
+
+// The sidebar's top buttons (Back, Forward, Reload…) move the window too: press one and drag, and the window follows
+// (main.js: window:drag); press and let go without moving, and it's an ordinary click.
+function initTopButtonDrag() {
+  const row = $('#sidebar .sb-head');
+  let press = null;
+  const stop = () => {
+    if (!press) return;
+    if (press.dragging) {
+      window.ultima.windowDrag('end');
+      // the click that ends a drag isn't one
+      const swallow = (c) => { c.stopPropagation(); c.preventDefault(); };
+      window.addEventListener('click', swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener('click', swallow, { capture: true }), 0);
+    }
+    press = null;
+  };
+  row.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.nav button');
+    if (e.button !== 0 || !btn || tabsAcross() || document.body.classList.contains('sb-hidden') || document.body.classList.contains('sb-editing')) return;
+    press = { x: e.screenX, y: e.screenY, id: e.pointerId, btn, dragging: false };
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!press || e.pointerId !== press.id || press.dragging) return;
+    if (Math.hypot(e.screenX - press.x, e.screenY - press.y) < 5) return;
+    press.dragging = true;
+    press.btn.setPointerCapture(e.pointerId);
+    window.ultima.windowDrag('start');
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) row.addEventListener(type, stop);
+  window.addEventListener('blur', stop);
 }
 
 function initFind() {
@@ -330,7 +394,7 @@ async function onUiContextMenu(e) {
       ...(sbb ? [{ id: 'sbb-remove', label: `Remove ${what} from the ${across ? 'toolbar' : 'sidebar'}`, icon: 'minus' },
         { id: 'customize-sidebar', label: `Edit ${across ? 'toolbar' : 'sidebar'}…`, icon: 'sidebar', shortcut: 'customize-sidebar' }, sep] : []),
       { id: 'new-tab', label: 'New tab', icon: 'plus', shortcut: 'new-tab' },
-      { id: 'new-space', label: 'New space', icon: 'layers', shortcut: 'new-space' },
+      { id: 'new-space', label: 'New orbit', icon: 'layers', shortcut: 'new-space' },
       { id: 'reopen-tab', label: 'Reopen closed tab', icon: 'history', shortcut: 'reopen-tab' },
       sep,
       { id: 'space-theme', label: `Edit ${activeSpace().name} theme…`, icon: 'palette', shortcut: 'space-theme' },
@@ -380,6 +444,7 @@ function applyTheme() {
   const dark = effectiveDark(); // the active space's theme can force light or dark
   const rootEl = document.documentElement;
   rootEl.dataset.theme = dark ? 'dark' : 'light';
+  restyleReaders(); // (Reader view follows light or dark, unless you picked its colors)
   rootEl.style.setProperty('--accent', B.private ? PRIVATE_ACCENT : s.accent);
   rootEl.style.setProperty('--on-accent', inkOn(s.accent)); // the shield's checkmark
   applySpaceVars();
@@ -393,6 +458,7 @@ function applyTheme() {
   applySidebarStyle(); // font, text size and tab height (sidebarstyle.js)
   applyTabLayout(); // vertical or horizontal tabs (tablayout.js)
   document.body.classList.toggle('loader-line', s.loadingStyle === 'line');
+  document.body.classList.toggle('loader-glow', s.loadingStyle === 'glow'); // a glowing line along the address bar's bottom
   document.body.classList.toggle('no-tab-glow', s.tabGlow === false);
   document.body.classList.toggle('addr-classic', addressMode() === 'classic'); // a text cursor over the address bar // the loading animation as a line under the toolbar
   document.body.classList.toggle('collapsed', Boolean(s.sidebarCollapsed) && !tabsAcross()); // (a compact sidebar is a vertical-tabs thing)
@@ -502,7 +568,7 @@ async function boot() {
   document.body.classList.toggle('glass', state.glass);
   applyTheme();
 
-  $('#brand').innerHTML = `${LOGO}<span>Ultima</span>${B.private ? `<span class="private-badge" title="Pages you visit here aren’t saved">${icon('incognito', 13)} Private</span>` : ''}`;
+  $('#brand').innerHTML = `<span class="pt-sep">-</span>${LOGO}<span>ULTIMA</span>${B.private ? `<span class="private-badge" title="Pages you visit here aren’t saved">${icon('incognito', 13)} Private</span>` : ''}`;
   // the sidebar's customizable buttons are set up in sidebarbuttons.js
   const buttons = {
     'btn-star': ['star', 'bookmark'], 'btn-find': ['find', 'find'], 'btn-key': ['key', 'fill-login'],
@@ -520,6 +586,9 @@ async function boot() {
   $('#btn-url-menu').innerHTML = icon('sliders', 16);
   initExtensionsUi();
   initUpdates();
+  initTopButtonDrag();
+  initReader();
+  initTranslate();
   initSiteSettings();
   // what Settings shows about them, asked now: asked while Settings draws, the answer redraws it (and a search typed
   // meanwhile is lost)

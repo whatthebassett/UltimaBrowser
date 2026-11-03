@@ -70,7 +70,8 @@ function openGlance({ url, rect, webContentsId }) {
   GL.open = { source, wv, frame, backdrop, bar, origin, url, title: '', favicon: '' };
   vp.append(backdrop, frame, wv, bar);
   layoutGlance();
-  $('#status').hidden = true; // the link the page underneath was pointing at
+  B.statusLink = ''; // the link the page underneath was pointing at
+  renderStatus();
 
   // keep track of where it goes, for opening it as a tab
   const mine = () => GL.open?.wv === wv;

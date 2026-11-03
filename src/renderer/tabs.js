@@ -116,13 +116,15 @@ function ensureWebview(tab, adopt = null) {
   wv.addEventListener('dom-ready', () => {
     const first = !tab.ready;
     tab.ready = true;
+    if (tab.loading) tab.progress = Math.max(tab.progress || 0, 0.7); // its document is in; images and the rest to come
     pageReady(wv, tab); // its zoom and accessibility style sheet, for each new document (accessibility.js)
     if (first && tab.muted) wv.setAudioMuted(true);
     if (first) applySiteSound(tab); // a site whose sound is blocked (sitesettings.js)
     if (first && isActive()) notifyActiveTab(tab); // the page is attached now, so it has an id to report
     if (isActive()) updateChrome();
   });
-  wv.addEventListener('did-start-loading', () => { tab.loading = true; tab.error = null; renderError(); changed(); });
+  // (tab.progress: how far along the load is, roughly, for the Glow loading style: app.js showLoadProgress)
+  wv.addEventListener('did-start-loading', () => { if (!tab.loading) tab.progress = 0.1; tab.loading = true; tab.error = null; renderError(); changed(); });
   wv.addEventListener('did-stop-loading', () => { tab.loading = false; changed(); });
   // (a kept tab on its pinned site remembers how it looks there, for when it goes back unloaded)
   wv.addEventListener('page-title-updated', (e) => {
@@ -138,6 +140,9 @@ function ensureWebview(tab, adopt = null) {
     changed();
   });
   wv.addEventListener('did-navigate', (e) => {
+    readerPageChanged(tab); // a new page: Reader view of the last one closes (reader.js)
+    translatePageChanged(tab); // and it isn't translated (translate.js)
+    if (tab.loading) tab.progress = Math.max(tab.progress || 0, 0.35); // the site has answered
     if (hostname(e.url) !== hostname(tab.url)) tab.favicon = '';
     const otherSite = siteOrigin(e.url) !== siteOrigin(tab.url);
     tab.url = e.url;
@@ -151,6 +156,8 @@ function ensureWebview(tab, adopt = null) {
   wv.addEventListener('did-navigate-in-page', (e) => {
     if (!e.isMainFrame) return;
     tab.url = e.url;
+    readerPageChanged(tab, { inPage: true }); // (asked again whether it's an article)
+    translatePageChanged(tab, { inPage: true });
     addHistory({ url: e.url, title: tab.title, visit: true });
     autoGroupTab(tab);
     changed();
@@ -171,9 +178,14 @@ function ensureWebview(tab, adopt = null) {
   wv.addEventListener('media-paused', () => { tab.audible = false; renderTabs(); });
   wv.addEventListener('update-target-url', (e) => {
     if (!isActive()) return;
-    const s = $('#status');
-    s.textContent = e.url;
-    s.hidden = !e.url;
+    B.statusLink = e.url;
+    renderStatus();
+  });
+  // where it's going, for the loading status (renderStatus) while the page it leaves is still showing
+  wv.addEventListener('did-start-navigation', (e) => {
+    if (!e.isMainFrame || e.isSameDocument) return;
+    tab.loadingUrl = e.url;
+    if (isActive()) renderStatus();
   });
   wv.addEventListener('found-in-page', (e) => {
     if (isActive()) $('#find-count').textContent = e.result.matches ? `${e.result.activeMatchOrdinal}/${e.result.matches}` : '0/0';
@@ -203,6 +215,7 @@ function ensureWebview(tab, adopt = null) {
 
 // Drops the page (freeing its memory) but keeps the tab; it loads again when activated.
 function dropWebview(tab) {
+  if (tab.reader) closeReader(tab);
   tab.webview?.remove();
   tab.webview = null;
   tab.ready = false;
@@ -229,7 +242,8 @@ function activateTab(id) {
   showContent(tab);
   notifyActiveTab(tab);
   closeFind();
-  $('#status').hidden = true;
+  B.statusLink = ''; // (the link the last tab was pointing at)
+  renderStatus();
   renderTabs();
   updateChrome();
   saveSession();
@@ -272,6 +286,7 @@ function showContent(tab) {
     if ($('#palette-backdrop').hidden) setTimeout(() => { if (!B.renaming) tab.webview?.focus(); }, 0);
   }
   renderError();
+  syncReaderViews(); // Reader view over the pages showing now, and no other (reader.js)
 }
 
 function showNoTab() {
@@ -573,6 +588,18 @@ function saveSessionNow() {
 }
 const saveSession = debounce(() => { if (!B.closing) saveSessionNow(); }, 300);
 
+// The bubble at the bottom of the page: the link you're pointing at, or, with the loading animation off (Settings →
+// Address bar), the page that's loading, as browsers have long shown it
+function renderStatus() {
+  const s = $('#status');
+  const tab = activeTab();
+  const loading = B.settings.loadingIndicator === false && tab?.loading && !isInternal(tab.url) && !GL.open;
+  const text = B.statusLink || (loading ? `Loading ${hostname(tab.loadingUrl || tab.url) || tab.loadingUrl || tab.url}…` : '');
+  s.classList.toggle('loading', Boolean(!B.statusLink && loading));
+  s.textContent = text;
+  s.hidden = !text;
+}
+
 // ---------- sidebar rendering ----------
 function tabIcon(tab) {
   if (tab.loading) return '<span class="spinner"></span>';
@@ -761,12 +788,12 @@ async function tabContextMenu(tab) {
     { id: 'mute', icon: tab.muted ? 'volume' : 'mute', label: tab.muted ? 'Unmute tab' : 'Mute tab', shortcut: 'mute-tab' },
     { id: 'copy', icon: 'link', label: 'Copy link', shortcut: 'copy-url' },
     ...(tab.zone === 'essential' ? [] : [{
-      label: 'Move to space',
+      label: 'Move to orbit',
       icon: 'layers',
       submenu: [
         ...B.spaces.map((s) => ({ id: `space:${s.id}`, label: `${s.icon}  ${s.name}`, enabled: s.id !== tab.spaceId })),
         { type: 'separator' },
-        { id: 'space-new', label: 'New space' },
+        { id: 'space-new', label: 'New orbit' },
       ],
     }]),
     ...(back ? [{ id: 'back', icon: 'window', label: 'Move back to its old window' }] : []),

@@ -71,6 +71,8 @@ const ICONS = {
   eraser: '<path d="M20 20H8l-5-5 10-10 9 9-6 6"/><path d="M7 11l6 6"/>',
   // site settings
   'map-pin': '<path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/>',
+  book: '<path d="M3 5.5c3-1.4 6-1.4 9 .6 3-2 6-2 9-.6v13.6c-3-1.4-6-1.4-9 .6-3-2-6-2-9-.6z"/><path d="M12 6.1v13.6"/>',
+  translate: '<path d="M4 5.5h9M8.5 3.5v2M11 5.5c-.8 3.8-3.2 6.8-6.5 8.5M6.5 8.5c1.2 2 3 3.6 5 4.6"/><path d="M13 20.5l4-9 4 9M14.4 17.5h5.2"/>',
   camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"/><circle cx="12" cy="13" r="3"/>',
   mic: '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M19 10v1a7 7 0 0 1-14 0v-1M12 18v4"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',

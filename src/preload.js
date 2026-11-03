@@ -17,6 +17,13 @@ contextBridge.exposeInMainWorld('ultima', {
   windowIsOpen: invoke('window:is-open'),
   toggleFullscreen: invoke('window:fullscreen'),
   quit: invoke('app:quit'),
+  takeScreenshot: invoke('screenshot:take'),
+  showScreenshot: invoke('screenshot:show'),
+  isArticle: invoke('reader:check'),
+  readArticle: invoke('reader:article'),
+  translatePage: invoke('translate:page'),
+  showOriginal: invoke('translate:original'),
+  pageLanguage: invoke('translate:language'),
   relaunch: invoke('app:relaunch'),
   taskList: invoke('tasks:list'),
   taskEnd: invoke('tasks:end'),
@@ -49,6 +56,9 @@ contextBridge.exposeInMainWorld('ultima', {
   downloadDir: invoke('downloads:dir'),
   chooseDownloadDir: invoke('downloads:choose-dir'),
   resetDownloadDir: invoke('downloads:reset-dir'),
+  screenshotDir: invoke('screenshots:dir'),
+  chooseScreenshotDir: invoke('screenshots:choose-dir'),
+  resetScreenshotDir: invoke('screenshots:reset-dir'),
 
   addHistory: invoke('history:add'),
   listHistory: invoke('history:list'),
@@ -134,6 +144,7 @@ contextBridge.exposeInMainWorld('ultima', {
   playerUndock: (fx, fy, px, py) => ipcRenderer.send('player:undock', Number(fx), Number(fy), Number(px), Number(py)),
   playerDrag: (px, py) => ipcRenderer.send('player:drag', Number(px), Number(py)),
   playerZone: (zone) => ipcRenderer.send('player:zone', zone),
+  windowDrag: (phase) => ipcRenderer.send('window:drag', phase === 'start' ? 'start' : 'end'),
 
   on(channel, cb) {
     const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];

@@ -49,7 +49,7 @@ const extra = path.join(obj, 'ui-extra', 'fonts');
 fs.rmSync(path.join(obj, 'ui-extra'), { recursive: true, force: true });
 fs.mkdirSync(extra, { recursive: true });
 for (const f of fs.readdirSync(path.join(root, 'src', 'renderer', 'fonts'))) {
-  if (/^inter\.css$|latin-wght-normal\.woff2$|latin-ext-wght-normal\.woff2$|LICENSE/.test(f)) fs.copyFileSync(path.join(root, 'src', 'renderer', 'fonts', f), path.join(extra, f));
+  if (/^inter\.css$|^michroma|latin-wght-normal\.woff2$|latin-ext-wght-normal\.woff2$|LICENSE/.test(f)) fs.copyFileSync(path.join(root, 'src', 'renderer', 'fonts', f), path.join(extra, f));
 }
 fs.copyFileSync(path.join(root, 'assets', 'icon.ico'), path.join(obj, 'setup.ico')); // made by build/make-icons.js
 run('dotnet', ['build', '-c', 'Release', '-nologo', '-v', 'minimal'], { cwd: __dirname });

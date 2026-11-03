@@ -127,11 +127,11 @@ const SITE_CLEAR = {
   cache: { what: { cache: true }, done: 'Cache' },
   cookies: {
     what: { cookies: true }, done: 'Cookies', ok: 'Delete cookies',
-    title: (host) => `Delete cookies for ${host}?`, confirm: 'You’ll be signed out of it in every space.',
+    title: (host) => `Delete cookies for ${host}?`, confirm: 'You’ll be signed out of it in every orbit.',
   },
   all: {
     what: { cache: true, cookies: true, storage: true }, done: 'Data', ok: 'Clear data',
-    title: (host) => `Clear data for ${host}?`, confirm: 'You’ll be signed out of it in every space, and its cache and anything it saved on this computer are deleted.',
+    title: (host) => `Clear data for ${host}?`, confirm: 'You’ll be signed out of it in every orbit, and its cache and anything it saved on this computer are deleted.',
   },
 };
 
@@ -186,11 +186,11 @@ function sitePanelHtml() {
     <div class="um-head">Cookies and site data</div>
     <div class="site-row">
       <span class="site-ic">${icon('cookie', 16)}</span>
-      <span class="site-label">${cookies === 1 ? '1 cookie' : `${cookies} cookies`} in this space</span>
+      <span class="site-label">${cookies === 1 ? '1 cookie' : `${cookies} cookies`} in this orbit</span>
     </div>
     <div class="site-clear">
       <button class="btn small" data-act="site-clear-cache" title="Saved copies of its pages and images">Clear cache</button>
-      <button class="btn small" data-act="site-clear-cookies" title="Signs you out of it in every space">Delete cookies</button>
+      <button class="btn small" data-act="site-clear-cookies" title="Signs you out of it in every orbit">Delete cookies</button>
       <button class="btn small danger" data-act="site-clear-all" title="Its cache, cookies and everything else it saved">Clear all data</button>
     </div>
     <div class="um-head">Permissions</div>

@@ -140,7 +140,7 @@ function welcomeHtml() {
       <p class="wc-tagline">${WC.replay ? 'Let’s make it yours, again.' : 'Let’s make it yours.'}</p>
       <div class="wc-begin">
         <button class="wc-primary" data-wc="begin"><span>Get started</span><i class="wc-sheen"></i></button>
-        <p class="wc-fine">A minute or so: colors, your first space, Essentials and your stuff from other browsers.</p>
+        <p class="wc-fine">A minute or so: colors, your first orbit, Essentials and your stuff from other browsers.</p>
       </div>
     </section>
     <main class="wc-stage">
@@ -244,7 +244,7 @@ function stepHtml(step) {
   if (step === 'space') {
     const sp = B.spaces[0];
     const current = JSON.stringify(spaceTheme(sp).colors.map((c) => hslToHex(c)));
-    return `${kicker(2)}<h2>Make a space yours.</h2><p class="wc-sub">Spaces keep different parts of your life apart, each with its own tabs and colors. Here’s your first; make more any time.</p>
+    return `${kicker(2)}<h2>Make an orbit yours.</h2><p class="wc-sub">Orbits keep different parts of your life apart, each with its own tabs and colors. Here’s your first; make more any time.</p>
       <p class="wc-label">Name</p>
       <input class="wc-input" data-space-name maxlength="24" value="${esc(sp.name)}" spellcheck="false" autofocus>
       <p class="wc-label">Icon</p>
@@ -253,7 +253,7 @@ function stepHtml(step) {
       <div class="wc-presets">${THEME_PRESETS.map((p, i) => `<button class="wc-preset ${JSON.stringify(p.colors) === current ? 'on' : ''}" data-preset="${i}" style="--bg:${presetBackground(p)}" title="${esc(p.name)}"><span>${esc(p.name)}</span></button>`).join('')}</div>`;
   }
   if (step === 'essentials') {
-    return `${kicker(3)}<h2>Your Essentials.</h2><p class="wc-sub">The sites you live in, always at the top of the sidebar in every space. Pick as many as ${WELCOME_MAX}; they’re ready the moment you click them.</p>
+    return `${kicker(3)}<h2>Your Essentials.</h2><p class="wc-sub">The sites you live in, always at the top of the sidebar in every orbit. Pick as many as ${WELCOME_MAX}; they’re ready the moment you click them.</p>
       <div class="wc-ess-bar">
         <div class="wc-cats">${WELCOME_CATS.map(([k, label]) => `<button class="wc-cat ${WC.cat === k ? 'on' : ''}" data-cat="${k}">${label}</button>`).join('')}</div>
         <label class="wc-search">${icon('search', 14)}<input data-site-search placeholder="Search sites" spellcheck="false" value="${esc(WC.query)}"></label>

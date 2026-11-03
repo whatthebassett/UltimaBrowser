@@ -5,10 +5,62 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
-    version: '0.4.1',
-    date: '2026-11-02',
+    version: '0.5.0',
+    date: '2026-11-03',
+    highlights: [
+      {
+        title: 'Translate pages',
+        icon: 'translate',
+        text: 'Ultima translates a page into your language in one click. When a page is in another language, a translate button appears in the address bar.',
+        items: [
+          ['Stays working', 'Links, buttons and formatting keep working on the translated page.'],
+          ['New text too', 'Text the page adds later, like new comments, is translated as it appears.'],
+          ['Always translate', 'Pick a language to translate every time its pages open.'],
+          ['Show original', 'Go back to the page as it was in one click.'],
+        ],
+      },
+      {
+        title: 'Reader view',
+        icon: 'book',
+        text: 'Read articles without the ads, menus and clutter around them. A book appears in the address bar on pages that are articles.',
+        items: [
+          ['Your way', 'Make the text bigger or smaller, and pick light, sepia or dark.'],
+          ['F9', 'Opens and closes Reader view.'],
+        ],
+      },
+      {
+        title: 'Screenshots',
+        icon: 'camera',
+        text: 'Take a screenshot of part of a page, what’s on screen, or the whole page, even the parts you’d have to scroll to.',
+        items: [
+          ['Copied and saved', 'Every screenshot is copied, ready to paste, and saved as a file.'],
+          ['Your folder', 'Choose where screenshots go in Settings.'],
+          ['Ctrl+Shift+X', 'Takes a screenshot (Cmd+Shift+X on a Mac).'],
+        ],
+      },
+      {
+        title: 'Import your open tabs',
+        icon: 'import',
+        text: 'Your open tabs now come over from Chrome, Edge, Brave and Vivaldi, along with your bookmarks and history.',
+        items: [
+          ['Pinned stays pinned', 'Pinned tabs come over as pinned tabs.'],
+          ['Right where you were', 'Each tab opens on the page it was showing.'],
+        ],
+      },
+    ],
     new: [
       ['Mac menu bar', 'On a Mac, the menu bar has Ultima’s commands and shortcuts, like Chrome’s.'],
+      ['Glow loading animation', 'A new loading style: a glowing line that fills the address bar as the page loads.'],
+    ],
+    improved: [
+      ['Loading status', 'With the loading animation off, a small status at the bottom shows the page loading.'],
+      ['Spaces are now Orbits', 'Same feature, new name.'],
+      ['Ultima in the title', 'The page’s title at the top now ends with Ultima’s logo and name.'],
+      ['A new look for the name', 'The Ultima name is set in Michroma, in the welcome, Settings and the installer.'],
+      ['Top buttons', 'Back, Forward and Reload stretch across the top of the sidebar, and dragging one moves the window.'],
+    ],
+    fixed: [
+      ['Collapsed sidebar', 'Everything in the collapsed sidebar lines up in the middle, and your tabs always have room.'],
     ],
   },
   {

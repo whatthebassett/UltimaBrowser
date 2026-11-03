@@ -44,8 +44,8 @@ const modeOverride = () => { const sp = activeSpace(); return MODE_NAMES[sp?.the
 function modeRow() {
   const sp = modeOverride();
   return sRow('Mode', sp
-    ? `<span class="s-warn">${esc(sp.icon)} ${esc(sp.name)} uses its own ${MODE_NAMES[sp.theme.mode]} mode.</span> Spaces set to Auto follow this.`
-    : 'Spaces can set their own in their theme.',
+    ? `<span class="s-warn">${esc(sp.icon)} ${esc(sp.name)} uses its own ${MODE_NAMES[sp.theme.mode]} mode.</span> Orbits set to Auto follow this.`
+    : 'Orbits can set their own in their theme.',
   `${sp ? `<button class="btn" data-space-follow="${esc(sp.id)}">Follow this setting</button>` : ''}${sSeg('theme', [['dark', 'Dark', 'moon'], ['light', 'Light', 'sun'], ['system', 'System']])}`);
 }
 
@@ -70,12 +70,46 @@ async function chooseDownloadDir() {
   const r = await window.ultima.chooseDownloadDir(); // the system folder picker
   if (!r) return;
   B.downloadDir = r;
+  B.screenshotDir = null; // (screenshots may follow downloads)
   toast('Downloads will go to the new folder');
   rerenderIfShowing('settings');
 }
 
+// B.screenshotDir: the same for screenshots (Take screenshot saves them there; '' follows downloads)
+async function refreshScreenshotDir() {
+  B.screenshotDir = await window.ultima.screenshotDir();
+  rerenderIfShowing('settings');
+}
+
+async function chooseScreenshotDir() {
+  const r = await window.ultima.chooseScreenshotDir();
+  if (!r) return;
+  B.screenshotDir = r;
+  toast('Screenshots will go to the new folder');
+  rerenderIfShowing('settings');
+}
+
+async function resetScreenshotDir() {
+  B.screenshotDir = await window.ultima.resetScreenshotDir();
+  toast('Screenshots will go where your downloads go');
+  rerenderIfShowing('settings');
+}
+
+function screenshotRows() {
+  if (!B.screenshotDir) refreshScreenshotDir();
+  const d = B.screenshotDir;
+  const where = !d ? 'Checking…'
+    : d.missing ? `“${esc(d.missing)}” isn’t available, so screenshots go to ${esc(d.dir)} for now.`
+      : d.isDefault ? `Where your downloads go: ${esc(d.dir)}` : esc(d.dir);
+  return [
+    sRow('Save screenshots to', `<span class="s-path" title="${esc(d?.dir || '')}">${where}</span>`,
+      `${d && (!d.isDefault || d.missing) ? '<button class="btn" data-shot-reset>Same as downloads</button>' : ''}<button class="btn" data-shot-choose>${icon('folder', 14)} Change…</button>`),
+  ];
+}
+
 async function resetDownloadDir() {
   B.downloadDir = await window.ultima.resetDownloadDir();
+  B.screenshotDir = null;
   toast('Downloads will go to your Downloads folder');
   rerenderIfShowing('settings');
 }
@@ -162,7 +196,7 @@ function extPartly(e) {
 
 const SETTINGS_TABS = [
   {
-    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads, search and performance.',
+    id: 'general', title: 'General', icon: 'settings', desc: 'Default browser, startup, glance, downloads, search, translation and performance.',
     render: () => [
       sGroup('Default browser', [defaultBrowserRow()]),
       sGroup('Startup', [
@@ -176,9 +210,14 @@ const SETTINGS_TABS = [
         sRow('Mini player', 'Control what your other tabs are playing.', sSwitch('miniPlayer')),
       ]),
       sGroup('Downloads', downloadRows()),
+      sGroup('Screenshots', screenshotRows()),
       sGroup('Search', [
         sRow('Search engine', 'Used by the Control Palette and the new tab page.',
           `<select class="field" data-setting="searchEngine">${Object.entries(SEARCH_ENGINES).map(([k, e]) => `<option value="${k}" ${B.settings.searchEngine === k ? 'selected' : ''}>${e.name}</option>`).join('')}</select>`),
+      ]),
+      sGroup('Translation', [
+        sRow('Translate pages into', 'Pages are translated by Google Translate.',
+          `<select class="field" data-setting="translateTo"><option value="" ${B.settings.translateTo ? '' : 'selected'}>Your language (${esc(languageName(baseLang(navigator.language)))})</option>${TRANSLATE_LANGS.map((c) => `<option value="${c}" ${B.settings.translateTo === c ? 'selected' : ''}>${esc(languageName(c))}</option>`).join('')}</select>`),
       ]),
       sGroup('Performance', performanceRows()),
     ].join(''),
@@ -276,7 +315,7 @@ const SETTINGS_TABS = [
     },
   },
   {
-    id: 'spaces', title: 'Spaces', icon: 'layers', desc: 'Your spaces, their themes, sign-ins and Essentials.',
+    id: 'spaces', title: 'Orbits', icon: 'layers', desc: 'Your orbits, their themes, sign-ins and Essentials.',
     render: () => [
       sGroup('', B.spaces.map((sp) => sRow(
         `<span class="s-space">${sp.icon}</span>${esc(sp.name)}${sp.id === B.activeSpaceId ? ' <span class="s-badge">Current</span>' : ''}`,
@@ -285,13 +324,13 @@ const SETTINGS_TABS = [
          <button class="btn" data-space-theme="${sp.id}">${icon('palette', 14)} Edit theme</button>
          <button class="icon-btn" data-space-menu="${sp.id}" title="More">${icon('more', 16)}</button>`,
       ))),
-      `<div class="s-actions"><button class="btn" data-run="new-space">${icon('plus', 14)} New space</button></div>`,
+      `<div class="s-actions"><button class="btn" data-run="new-space">${icon('plus', 14)} New orbit</button></div>`,
       sGroup('Sign-ins', [
-        ...B.spaces.map((sp) => sRow(`Separate sign-ins for ${sp.icon} ${esc(sp.name)}`, 'Use different accounts in this space.',
+        ...B.spaces.map((sp) => sRow(`Separate sign-ins for ${sp.icon} ${esc(sp.name)}`, 'Use different accounts in this orbit.',
           `<button class="switch ${sp.separate ? 'on' : ''}" data-space-separate="${sp.id}" role="switch"></button>`)),
       ]),
       sGroup('Essentials', [
-        ...B.spaces.map((sp) => sRow(`Own Essentials for ${sp.icon} ${esc(sp.name)}`, 'Give this space its own Essentials.',
+        ...B.spaces.map((sp) => sRow(`Own Essentials for ${sp.icon} ${esc(sp.name)}`, 'Give this orbit its own Essentials.',
           `<button class="switch ${sp.ownEssentials ? 'on' : ''}" data-space-essentials="${sp.id}" role="switch"></button>`)),
       ]),
     ].join(''),
@@ -303,10 +342,10 @@ const SETTINGS_TABS = [
       return sGroup('When you click the address bar', [
         sRow('Address bar', `Click one to choose. ${keyText('palette') ? `${esc(keyText('palette'))} always opens the Control Palette.` : ''}`, addressModeCards(), 'data-stack'),
       ]) + sGroup('Loading animation', [
-        sRow('Show while pages load', 'A moving gradient until the page has loaded.', sSwitch('loadingIndicator')),
-        s.loadingIndicator !== false && sRow('Style', 'In the address bar, or a line under the toolbar.',
-          sSeg('loadingStyle', [['bar', 'Address bar'], ['line', 'Line']])),
-        sRow('Colors', 'Match each space, or pick your own. Click one to preview.', loaderSwatches(), 'data-stack'),
+        sRow('Show while pages load', 'A moving gradient until the page has loaded. Off, a small status shows at the bottom instead.', sSwitch('loadingIndicator')),
+        s.loadingIndicator !== false && sRow('Style', 'In the address bar, a glow along its bottom, or a line under the toolbar.',
+          sSeg('loadingStyle', [['bar', 'Address bar'], ['glow', 'Glow'], ['line', 'Line']])),
+        sRow('Colors', 'Match each orbit, or pick your own. Click one to preview.', loaderSwatches(), 'data-stack'),
         s.loadingTheme === 'custom' && s.loadingIndicator !== false && sRow('Custom colors', 'Pick 2 to 5 colors, and drag them to change the order. Save them to keep them as a choice.', loaderCustomEditor(), 'data-stack'),
         savedLoader(s.loadingTheme) && s.loadingIndicator !== false && sRow('Your colors', 'Give them a name. Pick 2 to 5 colors, and drag them to change the order.', loaderCustomEditor(savedLoader(s.loadingTheme)), 'data-stack'),
       ]);
@@ -349,7 +388,7 @@ const SETTINGS_TABS = [
       sGroup('Clear browsing data', [
         sRow('History', 'Every page you have visited.', '<button class="btn" data-clear="history">Clear history</button>'),
         sRow('Cache', 'Saved copies of pages and images. Sites may load slower at first.', '<button class="btn" data-clear="cache">Clear cache</button>'),
-        sRow('Cookies and site data', 'Signs you out of websites in every space.', '<button class="btn danger" data-clear="cookies">Delete</button>'),
+        sRow('Cookies and site data', 'Signs you out of websites in every orbit.', '<button class="btn danger" data-clear="cookies">Delete</button>'),
       ]),
       sGroup('Site permissions', [
         sRow('Site settings', 'Choose what each site can do.', '<button class="btn" data-tab="sites">Open site settings</button>'),
@@ -361,7 +400,7 @@ const SETTINGS_TABS = [
   {
     id: 'about', title: 'About', icon: 'sparkle', desc: '',
     render: () => `<div class="s-about">${LOGO.replace('class="logo"', 'class="logo s-about-logo"')}
-      <div class="s-about-name">Ultima Browser</div><div class="s-desc">Version ${esc(B.versions.app)}</div></div>
+      <div class="s-about-name">Ultima <span>Browser</span></div><div class="s-desc">Version ${esc(B.versions.app)}</div></div>
       ${sGroup('', [
         updateRowHtml(),
         sRow('Chromium', '', `<span class="s-value">${esc(B.versions.chrome)}</span>`),
@@ -540,8 +579,10 @@ function pageSettings(root, tab) {
     else if (t.hasAttribute('data-run-perm')) { await window.ultima.resetPermissions(); toast('Site permissions reset'); return; }
     else if (t.hasAttribute('data-dl-choose')) { chooseDownloadDir(); return; }
     else if (t.hasAttribute('data-dl-reset')) { resetDownloadDir(); return; }
+    else if (t.hasAttribute('data-shot-choose')) { chooseScreenshotDir(); return; }
+    else if (t.hasAttribute('data-shot-reset')) { resetScreenshotDir(); return; }
     else if (d.clear) {
-      if (d.clear === 'cookies' && !await confirmDialog('You will be signed out of websites in every space.', { title: 'Delete all cookies and site data?', ok: 'Delete', danger: true })) return;
+      if (d.clear === 'cookies' && !await confirmDialog('You will be signed out of websites in every orbit.', { title: 'Delete all cookies and site data?', ok: 'Delete', danger: true })) return;
       await window.ultima.clearData({ [d.clear]: true, partitions: B.spaces.filter((sp) => sp.separate).map((sp) => partitionFor(sp.id)) });
       toast(`${t.textContent.replace(/^(Clear|Delete) ?/, '') || 'Data'} cleared`);
       return;

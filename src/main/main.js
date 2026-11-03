@@ -14,6 +14,9 @@ const taskManager = require('./taskmanager');
 const tearoff = require('./tearoff');
 const { initPasswords } = require('./passwords');
 const { initUpdater } = require('./updater');
+const {
+  takeScreenshot, isArticle, readArticle, translatePage, showOriginal, pageLanguage, translationOf, forgetTranslation,
+} = require('./pagetools');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -64,7 +67,12 @@ const DEFAULT_SETTINGS = {
   loadingTheme: 'space', // a built-in choice, 'custom', or one of loadingSaved ('saved:<id>')
   loadingSaved: [], // colors made with Custom and kept as choices of their own: { id, name, colors }
   addressBarMode: 'palette', // what clicking the address bar opens: palette, extended (palette at the bar) or classic
-  loadingStyle: 'bar', // the loading animation: in the address bar (bar), or a line under the toolbar (line)
+  translateTo: '', // the language pages are translated into: '' for Ultima's own
+  translateAlways: [], // languages translated as their pages open
+  translateNever: [], // languages the address bar doesn't offer to translate
+  readerTheme: 'auto', // Reader view's colors: auto (light or dark, as Ultima is), light, sepia or dark
+  readerSize: 19, // and its text size, in px
+  loadingStyle: 'bar', // the loading animation: in the address bar (bar), a glowing line along its bottom (glow), or a line under the toolbar (line)
   showBookmarksBar: true,
   centerBookmarksBar: false,
   searchEngine: 'google',
@@ -72,6 +80,7 @@ const DEFAULT_SETTINGS = {
   sleepTabs: false, // tabs in the background that long go to sleep (renderer/tabsleep.js)
   sleepTabsAfter: 900, // seconds
   downloadDir: '', // '' = the system's Downloads folder
+  screenshotDir: '', // where screenshots are saved: '' = where downloads go
   askWhereToSave: false, // a Save As dialog for every download
   sidebarWidth: 264,
   sidebarCollapsed: false,
@@ -270,7 +279,7 @@ function pageContextMenu(wc, p) {
       ...(priv ? [] : [
         item('Open link in private tab', () => send('open-url', { url: p.linkURL, background: false, private: true }), { icon: 'incognito' }),
         item('Open link in private window', () => createWindow({ url: p.linkURL, private: true }), { icon: 'incognito' }),
-        item('Open link in a space…', () => send('open-url', { url: p.linkURL, pickSpace: true }), { icon: 'layers' }),
+        item('Open link in an orbit…', () => send('open-url', { url: p.linkURL, pickSpace: true }), { icon: 'layers' }),
       ]),
       item('Copy link address', () => clipboard.writeText(p.linkURL), { icon: 'link' }),
       ...(p.linkText?.trim() ? [item('Copy link text', () => clipboard.writeText(p.linkText.trim()), { icon: 'copy' })] : []),
@@ -348,6 +357,9 @@ function pageContextMenu(wc, p) {
       item('Copy page link', () => clipboard.writeText(wc.getURL()), { icon: 'link', shortcut: 'copy-url' }),
       ...(popup ? [] : [
         item('Find in page…', () => send('command', 'find'), { icon: 'find', shortcut: 'find' }),
+        item('Reader view', () => send('command', 'reader'), { icon: 'book', shortcut: 'reader' }),
+        item(translationOf(wc) ? 'Show original' : `Translate to ${languageName(translateTarget())}`, () => send('command', 'translate'), { icon: 'translate', shortcut: 'translate' }),
+        item('Take screenshot…', () => send('command', 'screenshot'), { icon: 'camera', shortcut: 'screenshot' }),
         item('Print…', () => send('command', 'print'), { icon: 'print', shortcut: 'print' }),
       ]),
       sep,
@@ -708,6 +720,32 @@ ipcMain.on('player:move', (e, x, y, px, py) => {
   if (!win || e.sender !== win.webContents || !PLAYER.bounds) return;
   setPlayerBounds(win, { ...PLAYER.bounds, x: Number(x) || 0, y: Number(y) || 0 });
   dragOverDock(screenPoint(px, py));
+});
+
+// A window dragged by one of the sidebar's top buttons (app.js: they move the window as well as click): it follows the
+// pointer until the button is let go. A maximized window comes down to its normal size first, under the pointer at
+// the same place across it, as Windows does when you drag a maximized window's title bar.
+const windowDrags = new Map(); // window id → the timer moving it
+ipcMain.on('window:drag', (e, phase) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  if (!win || win.isDestroyed()) return;
+  clearInterval(windowDrags.get(win.id));
+  windowDrags.delete(win.id);
+  if (phase !== 'start' || win.isFullScreen()) return;
+  const p = screen.getCursorScreenPoint();
+  let { x, y, width } = win.getBounds();
+  let grab = { x: p.x - x, y: p.y - y };
+  if (win.isMaximized()) {
+    const across = (p.x - x) / width;
+    win.unmaximize();
+    ({ width } = win.getBounds());
+    grab = { x: Math.round(across * width), y: grab.y };
+  }
+  windowDrags.set(win.id, setInterval(() => {
+    if (win.isDestroyed()) { clearInterval(windowDrags.get(win.id)); windowDrags.delete(win.id); return; }
+    const c = screen.getCursorScreenPoint();
+    win.setPosition(c.x - grab.x, c.y - grab.y);
+  }, 8));
 });
 // let go: in a sidebar, it docks there
 ipcMain.on('player:drop', (e, px, py) => {
@@ -2121,10 +2159,19 @@ function setupSession(ses) {
 
 // Where downloads go: the folder chosen in Settings → General, or the system's Downloads folder (also when the chosen
 // one has gone, e.g. a removed drive)
+const translateTarget = () => settings.data.translateTo || app.getLocale().split('-')[0] || 'en';
+const languageName = (code) => { try { return new Intl.DisplayNames([app.getLocale(), 'en'], { type: 'language' }).of(code); } catch { return code; } };
+
 function downloadDir() {
   const chosen = settings.data.downloadDir;
   try { if (chosen && fs.statSync(chosen).isDirectory()) return { dir: chosen, isDefault: false }; } catch { /* gone */ }
   return { dir: app.getPath('downloads'), isDefault: true, missing: chosen || undefined };
+}
+// where screenshots are saved: the folder chosen for them, or where downloads go
+function screenshotDir() {
+  const chosen = settings.data.screenshotDir;
+  try { if (chosen && fs.statSync(chosen).isDirectory()) return { dir: chosen, isDefault: false }; } catch { /* gone */ }
+  return { dir: downloadDir().dir, isDefault: true, missing: chosen || undefined };
 }
 
 // Mica/vibrancy take their light or dark tint from the native theme, so keep it in step with ours.
@@ -2217,6 +2264,10 @@ function setAppMenu() {
       cmd('Reload Page', 'reload'),
       cmd('Hard Reload', 'hard-reload'),
       sep,
+      cmd('Reader View', 'reader'),
+      cmd('Translate Page', 'translate'),
+      cmd('Take Screenshot…', 'screenshot'),
+      sep,
       cmd('Actual Size', 'zoom-reset'),
       cmd('Zoom In', 'zoom-in'),
       cmd('Zoom Out', 'zoom-out'),
@@ -2258,14 +2309,14 @@ function setAppMenu() {
       sep,
       cmd('Close Other Tabs', 'close-others'),
     ] },
-    { label: 'Spaces', submenu: [
-      cmd('Next Space', 'next-space'),
-      cmd('Previous Space', 'prev-space'),
+    { label: 'Orbits', submenu: [
+      cmd('Next Orbit', 'next-space'),
+      cmd('Previous Orbit', 'prev-space'),
       sep,
-      cmd('New Space', 'new-space'),
-      cmd('Rename Space…', 'rename-space'),
-      cmd('Edit Space Theme…', 'space-theme'),
-      cmd('Delete Space…', 'delete-space'),
+      cmd('New Orbit', 'new-space'),
+      cmd('Rename Orbit…', 'rename-space'),
+      cmd('Edit Orbit Theme…', 'space-theme'),
+      cmd('Delete Orbit…', 'delete-space'),
     ] },
     { role: 'windowMenu', submenu: [
       { role: 'minimize' }, { role: 'zoom' },
@@ -2516,7 +2567,8 @@ app.on('web-contents-created', (_e, wc) => {
   // extension pages (popups, extension tabs) keep their extension's background alive until they close or leave
   const id = wc.id;
   wc.on('did-finish-load', () => { try { holdWorkerFor(wc); } catch { /* never break page loads */ } });
-  wc.once('destroyed', () => { releaseWorkerFor(id); pageFavicons.delete(id); });
+  wc.once('destroyed', () => { releaseWorkerFor(id); pageFavicons.delete(id); forgetTranslation(wc); });
+  wc.on('did-navigate', () => forgetTranslation(wc)); // a new page isn't translated (translate.js offers again)
   wc.on('page-favicon-updated', (_ev, favicons) => { if (favicons?.[0]) pageFavicons.set(id, favicons[0]); });
   const priv = isPrivate(wc);
   if (priv) wc.once('destroyed', () => setTimeout(endPrivateBrowsingIfUnused, 0));
@@ -2847,6 +2899,17 @@ function registerIpc() {
     return downloadDir();
   });
   handle('downloads:reset-dir', () => { settings.data.downloadDir = ''; settings.save(); return downloadDir(); });
+  handle('screenshots:dir', () => screenshotDir());
+  handleFrom('screenshots:choose-dir', async (e) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(parentOf(e), {
+      title: 'Choose where screenshots go', buttonLabel: 'Use this folder', defaultPath: screenshotDir().dir, properties: ['openDirectory', 'createDirectory'],
+    });
+    if (canceled || !filePaths[0]) return null;
+    settings.data.screenshotDir = filePaths[0];
+    settings.save();
+    return screenshotDir();
+  });
+  handle('screenshots:reset-dir', () => { settings.data.screenshotDir = ''; settings.save(); return screenshotDir(); });
   handle('default-browser:get', () => defaultBrowser.status());
   handle('default-browser:set', () => defaultBrowser.makeDefault());
   handle('keys:recording', (on) => { recordingKeys = Boolean(on); });
@@ -3137,6 +3200,30 @@ function registerIpc() {
 
   handle('download:open', (id) => downloads.get(id) && shell.openPath(downloads.get(id).path));
   handle('download:show', (id) => downloads.get(id) && shell.showItemInFolder(downloads.get(id).path));
+  // Screenshots (screenshot.js) of a page in the window asking; the ones taken can be shown in their folder
+  const screenshots = new Set();
+  // (a tab's page in the window asking)
+  const tabOfSender = (e, id) => {
+    const wc = webContents.fromId(Number(id));
+    if (!wc || wc.isDestroyed() || wc.getType() !== 'webview' || windowOf(wc) !== windowOf(e.sender)) throw new Error('That page has gone');
+    return wc;
+  };
+  handleFrom('screenshot:take', async (e, { webContentsId, rect, full } = {}) => {
+    const wc = tabOfSender(e, webContentsId);
+    const shot = await takeScreenshot(wc, { rect, full: Boolean(full) }, screenshotDir().dir);
+    screenshots.add(shot.file);
+    return shot;
+  });
+  handle('screenshot:show', (file) => screenshots.has(file) && shell.showItemInFolder(file));
+  // Reader view (reader.js): whether a page is an article, and the article
+  handleFrom('reader:check', (e, id) => { const wc = tabOfSender(e, id); return /^https?:/i.test(wc.getURL()) ? isArticle(wc) : false; });
+  handleFrom('reader:article', (e, id) => readArticle(tabOfSender(e, id)));
+  // Translation (translate.js): a page into your language (or `to`), what's new on it since, back to the original
+  handleFrom('translate:page', (e, { webContentsId, to, from, more } = {}) => translatePage(tabOfSender(e, webContentsId), {
+    to: to || translateTarget(), from: /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(from || '') ? from : undefined, more: Boolean(more),
+  }));
+  handleFrom('translate:original', (e, id) => showOriginal(tabOfSender(e, id)));
+  handleFrom('translate:language', (e, id) => pageLanguage(tabOfSender(e, id)));
   handle('download:clear', () => {
     for (const [id, d] of downloads) if (d.state !== 'progressing') downloads.delete(id);
   });

@@ -90,14 +90,14 @@ kbd {
 }
 /* the sidebar style also goes with a tab dragged out of it, or fading away as it closes */
 #sidebar, .drag-card, .tab-ghost { font-family: var(--sb-font); font-size: var(--sb-text); }
-.sb-head { min-height: var(--topbar-h); display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 5px 0 5px 6px; flex: none; box-sizing: border-box; }
+.sb-head { min-height: var(--topbar-h); display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 5px 6px; flex: none; box-sizing: border-box; }
 body.mac .sb-head { padding-left: 76px; }
-.brand { display: flex; align-items: center; gap: 8px; height: 30px; flex: none; font-weight: 650; letter-spacing: 0.2px; white-space: nowrap; overflow: hidden; }
-.brand .logo { width: 20px; height: 20px; flex: none; }
 /* the emblem is a deep purple: a faint lavender halo keeps it legible on dark glass */
 .logo { filter: drop-shadow(0 0 2px rgba(196, 170, 255, 0.55)); user-select: none; }
 :root[data-theme="light"] .logo:not(.s-about-logo) { filter: none; }
 .nav { display: flex; flex-wrap: wrap; justify-content: flex-end; align-content: flex-start; gap: 2px; flex: 1; min-width: 0; }
+/* in the sidebar, the top buttons stretch across it, sharing its width (dividers stay thin) */
+.sb-head .nav > :not(.sb-div) { flex: 1 1 0; min-width: 28px; }
 /* a divider: a short upright line between two buttons, in a narrow cell of its own (flat, in the compact sidebar's
    single column) */
 .sb-div { flex: none; width: 9px; height: 30px; display: grid; place-items: center; }
@@ -279,7 +279,7 @@ body.card-dragging .tab.active:hover, body.no-tab-glow .tab.active:hover { box-s
 
 /* spaces */
 .space-head { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 2px 0 6px; flex: none; position: relative; }
-.space-icon { width: 24px; height: 24px; border-radius: 7px; font-size: 15px; display: grid; place-items: center; flex: none; }
+.space-icon { width: 24px; height: 24px; padding: 0; border-radius: 7px; font-size: 15px; display: grid; place-items: center; flex: none; } /* (no button padding: the emoji is wider than what it would leave) */
 .space-icon:hover { background: var(--glass-chip-hover); }
 .space-name { flex: 1; min-width: 0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: default; }
 .space-name-input {
@@ -307,16 +307,27 @@ body.card-dragging .tab.active:hover, body.no-tab-glow .tab.active:hover { box-s
 
 /* collapsed sidebar: favicons only */
 body.collapsed #sidebar { width: 60px; }
-body.collapsed .brand span, body.collapsed .nav, body.collapsed .url-text, body.collapsed .newtab-row .label,
-body.collapsed .newtab-row kbd, body.collapsed .tab .title, body.collapsed .tab .tab-close, body.collapsed .tab .tab-audio, body.collapsed .tab .tab-home,
+body.collapsed .nav, body.collapsed .url-text, body.collapsed .newtab-row .label,
+body.collapsed .newtab-row kbd, body.collapsed .newtab-row .kbds, body.collapsed .tab .title, body.collapsed .tab .tab-close, body.collapsed .tab .tab-audio, body.collapsed .tab .tab-home,
 body.collapsed #sb-resizer { display: none; }
 body.collapsed .urlbar, body.collapsed .newtab-row, body.collapsed .tab { justify-content: center; padding: 0; }
+/* the tab list scrolls without a scrollbar here: one would push the tabs off center */
+body.collapsed #tabs { scrollbar-width: none; }
+body.collapsed #tabs::-webkit-scrollbar { display: none; }
+/* a narrow sidebar stacks everything, which can run out of height: your tabs keep room for a few, and Essentials and
+   your orbits give way instead, each scrolling in its own place (the bottom buttons always show) */
+body.collapsed #tabs { min-height: 112px; }
+body.collapsed #space-bar { flex-wrap: nowrap; justify-content: flex-start; }
+body.collapsed #essentials, body.collapsed #space-bar { flex: 0 1 auto; min-height: 48px; overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+body.collapsed #essentials::-webkit-scrollbar, body.collapsed #space-bar::-webkit-scrollbar { display: none; }
+body.collapsed #essentials, body.collapsed #space-bar { scroll-snap-type: y proximity; }
+body.collapsed #essentials > *, body.collapsed #space-bar > * { scroll-snap-align: start; }
 body.collapsed .essentials { grid-template-columns: 1fr; --ess-h: 44px; --ess-icon: 20px; }
 body.sb-resizing #sidebar { transition: none !important; }
 body.collapsed .space-name, body.collapsed .space-more, body.collapsed .space-lock { display: none; }
 body.collapsed .space-head { justify-content: center; padding: 0; }
 body.collapsed .space-name-input { position: absolute; left: 50px; width: 200px; z-index: 20; box-shadow: inset 0 0 0 1.5px var(--space), var(--shadow); background: var(--surface); }
-body.collapsed .space-bar { flex-direction: column; align-items: center; }
+body.collapsed .space-bar { flex-direction: column; flex-wrap: nowrap; align-items: center; }
 body.collapsed .sb-foot { flex-direction: column; align-items: center; border-top: 0; }
 body.collapsed .sb-cells { flex-direction: column; flex-wrap: nowrap; align-items: center; }
 body.collapsed .sb-div { width: 30px; height: 9px; }
@@ -357,11 +368,16 @@ body.mac #topbar { padding: 0 8px; }
 body.mac.sb-hidden:not(.fullscreen) #topbar { padding-left: 80px; } /* clear of the window buttons */
 /* the page's title, in a badge of the bar's glass (hidden on built-in pages, which have none) */
 .page-title {
-  grid-column: 2; justify-self: center; max-width: 100%; min-width: 0; padding: 4px 14px; border-radius: 999px;
+  grid-column: 2; justify-self: center; display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; padding: 4px 14px; border-radius: 999px;
   background: var(--glass-chip); box-shadow: inset 0 0 0 1px var(--glass-edge), 0 1px 3px rgba(0, 0, 0, 0.12);
-  color: var(--text); font-size: 12.5px; font-weight: 650; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+  color: var(--text); font-size: 12.5px; font-weight: 650; line-height: 1.3; white-space: nowrap;
 }
-.page-title:empty { display: none; }
+/* the page's title is cut short; " - ULTIMA" with the logo always shows after it (alone on built-in pages) */
+.pt-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pt-text:empty, .pt-text:empty + .pt-brand .pt-sep { display: none; }
+.pt-brand { display: flex; align-items: center; gap: 6px; flex: none; letter-spacing: 0.6px; }
+.pt-brand .logo { width: 14px; height: 14px; flex: none; }
+.pt-sep { letter-spacing: 0; opacity: 0.7; }
 .top-actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 2px; }
 .pill { height: 24px; padding: 0 10px; border-radius: 12px; background: var(--accent-soft); color: var(--text); font-size: 12px; }
 
@@ -430,10 +446,19 @@ body.immersive #viewport { border-radius: 0; box-shadow: none; clip-path: none; 
 .fs-veil::backdrop { display: none; }
 
 .status {
-  position: absolute; left: 8px; bottom: 8px; max-width: 60%; padding: 4px 10px; border-radius: 7px; z-index: 4;
-  background: var(--surface-2); color: var(--text-2); font-size: 12px; white-space: nowrap; overflow: hidden;
+  position: absolute; left: 8px; bottom: 8px; max-width: 60%; padding: 7px 14px; border-radius: 9px; z-index: 4;
+  background: var(--surface-2); color: var(--text-2); font-size: 13px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; box-shadow: 0 0 0 1px var(--border), 0 4px 14px rgba(0, 0, 0, 0.3); pointer-events: none;
 }
+/* the loading status (renderStatus): a small spinner before "Loading example.com…" */
+.status.loading { display: flex; align-items: center; gap: 9px; padding-left: 12px; }
+.status.loading[hidden] { display: none; }
+.status.loading::before {
+  content: ""; width: 13px; height: 13px; flex: none; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text-2) 30%, transparent); border-top-color: var(--accent); animation: status-spin 0.8s linear infinite;
+}
+@keyframes status-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .status.loading::before { animation: none; } }
 
 .findbar {
   position: absolute; top: 10px; right: 14px; z-index: 6; display: flex; align-items: center; gap: 4px; padding: 6px;
@@ -904,6 +929,33 @@ body.collapsed .theme-editor { left: 72px; }
 .urlbar.loading .url-text, .urlbar.loading .url-icon { color: var(--text); }
 @keyframes url-load { to { transform: translateX(-50%); } }
 @keyframes url-sheen { to { left: 100%; } }
+/* …or as a glow (body.loader-glow): a thin line of the colors along the bar's bottom edge, with a blurred glow of it
+   rising to the middle of the bar. It doesn't loop: it grows from the left toward the right as the page loads, as far
+   as --load-p (0–1, app.js showLoadProgress) says. */
+@property --load-p { syntax: '<number>'; inherits: true; initial-value: 0; }
+body.loader-glow .url-loader { transition: opacity 0.5s ease, --load-p 0.4s ease-out; }
+body.loader-glow .urlbar.loading .url-loader { opacity: 1; transition-duration: 0.18s, 0.4s; }
+body.loader-glow .urlbar.finishing:not(.loading) .url-loader { transition: opacity 0.35s ease 0.22s, --load-p 0.22s ease-out; } /* fills the bar, then fades */
+body.loader-glow .urlbar:not(.loading):not(.finishing) .url-loader { transition: opacity 0.5s ease; } /* (back to 0 at once) */
+body.loader-glow .url-loader::before, body.loader-glow .url-loader::after {
+  left: 0; width: 100%; animation: none;
+  background: var(--loader-bg); background-size: 200% 100%; background-position: 0 0;
+}
+/* the line starts faint at the left and brightens toward the end that's growing… */
+body.loader-glow .url-loader::before {
+  top: auto; height: 2px; filter: brightness(1.25);
+  mask-image: linear-gradient(to right, rgba(0, 0, 0, 0.15), #000 calc(var(--load-p) * 100% - 2px), transparent calc(var(--load-p) * 100% + 1px));
+}
+/* …and a soft haze of light rises from it into the bar, fading as it goes up: faint at the left, strongest around the
+   growing end, and trailing off past it in a long straight fade (no rounded end). It reaches a little below the bar,
+   so its blur is full at the bottom. */
+body.loader-glow .url-loader::after {
+  top: 0; bottom: -12px; filter: blur(10px); opacity: 0.42;
+  mask-image:
+    linear-gradient(to right, rgba(0, 0, 0, 0.2), rgba(0, 0, 0, 0.5) calc(var(--load-p) * 60%), #000 calc(var(--load-p) * 100% - 24px), rgba(0, 0, 0, 0.3) calc(var(--load-p) * 100% + 16px), transparent calc(var(--load-p) * 100% + 64px)),
+    linear-gradient(to top, #000 12px, rgba(0, 0, 0, 0.45) 22px, rgba(0, 0, 0, 0.12) 34px, transparent 44px);
+  mask-composite: intersect;
+}
 /* …or as a line along the top of the page (body.loader-line): right under the toolbar, or the Waypoints bar when it's
    on. The same moving gradient, with a soft glow of itself under it, fading out as the page finishes. */
 body.loader-line .url-loader { display: none; }
@@ -1068,7 +1120,8 @@ body.lc-moving, body.lc-moving * { cursor: grabbing !important; user-select: non
 .s-actions { display: flex; justify-content: flex-end; margin-top: -14px; }
 .s-about { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 0 4px; text-align: center; }
 .s-about-logo { width: 64px; height: 64px; margin-bottom: 8px; filter: drop-shadow(0 8px 20px rgba(124, 58, 237, 0.35)); }
-.s-about-name { font-size: 18px; font-weight: 650; }
+.s-about-name { font: 400 15px/1.3 'Michroma', 'Inter', sans-serif; letter-spacing: 0.3em; text-transform: uppercase; }
+.s-about-name span { opacity: 0.6; }
 /* patch notes (patchnotes.js) */
 .pn-release { padding: 16px 18px; }
 .pn-release + .pn-release { border-top: 1px solid var(--border); }
@@ -2006,3 +2059,43 @@ body.player .mp { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1
   animation: mp-in 0.2s ease;
 }
 .mp-dock-hint[hidden] { display: none; }
+/* ---------- screenshots (screenshot.js) ---------- */
+/* over the page: dimmed, with a crosshair to drag out the part to take; while dragging, only what's outside it is dim */
+.shot { position: fixed; z-index: 55; overflow: hidden; cursor: crosshair; background: rgba(0, 0, 0, 0.32); outline: none; user-select: none; }
+.shot.picking { background: transparent; }
+.shot-sel { position: absolute; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 0 9999px rgba(0, 0, 0, 0.32); border-radius: 2px; pointer-events: none; }
+.shot-size { position: absolute; right: 6px; top: 6px; padding: 2px 7px; border-radius: 6px; font-size: 11px; font-variant-numeric: tabular-nums; color: #fff; background: rgba(0, 0, 0, 0.6); white-space: nowrap; }
+.shot-bar {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 14px;
+  border-radius: 12px; cursor: default; color: var(--text); font-size: 13px; white-space: nowrap;
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+  box-shadow: inset 0 0 0 1px var(--glass-edge), var(--shadow);
+}
+.shot-bar .btn { display: inline-flex; align-items: center; gap: 6px; }
+.shot.picking .shot-bar { opacity: 0; pointer-events: none; }
+.shot-flash { position: fixed; z-index: 56; pointer-events: none; background: #fff; animation: shot-flash 0.45s ease-out forwards; }
+@keyframes shot-flash { from { opacity: 0.7; } to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .shot-flash { display: none; } }
+/* ---------- Reader view (reader.js) ---------- */
+.url-shield.url-tool.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.reader-view { position: absolute; z-index: 3; display: flex; overflow: hidden; background: #fbfaf8; }
+.reader-view[hidden] { display: none; }
+.reader-view iframe { flex: 1; width: 100%; height: 100%; border: 0; background: transparent; }
+.rv-bar {
+  position: absolute; top: 12px; right: 16px; z-index: 1; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 12px;
+  color: var(--text); background: color-mix(in srgb, var(--surface-2) 86%, transparent); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  box-shadow: inset 0 0 0 1px var(--glass-edge), var(--shadow); opacity: 0.55; transition: opacity 0.15s;
+}
+.rv-bar:hover, .rv-bar:focus-within { opacity: 1; }
+.rv-a { font: 600 16px/1 Georgia, serif; }
+.rv-a.small { font-size: 12px; }
+.rv-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--border); }
+.rv-swatch { width: 22px; height: 22px; margin: 0 2px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.45); }
+.rv-swatch.light { background: #fbfaf8; }
+.rv-swatch.sepia { background: #f5eddb; }
+.rv-swatch.dark { background: #1b1b1f; }
+.rv-swatch.on { box-shadow: inset 0 0 0 1px rgba(128, 128, 128, 0.45), 0 0 0 2px var(--accent); }
+/* the translate button while a page is being translated */
+.url-shield.url-tool.busy svg { animation: tool-busy 1s ease-in-out infinite alternate; }
+@keyframes tool-busy { from { opacity: 1; } to { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .url-shield.url-tool.busy svg { animation: none; } }

@@ -106,12 +106,12 @@ async function tabSelectionMenu(tabs) {
     { id: 'mute', icon: allMuted ? 'volume' : 'mute', label: allMuted ? 'Unmute tabs' : 'Mute tabs' },
     { id: 'copy', icon: 'link', label: 'Copy links' },
     ...(B.private || !movable.length ? [] : [{
-      label: 'Move to space',
+      label: 'Move to orbit',
       icon: 'layers',
       submenu: [
         ...B.spaces.map((s) => ({ id: `space:${s.id}`, label: `${s.icon}  ${s.name}`, enabled: s.id !== B.activeSpaceId })),
         { type: 'separator' },
-        { id: 'space-new', label: 'New space' },
+        { id: 'space-new', label: 'New orbit' },
       ],
     }]),
     { id: 'window', icon: 'window', label: 'Move to new window', enabled: regular.length > 0 },

@@ -74,12 +74,12 @@ function cycleSpace(dir) {
 }
 
 function createSpace(switchTo = true) {
-  if (B.private) return toast('Private windows don’t have spaces');
+  if (B.private) return toast('Private windows don’t have orbits');
   const usedIcons = new Set(B.spaces.map((s) => s.icon));
   const colors = Object.values(SPACE_COLORS);
   const space = {
     id: newSpaceId(),
-    name: `Space ${B.spaces.length + 1}`,
+    name: `Orbit ${B.spaces.length + 1}`,
     icon: SPACE_ICONS.find((i) => !usedIcons.has(i)) || '⭐',
     color: colors[B.spaces.length % colors.length],
     separate: false,
@@ -95,7 +95,7 @@ function startRenameSpace() {
   const label = $('.space-name');
   // with horizontal tabs (and the compact sidebar) the space's name isn't on screen to edit in place: a dialog asks
   if (!label || !label.getClientRects().length) {
-    editDialog({ title: 'Rename space', fields: [{ id: 'name', label: 'Name', value: space.name }], ok: 'Rename' }).then((v) => {
+    editDialog({ title: 'Rename orbit', fields: [{ id: 'name', label: 'Name', value: space.name }], ok: 'Rename' }).then((v) => {
       const name = v?.name?.trim().slice(0, 28);
       if (!name) return;
       space.name = name;
@@ -134,7 +134,7 @@ function setSpaceSeparate(space, separate) {
   renderTabs();
   renderSpaces();
   saveSession();
-  toast(separate ? `${space.name} now keeps its own sign-ins and cookies` : `${space.name} now shares sign-ins with your other spaces`);
+  toast(separate ? `${space.name} now keeps its own sign-ins and cookies` : `${space.name} now shares sign-ins with your other orbits`);
 }
 
 // Gives a space Essentials of its own instead of the shared ones, or takes them away. Its own Essentials stay with it
@@ -164,10 +164,10 @@ function settleEssentials() {
 }
 
 async function deleteSpace(space) {
-  if (B.spaces.length === 1) return toast('You need at least one space');
+  if (B.spaces.length === 1) return toast('You need at least one orbit');
   const tabs = [...ownTabs(space.id), ...ownEssentials(space.id)];
   const closes = tabs.length ? `Its ${tabs.length} tab${tabs.length > 1 ? 's' : ''} will be closed. ` : '';
-  const ok = await confirmDialog(`${closes}${space.ownEssentials ? 'Its own Essentials go with it; the shared ones are kept.' : 'Essentials are kept.'}`, { title: `Delete the “${space.name}” space?`, ok: 'Delete space', danger: true });
+  const ok = await confirmDialog(`${closes}${space.ownEssentials ? 'Its own Essentials go with it; the shared ones are kept.' : 'Essentials are kept.'}`, { title: `Delete the “${space.name}” orbit?`, ok: 'Delete orbit', danger: true });
   if (!ok) return undefined;
   for (const t of tabs) dropWebview(t);
   B.tabs = B.tabs.filter((t) => !tabs.includes(t));
@@ -201,16 +201,16 @@ function moveTabToSpace(tab, spaceId, { quiet = false } = {}) {
 async function spaceMenu(space = activeSpace(), pos = undefined) {
   if (B.private) return;
   const choice = await showMenu([
-    { id: 'rename', icon: 'layers', label: 'Rename space' },
+    { id: 'rename', icon: 'layers', label: 'Rename orbit' },
     { label: 'Icon', icon: 'sparkle', submenu: SPACE_ICONS.map((i) => ({ id: `icon:${i}`, label: i })) },
     { id: 'theme', icon: 'palette', label: 'Edit theme…', shortcut: 'space-theme' },
     { id: 'separate', type: 'checkbox', checked: space.separate, label: 'Separate sign-ins and cookies' },
     { id: 'essentials', type: 'checkbox', checked: Boolean(space.ownEssentials), label: 'Own Essentials' },
     { type: 'separator' },
     { label: 'Switch to', icon: 'forward', submenu: B.spaces.map((s) => ({ id: `go:${s.id}`, label: `${s.icon}  ${s.name}`, enabled: s.id !== B.activeSpaceId })) },
-    { id: 'new', icon: 'plus', label: 'New space', shortcut: 'new-space' },
+    { id: 'new', icon: 'plus', label: 'New orbit', shortcut: 'new-space' },
     { type: 'separator' },
-    { id: 'delete', icon: 'trash', danger: true, label: 'Delete space…', enabled: B.spaces.length > 1 },
+    { id: 'delete', icon: 'trash', danger: true, label: 'Delete orbit…', enabled: B.spaces.length > 1 },
   ], pos);
   if (!choice) return;
   const [kind, value] = choice.split(/:(.*)/s);
@@ -227,16 +227,16 @@ async function spaceMenu(space = activeSpace(), pos = undefined) {
 function renderSpaces() {
   const space = activeSpace();
   if (!space) return;
-  $('#space-head').innerHTML = `<button class="space-icon" title="Space options">${space.icon}</button>
+  $('#space-head').innerHTML = `<button class="space-icon" title="Orbit options">${space.icon}</button>
     <span class="space-name" title="Double-click to rename">${esc(space.name)}</span>
     ${space.separate ? `<span class="space-lock" title="Separate sign-ins">${icon('shield', 12)}</span>` : ''}
-    <button class="icon-btn space-more" title="Space options">${icon('more', 16)}</button>`;
+    <button class="icon-btn space-more" title="Orbit options">${icon('more', 16)}</button>`;
   // with horizontal tabs, one button for them all (the space you're in); in the sidebar, a chip for each
   if (tabsAcross()) renderSpaceSwitch(space);
   else {
     $('#space-bar').innerHTML = B.spaces.map((s, i) => `<button class="space-chip ${s.id === space.id ? 'on' : ''}" data-space="${s.id}"
       style="--chip:${s.color}" title="${esc(withKey(s.name, `space-${i + 1}`))}">${s.icon}</button>`).join('')
-      + `<button class="space-chip add" data-act="new-space" title="${esc(withKey('New space', 'new-space'))}">${icon('plus', 14)}</button>`;
+      + `<button class="space-chip add" data-act="new-space" title="${esc(withKey('New orbit', 'new-space'))}">${icon('plus', 14)}</button>`;
   }
 }
 
@@ -249,7 +249,7 @@ function renderSpaceSwitch(space) {
   const i = B.spaces.indexOf(space);
   const before = SS.shown && B.spaces.findIndex((s) => s.id === SS.shown);
   bar.innerHTML = `<button class="space-switch" data-space-switch style="--chip:${space.color}" aria-haspopup="menu"
-      title="${esc(`${space.name} — click for your spaces, scroll to switch`)}">
+      title="${esc(`${space.name} — click for your orbits, scroll to switch`)}">
     <span class="ss-face"><span class="ss-icon">${space.icon}</span><span class="ss-name">${esc(space.name)}</span></span>
     <span class="ss-chev">${icon('forward', 12)}</span></button>`;
   if (SS.shown && SS.shown !== space.id && before >= 0 && !reducedMotion()) {
@@ -270,7 +270,7 @@ async function spaceSwitchMenu() {
   const choice = await showMenu([
     ...B.spaces.map((s, i) => ({ id: `space:${s.id}`, type: 'checkbox', checked: s.id === current.id, swatch: s.color, label: `${s.icon}  ${s.name}`, shortcut: `space-${i + 1}` })),
     { type: 'separator' },
-    { id: 'new', icon: 'plus', label: 'New space', shortcut: 'new-space' },
+    { id: 'new', icon: 'plus', label: 'New orbit', shortcut: 'new-space' },
     { id: 'options', icon: 'more', label: `${current.name} options…` },
   ], { x: r.left, y: r.bottom + 6 });
   btn.classList.remove('open');

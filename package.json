@@ -1,7 +1,7 @@
 {
   "name": "ultima-browser",
   "productName": "Ultima Browser",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Ultima Browser — a vertical-tabs browser with a Control Palette and one-click import from Chrome, Edge, Firefox and Zen.",
   "main": "src/main/main.js",
   "author": "UltimaBass <me@ultimabass.com>",
@@ -9,6 +9,7 @@
   "scripts": {
     "postinstall": "node node_modules/electron/install.js",
     "start": "electron .",
+    "test": "node --test --test-concurrency=1 --disable-warning=ExperimentalWarning \"test/*.test.js\"",
     "test:extensions": "node build/test-extensions.js",
     "dist": "node installer/build.js",
     "dist:nsis": "electron-builder --win",
