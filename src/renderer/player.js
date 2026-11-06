@@ -34,9 +34,12 @@ function playerClock(s) {
 }
 
 // A player in `card`: floating (its own window) or `docked` (in a sidebar, `sidebar`). Returns what main.js tells it.
-function createPlayer(card, { docked = false, sidebar = null } = {}) {
-  const PL = { want: null, video: false, pc: null, streamFor: null, timer: 0, size: '', html: '', videoWidth: 0 };
-  card.innerHTML = '<div class="mp-bg"></div><video class="mpv" autoplay muted playsinline></video><div class="mp-ui"></div><div class="mpv-grip" aria-hidden="true"></div>';
+// Docked, a video is as tall as `dockHeight()` at most (narrower and centred when that's what holds it), and the
+// handle along its top sets that height (`onDockHeight` keeps it).
+function createPlayer(card, { docked = false, sidebar = null, dockHeight = () => 240, onDockHeight = () => {} } = {}) {
+  const PL = { want: null, video: false, pc: null, streamFor: null, timer: 0, size: '', html: '', videoSize: 0 };
+  card.innerHTML = '<div class="mp-bg"></div><video class="mpv" autoplay muted playsinline></video><div class="mp-ui"></div><div class="mpv-grip" aria-hidden="true"></div>'
+    + (docked ? '<div class="mp-dock-grip" title="Drag to resize" aria-hidden="true"></div>' : '');
   const ui = $('.mp-ui', card);
   const video = $('.mpv', card);
 
@@ -104,22 +107,42 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
     if (left) left.textContent = `-${playerClock(m.duration - pos)}`;
   }
 
-  // Its size: the card's, or the video's at the width you gave it (docked: the sidebar's width). Floating, its window
-  // takes that size.
+  // Its size: the card's, or the video's at the size you gave it (docked: the sidebar's width). Floating, its window
+  // takes that size. The size you give a video is its longer side, its width or a portrait video's height, so a video
+  // of either shape comes out about as big; and it's never bigger than the screen it's on, so its corner grip stays
+  // where you can reach it.
   function ratio() {
     const m = PL.want?.state;
     return Math.max(0.3, Math.min(2, m?.width && m?.height ? m.height / m.width : 9 / 16));
   }
-  function fit({ keep = false, user = 0, width } = {}) {
-    if (docked) {
-      card.style.aspectRatio = PL.video ? String(1 / ratio()) : '';
-      return;
-    }
+  // the video's width for a longer side of `long`, kept to the screen (and at least wide enough for its controls)
+  function videoWidth(long) {
+    const r = ratio();
+    const room = { w: screen.availWidth - PLAYER_MARGIN * 2 - 24, h: screen.availHeight - PLAYER_MARGIN * 2 - 24 };
+    let w = Math.max(240, Math.min(1200, long)) / Math.max(1, r);
+    w = Math.min(w, room.w, room.h / r);
+    return Math.round(Math.max(240, w));
+  }
+  const longSide = (w) => Math.round(w * Math.max(1, ratio()));
+  // docked: as wide as the sidebar, unless that would make it taller than its height (then narrower, centred)
+  const dockLimits = () => ({ min: 140, max: Math.max(140, Math.round((sidebar || card.parentElement).clientHeight * 0.7)) });
+  function fitDocked(height = dockHeight()) {
+    if (!PL.video) { card.style.width = ''; card.style.height = ''; return; }
+    const box = card.parentElement;
+    const cs = getComputedStyle(box);
+    const full = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    const { min, max } = dockLimits();
+    const h = Math.min(Math.max(min, Math.min(max, height)), full * ratio());
+    card.style.width = `${Math.round(h / ratio())}px`;
+    card.style.height = `${Math.round(h)}px`;
+  }
+  function fit({ keep = false, user = false, width } = {}) {
+    if (docked) { fitDocked(); return; }
     let w;
     let h;
     if (PL.video) {
-      w = Math.max(240, Math.min(1200, width || PL.videoWidth || PL.want?.videoWidth || 400));
-      PL.videoWidth = w;
+      w = width ? videoWidth(longSide(width)) : videoWidth(PL.videoSize || PL.want?.videoWidth || 400);
+      PL.videoSize = longSide(w);
       h = Math.round(w * ratio());
       card.style.width = `${w}px`;
       card.style.height = `${h}px`;
@@ -132,7 +155,7 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
     const size = `${w}x${h}`;
     if (size === PL.size && !keep) return;
     PL.size = size;
-    window.ultima.playerFit({ width: w + PLAYER_MARGIN * 2, height: h + PLAYER_MARGIN * 2, keep, user });
+    window.ultima.playerFit({ width: w + PLAYER_MARGIN * 2, height: h + PLAYER_MARGIN * 2, keep, user: user && PL.video ? PL.videoSize : 0 });
   }
 
   // ---- the video's picture ----
@@ -199,9 +222,10 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
   // A video clicked without dragging (not on a button) plays or pauses.
   card.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
+    if (docked && e.target.closest('.mp-dock-grip')) { resizeDocked(e); return; }
     const grip = !docked && e.target.closest('.mpv-grip');
     const onControl = Boolean(e.target.closest('button, .mp-seek'));
-    const start = { x: e.screenX, y: e.screenY, wx: window.screenX, wy: window.screenY, w: PL.videoWidth || 400, moved: false, out: false };
+    const start = { x: e.screenX, y: e.screenY, wx: window.screenX, wy: window.screenY, w: card.getBoundingClientRect().width, moved: false, out: false };
     const catcher = docked ? document.body : card; // (docked, the card hides once it's out)
     let pages = [];
     let frame = 0;
@@ -231,7 +255,12 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
       }
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        if (grip) fit({ keep: true, width: start.w + dx, user: start.w + dx });
+        // the grip follows whichever way you drag it further: across, or down (as a portrait video mostly is)
+        if (grip) {
+          const across = start.w + dx;
+          const down = start.w + dy / ratio();
+          fit({ keep: true, width: Math.abs(dx) >= Math.abs(dy / ratio()) ? across : down, user: true });
+        }
         else window.ultima.playerMove(start.wx + dx, start.wy + dy, ev.screenX, ev.screenY);
       });
     };
@@ -254,7 +283,33 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
     window.addEventListener('pointerup', up, true);
     window.addEventListener('pointercancel', up, true);
   });
-  card.addEventListener('dblclick', (e) => { if (PL.video && !e.target.closest('button, .mp-seek, .mpv-grip')) window.ultima.playerAction('open'); });
+  // Docked, the handle along its top: dragged up, the video takes more of the sidebar (the tabs keep the rest);
+  // down, less. Kept for next time when it's let go.
+  function resizeDocked(e) {
+    e.preventDefault();
+    const grip = e.target;
+    const start = { y: e.clientY, h: card.getBoundingClientRect().height };
+    let height = start.h;
+    try { grip.setPointerCapture(e.pointerId); } catch { /* let go already */ }
+    card.classList.add('mp-resizing');
+    const move = (ev) => {
+      const { min, max } = dockLimits();
+      height = Math.max(min, Math.min(max, start.h - (ev.clientY - start.y)));
+      fitDocked(height);
+    };
+    const up = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      card.classList.remove('mp-resizing');
+      onDockHeight(Math.round(height));
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  }
+
+  card.addEventListener('dblclick', (e) => { if (PL.video && !e.target.closest('button, .mp-seek, .mpv-grip, .mp-dock-grip')) window.ultima.playerAction('open'); });
 
   return {
     state(want) {
@@ -270,6 +325,8 @@ function createPlayer(card, { docked = false, sidebar = null } = {}) {
       render();
     },
     signal: onSignal,
+    // the sidebar changed size: docked, it fits again
+    refit() { if (docked && PL.want) fitDocked(); },
     // over a sidebar, as it's dragged: it would dock there
     docking(on) { card.classList.toggle('mp-docking', Boolean(on)); },
   };

@@ -75,6 +75,18 @@ kbd {
 .no-drag, .drag button, .drag input { -webkit-app-region: no-drag; }
 [hidden] { display: none !important; }
 
+/* Ultima's icons for the window's buttons (Windows; wincontrols.js), under Windows' own buttons, which are drawn clear */
+#win-glyphs {
+  position: fixed; top: 0; right: 0; z-index: 2147483000; pointer-events: none;
+  left: calc(env(titlebar-area-x, 0px) + env(titlebar-area-width, calc(100vw - 138px)));
+  height: env(titlebar-area-height, 40px);
+  display: grid; grid-template-columns: repeat(3, 1fr); color: var(--text); transition: color 0.15s;
+}
+#win-glyphs > span { display: grid; place-items: center; }
+#win-glyphs .wg-ic { fill: none; stroke: currentColor; stroke-width: 1; stroke-linecap: round; stroke-linejoin: round; }
+#win-glyphs.blurred { color: var(--text-3); }
+body.welcoming #win-glyphs { color: #e8e4ff; }
+
 #app { display: flex; height: 100vh; }
 
 /* ---------- sidebar ---------- */
@@ -98,6 +110,11 @@ body.mac .sb-head { padding-left: 76px; }
 .nav { display: flex; flex-wrap: wrap; justify-content: flex-end; align-content: flex-start; gap: 2px; flex: 1; min-width: 0; }
 /* in the sidebar, the top buttons stretch across it, sharing its width (dividers stay thin) */
 .sb-head .nav > :not(.sb-div) { flex: 1 1 0; min-width: 28px; }
+/* The row of top buttons is title bar too: Windows moves the window from the gaps between the buttons, the dividers
+   and greyed-out buttons (which get no clicks at all), and initTopButtonDrag (app.js) from the buttons themselves.
+   Not while the sidebar is being edited (its buttons and spaces are moved around then) or is hidden. */
+#sidebar .sb-head .nav, #sidebar .sb-head .nav button:disabled { -webkit-app-region: drag; }
+body.sb-editing #sidebar .sb-head .nav, body.sb-editing #sidebar .sb-head .nav *, body.sb-hidden #sidebar .sb-head .nav, body.sb-hidden #sidebar .sb-head .nav * { -webkit-app-region: no-drag; }
 /* a divider: a short upright line between two buttons, in a narrow cell of its own (flat, in the compact sidebar's
    single column) */
 .sb-div { flex: none; width: 9px; height: 30px; display: grid; place-items: center; }
@@ -474,6 +491,12 @@ body.immersive #viewport { border-radius: 0; box-shadow: none; clip-path: none; 
 .error-page h2 { margin: 6px 0 0; font-size: 22px; }
 .error-page p { margin: 0; color: var(--text-2); max-width: 460px; user-select: text; }
 .error-page code { color: var(--text-3); font-size: 12px; }
+/* a dangerous site's warning (tabs.js): the page tinted red, so it can't be mistaken for the site */
+.unsafe-page { background: color-mix(in srgb, var(--danger) 16%, var(--surface)); }
+.unsafe-page > .ic { color: var(--danger); }
+.unsafe-page b { color: var(--text); }
+.unsafe-actions { display: flex; gap: 8px; margin-top: 10px; }
+.unsafe-page .unsafe-source { font-size: 12px; color: var(--text-3); margin-top: 6px; }
 
 /* ---------- buttons & inputs ---------- */
 .btn {
@@ -2049,6 +2072,26 @@ body.player .mp { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1
 /* docked in the sidebar, under the tabs: as wide as the sidebar, a video at its own shape */
 .mp-docked { margin-top: 2px; max-height: 60vh; }
 .mp-docked .mpv-grip { display: none; }
+/* a video takes the height you give it (player.js), narrower and centred when that's what holds it; the handle along
+   its top sets that height */
+.mp-docked.mp-video { align-self: center; max-height: none; }
+.mp-dock-grip { display: none; }
+.mp-docked.mp-video .mp-dock-grip {
+  display: block; position: absolute; left: 0; right: 0; top: 0; z-index: 3; height: 12px; cursor: ns-resize;
+}
+.mp-docked.mp-video .mp-dock-grip::before {
+  content: ""; position: absolute; left: 50%; top: 4px; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px;
+  background: rgb(255 255 255 / 0.7); box-shadow: 0 1px 3px rgb(0 0 0 / 0.5); opacity: 0; transition: opacity 0.15s;
+}
+.mp-docked.mp-video:hover .mp-dock-grip::before, .mp-docked.mp-resizing .mp-dock-grip::before { opacity: 1; }
+.mp-docked.mp-resizing { transition: none; }
+/* narrow (a portrait video kept short): just play and pause, back to the tab and close */
+.mp-docked.mp-video { container-type: inline-size; }
+@container (max-width: 180px) {
+  .mp-docked .mp-text, .mp-docked .mp-times, .mp-docked .mp-btn:not(.mp-main) { display: none; }
+  .mp-docked .mp-head { justify-content: flex-end; }
+  .mp-docked.mp-video .mp-ui { padding: 6px 6px 4px; }
+}
 .mp-docked.mp-video .mp-ui { padding: 8px 10px 6px; }
 .mp-docked .mp-controls { gap: 10px; }
 .mp-docked.mp-video .mp-btn { width: 30px; height: 30px; }

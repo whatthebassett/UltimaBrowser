@@ -12,6 +12,8 @@
 // page's script) and +js() scriptlets; HTML filtering (##^) isn't supported. uBlock's !#if / !#include work.
 const fs = require('fs');
 const path = require('path');
+const v8 = require('v8');
+const crypto = require('crypto');
 
 // which list a filter came from, so ads and trackers can be turned off separately
 const ADS = 1;
@@ -524,6 +526,34 @@ const BUILT_IN = {
 const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 
+// The built engine, kept beside the lists (V8's own format): its key's length, its key, then the engine. Read back, its
+// parts are plain objects again, so they get their classes back; the per-page caches start empty.
+const ENGINE_CACHE = 'engine.bin';
+function writeEngineCache(file, key, engine) {
+  try {
+    const body = v8.serialize({ ...engine, pageCache: null, cssCache: null, genericCss: null });
+    const head = Buffer.from(key, 'utf8');
+    const len = Buffer.alloc(4);
+    len.writeUInt32LE(head.length);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(`${file}.tmp`, Buffer.concat([len, head, body]));
+    fs.renameSync(`${file}.tmp`, file);
+  } catch { /* built again next time */ }
+}
+function readEngineCache(file, key) {
+  try {
+    const buf = fs.readFileSync(file);
+    const n = buf.readUInt32LE(0);
+    if (buf.toString('utf8', 4, 4 + n) !== key) return null;
+    const e = v8.deserialize(buf.subarray(4 + n));
+    Object.setPrototypeOf(e, Engine.prototype);
+    for (const k of ['block', 'allow']) Object.setPrototypeOf(e[k], NetworkIndex.prototype);
+    for (const k of ['css', 'proc', 'js']) Object.setPrototypeOf(e[k], CosmeticStore.prototype);
+    Object.assign(e, { pageCache: new Map(), cssCache: new Map(), genericCss: new Map() });
+    return e;
+  } catch { return null; } // none yet, from other lists, or unreadable
+}
+
 class Blocker {
   constructor(dir, fetchText) {
     this.dir = dir;
@@ -534,8 +564,15 @@ class Blocker {
     try { this.meta = JSON.parse(fs.readFileSync(path.join(dir, 'lists.json'), 'utf8')); } catch { /* first run */ }
   }
 
-  // builds the engine from the lists on disk (or the built-in one)
+  // builds the engine from the lists on disk (or the built-in one), or takes the copy kept from the last build of the
+  // same lists (building takes a few hundred milliseconds, while Ultima starts)
   load() {
+    const key = this.cacheKey();
+    const kept = readEngineCache(path.join(this.dir, ENGINE_CACHE), key);
+    if (kept) {
+      this.engine = kept;
+      return kept;
+    }
     const sources = [];
     for (const l of LISTS) {
       try { sources.push({ text: fs.readFileSync(path.join(this.dir, `${l.id}.txt`), 'utf8'), list: l.list, trusted: l.trusted }); } catch { /* not downloaded yet */ }
@@ -545,7 +582,21 @@ class Blocker {
       if (!sources.some((s) => s.list & Number(list) && s.text !== ULTIMA_RULES)) sources.push({ text: hosts.trim().split(/\s+/).map((h) => `||${h}^`).join('\n'), list: Number(list) });
     }
     this.engine = new Engine(sources);
+    // kept for next time, a little later (writing it takes a moment too)
+    clearTimeout(this.cacheTimer);
+    const engine = this.engine;
+    this.cacheTimer = setTimeout(() => writeEngineCache(path.join(this.dir, ENGINE_CACHE), key, engine), 5000);
+    this.cacheTimer.unref?.();
     return this.engine;
+  }
+
+  // what an engine is built from: this file (Ultima's own rules and how lists are read) and each list as it is on disk
+  cacheKey() {
+    const parts = [process.versions.v8, crypto.createHash('sha1').update(fs.readFileSync(__filename)).digest('hex')];
+    for (const l of LISTS) {
+      try { const s = fs.statSync(path.join(this.dir, `${l.id}.txt`)); parts.push(`${l.id}:${s.size}:${s.mtimeMs}`); } catch { parts.push(`${l.id}:-`); }
+    }
+    return parts.join('|');
   }
 
   // A list with the lists it includes (uBlock's !#include, from the same folder) put in their place

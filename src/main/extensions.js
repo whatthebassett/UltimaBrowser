@@ -204,10 +204,14 @@ class ExtensionManager {
     this.loaded = new Map(); // `${sessionKey}|${id}` -> Electron extension
     this.installedNews = new WeakMap(); // session -> Map(runtime id -> onInstalled details not yet delivered)
     this.applyUpdates();
-    // extensions installed before the Chrome-like fix get it now (already-fixed files are skipped)
+    // extensions installed before the Chrome-like fix get it now, once (reading every file of every extension at each
+    // start held Ultima up); installs and updates get it as they're unpacked
+    let fixed = false;
     for (const e of this.list) {
-      if (e.source === 'webstore') { try { makeChromeLike(e.path); } catch { /* folder missing: reported on load */ } }
+      if (e.source !== 'webstore' || e.chromeLike === CHROME_LIKE_MARK) continue;
+      try { makeChromeLike(e.path); e.chromeLike = CHROME_LIKE_MARK; fixed = true; } catch { /* folder missing: reported on load */ }
     }
+    if (fixed) this.registry.save();
   }
 
   get list() { return this.registry.data; }

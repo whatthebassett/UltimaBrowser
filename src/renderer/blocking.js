@@ -97,6 +97,19 @@ function blockerSettingsGroups() {
   ].join('');
 }
 
+// Settings → Privacy: warnings for dangerous sites, with how current the list is (safety.js)
+function safetySettingsGroup() {
+  const st = B.safety;
+  const list = !st ? '' : st.ready ? ` ${st.count.toLocaleString()} sites on the list${st.updated ? `, updated ${timeAgo(st.updated)}` : ''}.` : ' The list hasn’t downloaded yet.';
+  return sGroup('Safety', [
+    sRow('Warn about dangerous sites', `Phishing sites and their downloads, checked on this computer.${esc(list)}`, sSwitch('safeBrowsing')),
+  ]);
+}
+async function refreshSafetyStatus() {
+  B.safety = await window.ultima.safetyStatus();
+  rerenderIfShowing('settings');
+}
+
 async function refreshBlockerStatus() {
   B.blocker = await window.ultima.blockerStatus();
   rerenderIfShowing('settings');
@@ -124,4 +137,17 @@ function initBlocking() {
   });
   window.ultima.on('blocker-changed', refreshBlockerStatus);
   refreshBlockerStatus();
+  window.ultima.on('safety-changed', refreshSafetyStatus);
+  refreshSafetyStatus();
+  // a tab's page stopped as a dangerous site (main.js): it shows the warning instead (tabs.js)
+  window.ultima.on('site-unsafe', ({ webContentsId, url, threat }) => {
+    // (its first page may be the one stopped: the tab's page never got ready, so it's found by its id alone)
+    const tab = B.tabs.find((t) => { try { return t.webview?.getWebContentsId() === webContentsId; } catch { return false; } });
+    if (!tab) return;
+    tab.unsafe = { url, threat };
+    tab.loading = false;
+    if (tab === activeTab()) renderError();
+  });
+  // a download from a dangerous site, stopped (main.js)
+  window.ultima.on('download-blocked', ({ filename, host }) => toast(`Blocked ${filename || 'a download'}: ${host} is a known phishing site`));
 }

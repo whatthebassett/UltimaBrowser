@@ -184,6 +184,7 @@ function ensureWebview(tab, adopt = null) {
   // where it's going, for the loading status (renderStatus) while the page it leaves is still showing
   wv.addEventListener('did-start-navigation', (e) => {
     if (!e.isMainFrame || e.isSameDocument) return;
+    if (tab.unsafe && /^https?:/i.test(e.url) && e.url !== tab.unsafe.url) tab.unsafe = null; // (gone somewhere else)
     tab.loadingUrl = e.url;
     if (isActive()) renderStatus();
   });
@@ -324,6 +325,7 @@ function closeEmptyWindow() {
 function renderError() {
   $('#viewport .error-page')?.remove();
   const tab = activeTab();
+  if (tab?.unsafe && !isInternal(tab.url)) { renderUnsafe(tab); return; }
   if (!tab?.error || isInternal(tab.url)) return;
   const e = tab.error;
   const friendly = {
@@ -338,9 +340,34 @@ function renderError() {
   $('#viewport').append(page);
 }
 
+// A dangerous site's warning, in place of its page: back to where you were (or a new tab), or on to it anyway
+// (main.js says when it stopped one: site-unsafe; the warning stays on the tab until it goes somewhere else)
+function renderUnsafe(tab) {
+  const e = tab.unsafe;
+  const page = h(`<div class="error-page unsafe-page">${icon('shield', 40)}<h2>Dangerous site ahead</h2>
+    <p><b>${esc(hostname(e.url) || e.url)}</b> is a known phishing site. It may try to trick you into giving away your passwords or card details.</p>
+    <div class="unsafe-actions"><button class="btn primary" data-act="back">Back to safety</button><button class="btn" data-act="go">Continue anyway</button></div>
+    <p class="unsafe-source">${e.threat === 'test' ? 'This is Ultima’s test address for this warning. There’s no real site behind it.' : 'From the Phishing.Database list, checked on this computer.'}</p></div>`);
+  page.querySelector('[data-act="back"]').onclick = () => {
+    tab.unsafe = null;
+    tab.error = null;
+    renderError();
+    if (tab.webview?.canGoBack()) tab.webview.goBack(); else navigate(tab, NEWTAB);
+  };
+  page.querySelector('[data-act="go"]').onclick = async () => {
+    await window.ultima.allowUnsafeSite(e.url);
+    tab.unsafe = null;
+    tab.error = null;
+    renderError();
+    tab.webview?.loadURL(e.url).catch(() => {});
+  };
+  $('#viewport').append(page);
+}
+
 function navigate(tab, url) {
   if (!tab || !url) return;
   tab.error = null;
+  tab.unsafe = null;
   if (isInternal(url)) {
     tab.url = url;
     tab.title = INTERNAL_TITLES[internalName(url)] || 'Ultima';

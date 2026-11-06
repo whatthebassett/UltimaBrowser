@@ -133,7 +133,8 @@ A short welcome sets Ultima up with you: light or dark, your colors, your first 
 What's still to come, roughly in order.
 
 **Safety**
-- [ ] Warnings for dangerous sites and downloads, like Chrome's Safe Browsing.
+- [x] Warnings for phishing sites and their downloads, checked on your computer.
+- [ ] Warnings for malware sites and dangerous files.
 - [ ] Signed installers, so Windows and macOS stop warning on first install.
 
 **Everyday browsing**
@@ -155,7 +156,7 @@ What's still to come, roughly in order.
 - [ ] Sync Waypoints, passwords, orbits and settings across your devices, end-to-end encrypted.
 
 **Under the hood**
-- [ ] Opt-in crash reports.
+- [x] Opt-in crash reports.
 - [x] Automated tests for tabs, sessions, the ad blocker and import.
 
 ## Questions

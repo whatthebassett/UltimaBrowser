@@ -207,7 +207,7 @@ const SETTINGS_TABS = [
           `<select class="field" data-setting="glanceTrigger">${GLANCE_TRIGGERS.map(([v, label]) => `<option value="${v}" ${(B.settings.glanceTrigger || 'any') === v ? 'selected' : ''}>${label}</option>`).join('')}</select>`),
       ]),
       sGroup('Mini player', [
-        sRow('Mini player', 'Control what your other tabs are playing.', sSwitch('miniPlayer')),
+        sRow('Mini player', 'Watch a video in a small window of its own.', sSwitch('miniPlayer')),
       ]),
       sGroup('Downloads', downloadRows()),
       sGroup('Screenshots', screenshotRows()),
@@ -382,9 +382,13 @@ const SETTINGS_TABS = [
   { id: 'shortcuts', title: 'Keyboard shortcuts', icon: 'command', desc: 'Change, add or remove any shortcut in Ultima.', embed: (el, tab) => pageShortcuts(el, tab) },
   { id: 'passwords', title: 'Passwords', icon: 'key', desc: 'Saved logins, encrypted with your Windows account.', embed: (el, tab) => pagePasswords(el, tab) },
   {
-    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'Ads, trackers, browsing data and site permissions.',
+    id: 'privacy', title: 'Privacy', icon: 'shield', desc: 'Dangerous sites, ads, trackers, browsing data and site permissions.',
     render: () => [
-      blockerSettingsGroups(), // blocking.js
+      safetySettingsGroup(), // blocking.js
+      blockerSettingsGroups(),
+      B.crashReportsReady ? sGroup('Help improve Ultima', [
+        sRow('Send crash reports', 'Helps fix crashes. A report may include parts of open pages.', sSwitch('crashReports')),
+      ]) : '',
       sGroup('Clear browsing data', [
         sRow('History', 'Every page you have visited.', '<button class="btn" data-clear="history">Clear history</button>'),
         sRow('Cache', 'Saved copies of pages and images. Sites may load slower at first.', '<button class="btn" data-clear="cache">Clear cache</button>'),

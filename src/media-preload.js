@@ -104,10 +104,14 @@ function installMedia(send, sendSignal, register) {
       value: native(function play_() { watch(this); return play.apply(this, arguments); }, 'play'),
       configurable: true, writable: true, enumerable: true,
     });
-    // the page's picture-in-picture button opens the mini player instead of a second, different player
+    // the page's picture-in-picture button opens the mini player instead of a second, different player; only from a
+    // click or key press, as in Chrome, so a page can't open it by itself
     if (window.HTMLVideoElement && HTMLVideoElement.prototype.requestPictureInPicture) {
       Object.defineProperty(HTMLVideoElement.prototype, 'requestPictureInPicture', {
         value: native(function requestPictureInPicture() {
+          if (navigator.userActivation && !navigator.userActivation.isActive) {
+            return Promise.reject(new DOMException('Must be handling a user gesture if there isn\'t already an element in Picture-in-Picture.', 'NotAllowedError'));
+          }
           watch(this);
           current = this;
           popout = true;

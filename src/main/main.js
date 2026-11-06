@@ -18,6 +18,8 @@ const {
   takeScreenshot, isArticle, readArticle, translatePage, showOriginal, pageLanguage, translationOf, forgetTranslation,
 } = require('./pagetools');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
+const { Safety } = require('./safety');
+const { startCrashReports, setCrashReports, crashReportsReady, reportError } = require('./crashreports');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
 
@@ -30,6 +32,23 @@ const PARTITION = 'persist:ultima';
 const BACKDROPS = process.platform === 'win32' && Number(os.release().split('.')[2]) >= 22621;
 const GLASS = BACKDROPS || process.platform === 'darwin';
 const CLEAR = '#00000000';
+// The window's buttons (Windows): Windows' own, so hovering maximize still offers the snap layouts, but drawn clear;
+// the page draws Ultima's icons under them (wincontrols.js), told whether the window is maximized and focused.
+const OWN_CAPTION_ICONS = process.platform === 'win32';
+function titleBarOverlay(height = 40) {
+  if (process.platform === 'darwin') return true;
+  if (OWN_CAPTION_ICONS) return { color: CLEAR, symbolColor: CLEAR, height };
+  return { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height };
+}
+function reportWindowState(win) {
+  if (!OWN_CAPTION_ICONS) return;
+  const send = () => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('window-state', { maximized: win.isMaximized(), focused: win.isFocused(), fullScreen: win.isFullScreen() });
+  };
+  for (const ev of ['maximize', 'unmaximize', 'restore', 'focus', 'blur', 'enter-full-screen', 'leave-full-screen']) win.on(ev, send);
+  win.webContents.on('did-finish-load', send);
+}
 // Drop the Electron/app tokens so sites treat us like any Chromium browser.
 app.userAgentFallback = app.userAgentFallback
   .replace(/\s?Electron\/\S+/, '')
@@ -37,15 +56,16 @@ app.userAgentFallback = app.userAgentFallback
   .replace(/\s?Ultima ?Browser\/\S+/i, ''); // written with or without the space, depending on the Electron version
 
 if (!app.requestSingleInstanceLock()) app.quit();
-// Hardware acceleration (Settings → General → Performance): the graphics card draws pages, video and 3D unless it's
-// turned off. Chromium settles this as it starts, so the setting is read here, before anything else, and a change takes
-// a restart.
-const HARDWARE_ACCELERATION = (() => {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')).hardwareAcceleration !== false;
-  } catch { return true; } // first run or unreadable: on, as DEFAULT_SETTINGS has it
+// Settings needed as Chromium starts, so read here, before anything else (first run or unreadable: the defaults).
+const EARLY_SETTINGS = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')); } catch { return {}; }
 })();
+// Hardware acceleration (Settings → General → Performance): the graphics card draws pages, video and 3D unless it's
+// turned off. Chromium settles this as it starts, so a change takes a restart.
+const HARDWARE_ACCELERATION = EARLY_SETTINGS.hardwareAcceleration !== false;
 if (!HARDWARE_ACCELERATION) app.disableHardwareAcceleration();
+// Crash reports (Settings → Privacy, off unless turned on; crashreports.js): started now so every process is covered
+startCrashReports(EARLY_SETTINGS.crashReports === true);
 const RESTART_SWITCH = '--ultima-restarted'; // started again by Ultima itself (app:relaunch)
 // a link or .html file Ultima was started with; the UI opens it once it has restored its tabs
 let launchUrl = defaultBrowser.launchTarget(process.argv);
@@ -91,8 +111,9 @@ const DEFAULT_SETTINGS = {
   tabGlow: true, // tabs glow in the accent color when you point at them
   miniPlayer: true, // what other tabs are playing, with its controls, in a window of its own (renderer/miniplayer.js, player.js)
   miniPlayerAt: null, // where its bottom right corner is: { right, bottom }
-  miniPlayerWidth: 400, // a video's width in it
+  miniPlayerWidth: 400, // a video's size in it: its longer side (a portrait video's height)
   miniPlayerDocked: false, // docked in the sidebar (dragged there), not floating
+  miniPlayerDockHeight: 240, // how tall a video docked in the sidebar is at most (its handle sets it)
   tabLayout: 'vertical', // vertical (the sidebar) or horizontal (a tab strip across the top): renderer/tablayout.js
   sidebarFont: 'inter', // inter, system, serif, mono, or "font:<family>" for an installed font
   sidebarTextSize: 13, // px
@@ -107,6 +128,8 @@ const DEFAULT_SETTINGS = {
   cleanLinks: true, // takes tracking codes (utm_source, fbclid…) out of the links you open
   globalPrivacyControl: true, // tells sites not to sell or share your data (Sec-GPC)
   blockThirdPartyCookies: false,
+  safeBrowsing: true, // warn about dangerous sites and stop their downloads (safety.js)
+  crashReports: false, // send crash reports (crashreports.js); off unless you turn it on
   blockingOff: {}, // host → true: sites where ads and trackers aren't blocked (with their subdomains)
   glanceTrigger: 'any', // what opens a link in a glance (a preview over the page): any, alt, shift, hold or off
   // productivity: automatic tab groups (renderer/autogroup.js)
@@ -701,11 +724,16 @@ function followGrab(win, width, height) {
 ipcMain.on('player:fit', (e, { width, height, keep, user } = {}) => {
   const win = playerWindow();
   if (!win || e.sender !== win.webContents || PLAYER.host !== win.webContents || !PLAYER.shown) return;
-  const w = Math.max(120, Math.min(1600, Number(width) || 0));
-  const h = Math.max(80, Math.min(1200, Number(height) || 0));
+  const w = Math.max(120, Math.min(2000, Number(width) || 0));
+  const h = Math.max(80, Math.min(2000, Number(height) || 0));
   if (PLAYER.grab) followGrab(win, w, h);
   else if (keep && PLAYER.bounds) {
-    setPlayerBounds(win, { ...PLAYER.bounds, width: w, height: h });
+    // its top left corner stays put, unless that would take it off the screen: against the screen's edge, it grows
+    // the other way
+    const a = screen.getDisplayMatching(PLAYER.bounds).workArea;
+    const x = Math.max(a.x, Math.min(PLAYER.bounds.x, a.x + a.width - w));
+    const y = Math.max(a.y, Math.min(PLAYER.bounds.y, a.y + a.height - h));
+    setPlayerBounds(win, { x, y, width: w, height: h });
     rememberPlayerCorner();
   } else {
     const at = playerCorner();
@@ -1490,34 +1518,53 @@ function extensionActionClicked(id, tabWcId) {
 // registered for Chrome (Bitwarden's desktop app, Claude Code) or for Ultima (userData/NativeMessagingHosts), and
 // passes messages to and from it the way Chrome does: JSON, each with its length first (4 bytes, native byte order).
 // Only an extension the app names in its allowed_origins may talk to it, and only one that asks for nativeMessaging.
+// The app's manifest, or null. Found once a minute at most: extensions ask again and again (Bitwarden at every start).
+const hostManifests = new Map(); // name → { at, found: Promise }
 function nativeHostManifest(name) {
-  if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i.test(name)) return null;
-  const files = [path.join(app.getPath('userData'), 'NativeMessagingHosts', `${name}.json`)];
+  if (!/^[a-z0-9_]+(\.[a-z0-9_]+)*$/i.test(name)) return Promise.resolve(null);
+  const kept = hostManifests.get(name);
+  if (kept && Date.now() - kept.at < 60 * 1000) return kept.found;
+  const found = findNativeHostManifest(name);
+  hostManifests.set(name, { at: Date.now(), found });
+  return found;
+}
+function readHostManifest(name, file) {
+  try {
+    const host = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
+    if (host.name !== name || host.type !== 'stdio' || typeof host.path !== 'string') return null;
+    return { ...host, path: path.isAbsolute(host.path) ? host.path : path.join(path.dirname(file), host.path) };
+  } catch { return null; } // not there, or not readable
+}
+// (on Windows the registry says where each is. Starting reg.exe takes a while, so it's never waited on, and asked first
+// where apps register for Chrome (Bitwarden, Claude), then everywhere else at once. HKCU\Software is the same in both
+// registry views, so it's asked once.)
+const regDefault = (key, view) => new Promise((resolve) => {
+  require('child_process').execFile('reg', ['query', key, '/ve', view], { encoding: 'utf8', windowsHide: true }, (err, out) => {
+    resolve(err ? null : out.match(/REG_SZ\s+(.+)/)?.[1]?.trim() || null);
+  });
+});
+async function findNativeHostManifest(name) {
+  const own = readHostManifest(name, path.join(app.getPath('userData'), 'NativeMessagingHosts', `${name}.json`));
+  if (own) return own;
+  let files;
   if (process.platform === 'win32') {
-    for (const hive of ['HKCU', 'HKLM']) {
-      for (const browser of ['Google\\Chrome', 'Chromium']) {
-        for (const view of ['/reg:64', '/reg:32']) {
-          try {
-            const out = require('child_process').execFileSync('reg', ['query', `${hive}\\Software\\${browser}\\NativeMessagingHosts\\${name}`, '/ve', view], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-            const file = out.match(/REG_SZ\s+(.+)/)?.[1]?.trim();
-            if (file) files.push(file);
-          } catch { /* not registered there */ }
-        }
-      }
-    }
+    const key = (hive, browser) => `${hive}\\Software\\${browser}\\NativeMessagingHosts\\${name}`;
+    const first = await regDefault(key('HKCU', 'Google\\Chrome'), '/reg:64');
+    const host = first && readHostManifest(name, first);
+    if (host) return host;
+    const rest = [[key('HKCU', 'Chromium'), '/reg:64']];
+    for (const browser of ['Google\\Chrome', 'Chromium']) for (const view of ['/reg:64', '/reg:32']) rest.push([key('HKLM', browser), view]);
+    files = (await Promise.all(rest.map(([k, view]) => regDefault(k, view)))).filter(Boolean);
   } else {
     const home = app.getPath('home');
     const dirs = process.platform === 'darwin'
       ? [`${home}/Library/Application Support/Google/Chrome/NativeMessagingHosts`, `${home}/Library/Application Support/Chromium/NativeMessagingHosts`, '/Library/Google/Chrome/NativeMessagingHosts']
       : [`${home}/.config/google-chrome/NativeMessagingHosts`, `${home}/.config/chromium/NativeMessagingHosts`, '/etc/opt/chrome/native-messaging-hosts'];
-    files.push(...dirs.map((d) => path.join(d, `${name}.json`)));
+    files = dirs.map((d) => path.join(d, `${name}.json`));
   }
   for (const file of files) {
-    try {
-      const host = JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
-      if (host.name !== name || host.type !== 'stdio' || typeof host.path !== 'string') continue;
-      return { ...host, path: path.isAbsolute(host.path) ? host.path : path.join(path.dirname(file), host.path) };
-    } catch { /* not there, or not readable */ }
+    const host = readHostManifest(name, file);
+    if (host) return host;
   }
   return null;
 }
@@ -1528,9 +1575,9 @@ function nativeOrigin(extId) {
 }
 const nativePorts = new Map(); // port id -> { extId, child, reply, owner, task }
 let nextNativePort = 1;
-function startNativeHost(ses, extId, name) {
+async function startNativeHost(ses, extId, name) {
   if (!asksFor(manifestOf(ses, extId), 'nativeMessaging')) throw new Error('This extension did not ask for the "nativeMessaging" permission.');
-  const host = nativeHostManifest(String(name));
+  const host = await nativeHostManifest(String(name));
   const origin = nativeOrigin(extId);
   if (!host) throw new Error('Specified native messaging host not found.');
   if (!(host.allowed_origins || []).includes(origin)) throw new Error('Access to the specified native messaging host is forbidden.');
@@ -1569,9 +1616,9 @@ function closeNativePort(id, error) {
 }
 // ctx: where answers go (reply), who opened the port (owner), and, from a background, a way to keep it running while
 // the port is open (hold), as Chrome does
-function extensionNative(ses, extId, op, args, { reply, owner, hold } = {}) {
+async function extensionNative(ses, extId, op, args, { reply, owner, hold } = {}) {
   if (op === 'connect') {
-    const child = startNativeHost(ses, extId, args[0]);
+    const child = await startNativeHost(ses, extId, args[0]);
     const id = nextNativePort++;
     let task = null;
     try { task = hold?.() || null; } catch { /* stopping */ }
@@ -1594,7 +1641,7 @@ function extensionNative(ses, extId, op, args, { reply, owner, hold } = {}) {
     return null;
   }
   if (op === 'send') { // sendNativeMessage: one message, the first answer, then the app is closed
-    const child = startNativeHost(ses, extId, args[0]);
+    const child = await startNativeHost(ses, extId, args[0]);
     return new Promise((resolve, reject) => {
       const done = (fn, value) => { try { child.kill(); } catch { /* ended */ } fn(value); };
       readNative(child, (msg) => done(resolve, msg), (err) => done(reject, new Error(err)));
@@ -1837,6 +1884,8 @@ ipcMain.handle('ultima:ext-call', (e, area, op, args) => {
 const SPACE_PARTITION = /^persist:ultima(-space-[a-z0-9]{1,16})?$/;
 const configuredSessions = new Set();
 let extensionsLoaded = Promise.resolve(); // the shared session's extensions, which pages wait for at start-up
+// what a window's tabs wait for at start-up (Widevine and the extensions; see app.whenReady): its window opens meanwhile
+let startupReady = Promise.resolve();
 const knownPartition = (partition) => (SPACE_PARTITION.test(partition || '') || partition === PRIVATE_PARTITION ? partition : PARTITION);
 function partitionSession(partition) {
   const name = knownPartition(partition);
@@ -1862,6 +1911,17 @@ function endPrivateBrowsingIfUnused() {
   ses.clearAuthCache().catch(() => {});
   for (const origin of Object.keys(privatePermissions)) delete privatePermissions[origin];
   for (const [id, d] of downloads) if (d.private && d.state !== 'progressing') downloads.delete(id);
+}
+
+// ---- dangerous sites (safety.js): a tab going to one is stopped and warns instead (renderer/tabs.js); one of its
+// frames is just stopped, and a download from one is cancelled. Continue anyway lets the site through until Ultima
+// closes. ----
+let safety = null;
+const unsafeAllowed = new Set(); // hosts you chose to visit anyway
+function siteThreat(url) {
+  if (settings.data.safeBrowsing === false || !safety) return null;
+  const threat = safety.check(url);
+  return threat && !unsafeAllowed.has(urlHost(url)) ? threat : null;
 }
 
 // ---- ad and tracker blocking (the engine is blocker.js) ----
@@ -1939,6 +1999,13 @@ function thirdPartyRequest(d) {
 
 function onBlockerRequest(d, callback) {
   const wcId = d.webContentsId;
+  // a dangerous site: stopped, and a tab going there says so (its window shows the warning: renderer/tabs.js)
+  const threat = wcId && (d.resourceType === 'mainFrame' || d.resourceType === 'subFrame') && siteThreat(d.url);
+  if (threat) {
+    const wc = d.resourceType === 'mainFrame' && webContents.fromId(wcId);
+    if (wc && !wc.isDestroyed()) sendTo(windowOf(wc), 'site-unsafe', { webContentsId: wcId, url: d.url, threat });
+    return callback({ cancel: true });
+  }
   if (d.resourceType === 'mainFrame') {
     if (wcId) reportBlocked(wcId, true); // a new page: its count starts again
     const clean = settings.data.cleanLinks && d.method === 'GET' && !blockingOffFor(d.url) && cleanLink(d.url);
@@ -2130,6 +2197,13 @@ function setupSession(ses) {
   // A private download stays out of the other windows' download lists; only the window it started in shows it.
   ses.on('will-download', (_e, item, wc) => {
     const from = homeWindowOf(wc); // (a pop-up's download shows in the window it came from)
+    // from a dangerous site (or by way of one): not downloaded
+    const unsafe = [...item.getURLChain(), item.getURL()].find((u) => siteThreat(u));
+    if (unsafe) {
+      item.cancel();
+      sendTo(from || currentWindow(), 'download-blocked', { filename: item.getFilename(), host: urlHost(unsafe) });
+      return;
+    }
     const priv = isPrivateSession(ses);
     const dir = downloadDir().dir;
     const parsed = path.parse(item.getFilename());
@@ -2408,7 +2482,7 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
     visualEffectState: 'active',
     titleBarStyle: 'hidden',
-    titleBarOverlay: process.platform === 'darwin' ? true : { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height: 40 },
+    titleBarOverlay: titleBarOverlay(),
     trafficLightPosition: { x: 14, y: 13 },
     show: false,
     webPreferences: {
@@ -2422,12 +2496,23 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
   const w = { win, private: priv, key: restore?.key || Math.random().toString(36).slice(2, 12), bounds: { ...bounds }, activeTab: null, url, tearOff, moved, restoring: [], focusedAt: Date.now() };
   windows.set(win.id, w);
   lastFocusedId = win.id;
-  // shown once its page has drawn, maximized then if it should be (maximizing a hidden window shows it at once, still
-  // blank, and it would then show a second time)
-  win.once('ready-to-show', () => {
+  reportWindowState(win);
+  // shown once its page has drawn with its settings and tabs (app.js says so: ui:ready), so it never shows Ultima's
+  // default look first; maximized then if it should be (maximizing a hidden window shows it at once, still blank, and
+  // it would then show a second time). Should the page not say, it shows a couple of seconds after it first drew.
+  let drawn = false;
+  let shown = false;
+  const showNow = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
     if (reveal) reveal(win);
     else if (bounds.maximized) { win.maximize(); win.focus(); } // (maximize shows it without focusing it)
     else win.show();
+  };
+  w.uiReady = () => { if (drawn) showNow(); else w.uiReadyEarly = true; };
+  win.once('ready-to-show', () => {
+    drawn = true;
+    if (w.uiReadyEarly) showNow(); else setTimeout(showNow, 2000);
   });
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
   hookShortcuts(win.webContents);
@@ -2530,12 +2615,13 @@ function openTaskManager() {
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
     visualEffectState: 'active',
     titleBarStyle: 'hidden',
-    titleBarOverlay: process.platform === 'darwin' ? true : { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height: 40 },
+    titleBarOverlay: titleBarOverlay(),
     trafficLightPosition: { x: 14, y: 13 },
     show: false,
     webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true },
   });
   taskWin = win;
+  reportWindowState(win);
   win.once('ready-to-show', () => win.show());
   win.loadFile(path.join(__dirname, '..', 'renderer', 'tasks.html'));
   win.webContents.on('will-navigate', (e) => e.preventDefault());
@@ -2646,7 +2732,7 @@ function openPopup(options, opener) {
     vibrancy: process.platform === 'darwin' ? 'under-window' : undefined,
     visualEffectState: 'active',
     titleBarStyle: 'hidden',
-    titleBarOverlay: process.platform === 'darwin' ? true : { color: GLASS ? CLEAR : '#111114', symbolColor: '#e6e6ee', height: POPUP_BAR },
+    titleBarOverlay: titleBarOverlay(POPUP_BAR),
     trafficLightPosition: { x: 14, y: 13 },
     show: false,
     webPreferences: { preload: path.join(__dirname, '..', 'preload.js'), contextIsolation: true, sandbox: true },
@@ -2655,6 +2741,7 @@ function openPopup(options, opener) {
   view.setBackgroundColor('#ffffff');
   win.contentView.addChildView(view);
   const openerUrl = opener.getURL();
+  reportWindowState(win);
   const popup = { win, page, view, home, openerOrigin: /^https?:/i.test(openerUrl) ? originOf(openerUrl) : popups.get(opener.id)?.openerOrigin };
   const pageId = page.id;
   if (isPrivate(page)) page.once('destroyed', () => setTimeout(endPrivateBrowsingIfUnused, 0));
@@ -2718,7 +2805,8 @@ function registerIpc() {
 
   // What a window starts with: the shared sidebar and, for a window that was open last time, its own tabs.
   // A private window gets neither.
-  handleFrom('state:get', (e) => {
+  handleFrom('state:get', async (e) => {
+    await startupReady;
     const w = windowOf(e.sender);
     const url = w?.url ?? null; // opened once, not again if the UI reloads
     const tearOff = w?.tearOff ?? null;
@@ -2738,12 +2826,21 @@ function registerIpc() {
       glass: GLASS,
       backdrops: BACKDROPS,
       hardwareAcceleration: HARDWARE_ACCELERATION, // what this run started with
+      crashReportsReady: crashReportsReady(), // (no Sentry project set: Settings leaves the switch out)
       launchUrl: url,
       tearOff,
       movedTabs: moved,
     };
   });
   // A window saves its own tabs; when the shared sidebar changed too, the other normal windows get it.
+  // an error in one of Ultima's own windows' scripts, for crash reports (sent only when they're on)
+  ipcMain.on('ui:error', (e, info) => {
+    if (e.sender.getType() !== 'window' || !info || typeof info !== 'object') return;
+    const str = (v, n) => String(v ?? '').slice(0, n);
+    reportError({ name: str(info.name, 80) || 'Error', message: str(info.message, 1000), stack: str(info.stack, 8000) }, 'window', { file: str(info.file, 500), line: Number(info.line) || 0, column: Number(info.column) || 0 });
+  });
+  // its page has drawn with its settings and tabs: the window can show (createWindow)
+  ipcMain.on('ui:ready', (e) => { const w = windowOf(e.sender); if (w && e.sender === w.win.webContents) w.uiReady?.(); });
   handleFrom('session:save', (e, s) => {
     const w = windowOf(e.sender);
     if (!w || w.private || !s || typeof s !== 'object') return;
@@ -2837,6 +2934,7 @@ function registerIpc() {
     if (patch.keybindings) rebuildKeymap();
     if (patch.windowMaterial && BACKDROPS) for (const win of [...liveWindows().map((w) => w.win), taskWindow()].filter(Boolean)) win.setBackgroundMaterial(patch.windowMaterial);
     if ('globalPrivacyControl' in patch) siteSessions().forEach(applyGpcPreload);
+    if ('crashReports' in patch) setCrashReports(Boolean(patch.crashReports));
     // caret browsing on or off in the pages already open
     if ('caretBrowsing' in patch) for (const wc of webContents.getAllWebContents()) if (wc.getType() === 'webview' && !wc.isDestroyed()) wc.send('ultima:caret', Boolean(patch.caretBrowsing));
     // the button over videos, for the mini player, goes with it
@@ -2914,6 +3012,9 @@ function registerIpc() {
   handle('default-browser:set', () => defaultBrowser.makeDefault());
   handle('keys:recording', (on) => { recordingKeys = Boolean(on); });
   handle('permissions:reset', () => { settings.data.permissions = {}; settings.save(); });
+  // ---- dangerous sites ----
+  handle('safety:allow', (url) => { const host = urlHost(String(url || '')); if (host) unsafeAllowed.add(host); });
+  handle('safety:status', () => safety?.status() || null);
   // ---- ad and tracker blocking ----
   handle('blocker:status', () => blocker.status());
   handle('blocker:update', async () => {
@@ -3042,7 +3143,7 @@ function registerIpc() {
   });
   handleFrom('overlay:set', (e, { color, symbolColor }) => {
     const win = parentOf(e);
-    if (win && process.platform !== 'darwin') win.setTitleBarOverlay({ color: GLASS ? CLEAR : color, symbolColor, height: 40 });
+    if (win && process.platform !== 'darwin' && !OWN_CAPTION_ICONS) win.setTitleBarOverlay({ color: GLASS ? CLEAR : color, symbolColor, height: 40 });
   });
 
   handle('history:add', (entry) => data.addHistory(entry));
@@ -3380,7 +3481,7 @@ app.on('open-url', (e, url) => {
   else launchUrl = url;
 });
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   const dir = app.getPath('userData');
   settings = new JsonStore(dir, 'settings', DEFAULT_SETTINGS);
   // Glance first had a switch per gesture; now it's one choice
@@ -3397,21 +3498,22 @@ app.whenReady().then(async () => {
   extLogFile = path.join(dir, 'logs', 'extensions.log');
   fs.mkdirSync(path.dirname(extLogFile), { recursive: true });
   setAppMenu();
-  // the ad and tracker lists on disk, ready before the first page loads; refreshed in the background when they're due
+  // the ad and tracker lists: built from the lists on disk once the windows are on their way (below), refreshed in the
+  // background when they're due
   blocker = new Blocker(path.join(dir, 'filters'), async (url) => {
     const res = await net.fetch(url, { cache: 'no-store' });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.text();
   });
-  blocker.load();
   const refreshLists = () => blocker.update().then((changed) => { if (changed) broadcast('blocker-changed'); }).catch(() => {});
   setTimeout(refreshLists, 5000);
   setInterval(refreshLists, 6 * 60 * 60 * 1000);
   partitionSession(PARTITION);
   registerIpc();
   // Pages restored now get their extensions' content scripts only if the extensions have loaded first (one that takes
-  // too long doesn't hold Ultima up: a reload gives the page what it missed)
-  await Promise.all([widevineReady(), Promise.race([extensionsLoaded, new Promise((r) => { setTimeout(r, 4000); })])]);
+  // too long doesn't hold Ultima up: a reload gives the page what it missed), and Widevine for protected video. The
+  // windows don't wait for these: only their tabs do (state:get).
+  startupReady = Promise.all([widevineReady(), Promise.race([extensionsLoaded, new Promise((r) => { setTimeout(r, 4000); })])]);
   // extensions keep up to date, as in Chrome: checked soon after start and every five hours (see checkForUpdates)
   const checkExtensions = () => extensions.checkForUpdates().then(() => broadcast('extensions-changed')).catch(() => {});
   setTimeout(checkExtensions, 60 * 1000);
@@ -3426,8 +3528,20 @@ app.whenReady().then(async () => {
   launchUrl = null;
   // started from the taskbar menu's New private window: your windows come back as usual, and a private one opens too
   if (process.argv.includes(NEW_PRIVATE_WINDOW)) createWindow({ private: true });
-  setTaskbarTasks();
-  defaultBrowser.refreshRegistration();
+  // The ad and tracker blocker gets ready now, while the windows start up (in processes of their own): taken from the
+  // copy kept last time, or built from the lists. It's done in one go, so it's ready before anything else is answered:
+  // the first page a window asks for, and the window's own call for its tabs, both wait until it's done.
+  blocker.load();
+  // the dangerous-site list, read once the windows are up and checked for a newer one now and then
+  safety = new Safety(path.join(dir, 'safety'), async (url, etag) => {
+    const res = await net.fetch(url, { cache: 'no-store', headers: etag ? { 'If-None-Match': etag } : {} });
+    return { status: res.status, etag: res.headers.get('etag'), text: res.status === 200 ? await res.text() : '' };
+  });
+  const refreshSafety = () => safety.update().then((changed) => { if (changed) broadcast('safety-changed'); }).catch(() => {});
+  setTimeout(() => safety.load().then(() => broadcast('safety-changed')).then(() => setTimeout(refreshSafety, 15000)), 1500);
+  setInterval(refreshSafety, 60 * 60 * 1000);
+  // things that can wait until the windows are up
+  setTimeout(() => { setTaskbarTasks(); defaultBrowser.refreshRegistration(); }, 3000);
   nativeTheme.on('updated', () => { broadcast('system-theme', nativeTheme.shouldUseDarkColors); toTaskWindow('system-theme', nativeTheme.shouldUseDarkColors); });
   // macOS: clicking the Dock icon with every window closed brings back the last one
   app.on('activate', () => { if (!liveWindows().length) createWindow({ restore: savedWindows()[0] }); });

@@ -1,4 +1,12 @@
 // Shared helpers for the browser UI.
+
+// Errors in Ultima's own scripts, for crash reports (main.js sends them on only when they're turned on)
+window.addEventListener('error', (e) => window.ultima?.reportError?.({
+  name: e.error?.name || 'Error', message: String(e.message || ''), stack: String(e.error?.stack || ''), file: e.filename, line: e.lineno, column: e.colno,
+}));
+window.addEventListener('unhandledrejection', (e) => window.ultima?.reportError?.({
+  name: e.reason?.name || 'UnhandledRejection', message: String(e.reason?.message ?? e.reason), stack: String(e.reason?.stack || ''),
+}));
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 

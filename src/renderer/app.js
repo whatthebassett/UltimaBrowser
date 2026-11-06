@@ -553,6 +553,7 @@ async function boot() {
   B.systemDark = state.systemDark;
   B.backdrops = state.backdrops;
   B.hardwareAcceleration = state.hardwareAcceleration; // what this run started with (Settings → General → Performance)
+  B.crashReportsReady = state.crashReportsReady; // (Settings → Privacy shows its switch only then)
   loadKeys(B.settings.keybindings, state.platform);
   for (const d of state.downloads) B.downloads.set(d.id, d);
   document.body.classList.toggle('mac', state.platform === 'darwin');
@@ -697,6 +698,8 @@ async function boot() {
   B.restored = true; // from now on the window saves its tabs (saveSession)
   // Settings shows whether Ultima is the default browser; that changes outside Ultima (in Windows Settings)
   window.addEventListener('focus', () => { if (B.defaultBrowser) refreshDefaultBrowser(); });
+  // drawn with its settings and tabs: the window can show (once that's on screen)
+  requestAnimationFrame(() => requestAnimationFrame(() => window.ultima.uiReady()));
   if (shouldWelcome()) startWelcome(); // the first time: the welcome film, which sets Ultima up (welcome.js)
 }
 

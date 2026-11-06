@@ -2,6 +2,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 
+// errors in Ultima's own pages' scripts (util.js), for crash reports: main.js sends them on only when they're turned on
+let uiErrors = 0;
 contextBridge.exposeInMainWorld('ultima', {
   getState: invoke('state:get'),
   saveSession: invoke('session:save'),
@@ -34,6 +36,8 @@ contextBridge.exposeInMainWorld('ultima', {
   setKeyRecording: invoke('keys:recording'),
   reportTyping: (on) => ipcRenderer.send('ultima:typing', Boolean(on)),
   setOverlay: invoke('overlay:set'),
+  uiReady: () => ipcRenderer.send('ui:ready'),
+  reportError: (info) => { if (uiErrors < 20 && info && typeof info === 'object') { uiErrors += 1; ipcRenderer.send('ui:error', info); } },
   setNativeTheme: invoke('theme:native'),
   faviconData: invoke('favicon:data'),
   copyText: invoke('clipboard:write'),
@@ -48,6 +52,8 @@ contextBridge.exposeInMainWorld('ultima', {
   siteDefault: invoke('site:default'),
   siteData: invoke('site:data'),
   siteClearData: invoke('site:clear-data'),
+  allowUnsafeSite: invoke('safety:allow'),
+  safetyStatus: invoke('safety:status'),
   blockerStatus: invoke('blocker:status'),
   blockerUpdate: invoke('blocker:update'),
   blockerSite: invoke('blocker:site'),
@@ -147,7 +153,7 @@ contextBridge.exposeInMainWorld('ultima', {
   windowDrag: (phase) => ipcRenderer.send('window:drag', phase === 'start' ? 'start' : 'end'),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
+    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'window-state', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'safety-changed', 'download-blocked', 'site-unsafe', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

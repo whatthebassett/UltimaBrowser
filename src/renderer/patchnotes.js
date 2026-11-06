@@ -5,6 +5,48 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.6.0',
+    date: '2026-11-06',
+    highlights: [
+      {
+        title: 'Dangerous site warnings',
+        icon: 'shield',
+        text: 'Ultima warns you before you open a known phishing site, one that poses as your bank, your email or a shop to steal your password or card.',
+        items: [
+          ['Checked on your computer', 'Nothing you visit is sent anywhere to be checked.'],
+          ['Downloads too', 'A download from a phishing site is stopped.'],
+          ['Your call', 'Go back to safety, or carry on if you trust the site.'],
+        ],
+      },
+      {
+        title: 'Faster start',
+        icon: 'bolt',
+        text: 'Ultima opens about twice as fast. Its window appears right away, with your theme and tabs already in place.',
+        items: [
+          ['Ad blocker', 'The ad and tracker lists are ready in a fraction of the time.'],
+          ['Extensions', 'Extensions no longer hold up the start.'],
+        ],
+      },
+      {
+        title: 'Crash reports',
+        icon: 'activity',
+        text: 'You can choose to send a report when Ultima crashes, to help fix problems faster.',
+        items: [
+          ['Off by default', 'Nothing is sent unless you turn it on.'],
+        ],
+      },
+    ],
+    improved: [
+      ['Mini player in the sidebar', 'You can resize a video docked in the sidebar, so your tabs stay in view.'],
+      ['Window buttons', 'The minimize, maximize and close buttons have Ultima\'s own icons.'],
+    ],
+    fixed: [
+      ['Mini player', 'The mini player opens only when you send a video to it.'],
+      ['Portrait videos', 'You can resize a portrait video in the mini player.'],
+      ['Dragging the window', 'You can drag the window from anywhere in the row of buttons at the top of the sidebar, even between buttons and on greyed-out ones.'],
+    ],
+  },
+  {
     version: '0.5.0',
     date: '2026-11-03',
     highlights: [
