@@ -23,52 +23,35 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 ## What's new in 0.6.0
 
-Ultima 0.6.0 is all about the stuff you'd rather not think about. It keeps you away from phishing sites, it gets out of your way faster when you open it, and, if you want it to, it lets us know when something breaks so we can fix it. Already have Ultima? It updates itself the next time you close it, or right away from Settings → About → Restart to update.
+Phishing warnings, a much quicker start, and opt-in crash reports. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
 
 ### Dangerous site warnings
 
-Phishing sites are the fake ones: a login page that looks exactly like your bank's, a "your package is delayed" text, a Microsoft sign-in that isn't Microsoft at all. They're built to grab your password or your card number, and they're getting scarily good at looking legit.
+Open a known phishing site and Ultima stops it before it loads, with a **Dangerous site ahead** page in its place. **Back to safety** or **Continue anyway**, your call.
 
-Ultima now keeps a list of hundreds of thousands of active phishing sites and checks every site you open against it. Land on one, and Ultima stops the page before it even loads and shows you a big red **Dangerous site ahead** warning instead.
-
-- **Private by design.** The list lives on your computer and the check happens right there. Nothing about where you browse gets sent to us, or anyone else, to be looked up.
-- **Always up to date.** The list comes from the open [Phishing.Database](https://github.com/mitchellkrogza/Phishing.Database) project and refreshes itself in the background, only downloading again when it has actually changed.
-- **Downloads are covered too.** If a phishing site tries to hand you a file, Ultima stops the download and tells you why.
-- **You're still in charge.** Hit **Back to safety** to get out of there, or **Continue anyway** if you know better. Ultima won't bug you about that site again until you restart it.
-- **Want to see it in action?** Type `phishing-test.ultimabrowser.invalid` into the address bar. It's a made-up address that only exists to show you the warning, so it's completely safe to try.
-
-It's on from the start, and you can switch it off in Settings → Privacy if you'd rather go without.
+- The check runs on your computer against [Phishing.Database](https://github.com/mitchellkrogza/Phishing.Database)'s list of active phishing domains, which Ultima keeps up to date in the background. Nothing you visit gets sent off to be looked up.
+- Downloads from those sites are blocked too.
+- Try it at `phishing-test.ultimabrowser.invalid`.
+- On by default; turn it off in Settings → Privacy.
 
 ### Faster start
 
-Ultima now opens about twice as fast. We dug into what happens in the second or so after you click the icon, and found a few things holding the whole show up:
-
-- **The window shows up right away.** It no longer sits there waiting for extensions and protected-video support to finish loading. Those keep getting ready in the background while you're already looking at your tabs.
-- **No flash of the wrong look.** The window waits until your colors and tabs are drawn before it appears, so it opens looking like *your* Ultima, not the default one.
-- **The ad blocker is ready in a blink.** Instead of working through 150,000+ filter rules on every launch, Ultima keeps the finished blocker on disk and loads it back in a fraction of the time.
-- **Extensions stopped slowing things down.** A couple of behind-the-scenes checks were reading every file of every extension, and running Windows' registry tool over and over, each time you opened Ultima. Not anymore.
-
-In our testing, the window now appears in about half a second, and your first page finishes loading about a second sooner.
+Ultima opens about twice as fast. The window no longer waits on extensions or Widevine before it appears, the ad blocker loads from a saved copy instead of re-parsing its filter lists every launch, and a couple of slow startup checks are gone. In our testing the window's up in about half a second, and it opens with your theme and tabs already drawn.
 
 ### Crash reports
 
-Crashes are no fun, and they're a lot easier to fix when we actually know about them. Ultima can now send a report when it crashes or runs into an error, so problems get spotted and fixed sooner, even the ones we'd never run into ourselves.
+Ultima can send crash and error reports to help us fix things faster. Off unless you turn it on in Settings → Privacy. No IP addresses and no browsing history, though a crash dump can include bits of whatever was open at the time.
 
-- **Completely opt-in.** It's off until you turn it on in Settings → Privacy, and nothing is sent before that.
-- **About Ultima, not about you.** Reports are about what went wrong inside Ultima. We don't attach your IP address or a list of the sites you visit, though a crash report can include bits of whatever Ultima had open at that moment.
+### Mini player
 
-### Mini player, sorted
-
-The mini player got some love this time around:
-
-- **It only opens when you ask.** No more player popping up just because a tab in the background started making noise. Send a video there yourself with the button on the video, its right-click menu, or a site's own picture-in-picture button.
-- **Tall videos can be resized.** Shorts, Reels and other portrait videos now grow and shrink like any other video, and the player always stays fully on your screen.
-- **Docked in the sidebar? You pick the size.** Drag the handle along the top of a docked video to choose how much room it takes, so your tabs stay in view. Ultima remembers the size you like.
+- Only opens when you send a video to it, not whenever a background tab starts playing.
+- Portrait videos resize properly and the player stays on screen.
+- Docked in the sidebar, it has a handle to set its height so your tabs stay visible.
 
 ### Also new
 
-- **Fresh window buttons.** Minimize, maximize and close now have Ultima's own rounded icons, while still working exactly like Windows' own, snap layouts and all.
-- **Fixed:** you can drag the window from anywhere in the row of buttons at the top of the sidebar, even between the buttons and on greyed-out ones.
+- Ultima's own icons for the minimize, maximize and close buttons, with snap layouts still working.
+- Fixed dragging the window from the row of buttons at the top of the sidebar.
 
 [Every release](https://github.com/whatthebassett/UltimaBrowser/releases)
 
@@ -94,7 +77,7 @@ Press **Ctrl+K** and the **Control Palette** finds open tabs, history, Waypoints
 
 ## Fewer ads, no one following you
 
-Ultima blocks ads and trackers out of the box, including video ads and sponsored posts, using the same lists as uBlock Origin. It takes the tracking codes out of links you open and asks sites not to sell your data. One click on the shield turns it off for a site you want to support. And before you open a known phishing site, Ultima stops and warns you, checked right on your computer.
+Ultima blocks ads and trackers out of the box, including video ads and sponsored posts, using the same lists as uBlock Origin. It takes the tracking codes out of links you open and asks sites not to sell your data. One click on the shield turns it off for a site you want to support. Known phishing sites get a warning before they load.
 
 ## Ready from the first minute
 
