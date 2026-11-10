@@ -1,7 +1,7 @@
 {
   "name": "ultima-browser",
   "productName": "Ultima Browser",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Ultima Browser — a vertical-tabs browser with a Control Palette and one-click import from Chrome, Edge, Firefox and Zen.",
   "main": "src/main/main.js",
   "author": "UltimaBass <me@ultimabass.com>",
@@ -32,7 +32,13 @@
       "src/**/*",
       "assets/**/*",
       "node_modules/sql.js/dist/sql-wasm.*",
+      "node_modules/koffi/**/*",
+      "!node_modules/koffi/{doc,vendor}/**",
+      "node_modules/@koromix/**/*",
       "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/@koromix/**"
     ],
     "win": {
       "target": "nsis",
@@ -96,5 +102,8 @@
     "@fontsource-variable/inter": "^5.3.0",
     "electron": "github:castlabs/electron-releases#v44.10.1+wvcus",
     "electron-builder": "^26.18.0"
+  },
+  "dependencies": {
+    "koffi": "^3.3.7"
   }
 }

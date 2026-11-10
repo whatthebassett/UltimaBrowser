@@ -5,6 +5,32 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.6.1',
+    date: '2026-11-10',
+    highlights: [
+      {
+        title: 'Tabs in the taskbar',
+        icon: 'monitor',
+        text: 'Right-click Ultima in the Windows taskbar to see your open tabs, and pick one to jump straight to it.',
+        items: [
+          ['Every window', 'Tabs from all your windows show there, the window you used last first.'],
+          ['Kept up to date', 'The list follows your tabs as you open, close, rename and switch them.'],
+          ['Private stays private', 'Private tabs and windows are never listed.'],
+          ['Works with recent items off', 'Your tabs still show if Windows is set not to show recent items.'],
+        ],
+      },
+    ],
+    improved: [
+      ['Moving the window', 'Empty space in the sidebar works like the title bar: drag it to move or snap the window, or double-click to maximize.'],
+      ['Top buttons', 'Dragging a button at the top of the sidebar snaps the window too.'],
+      ['Browser icons', 'Import shows each browser with its own app icon instead of a letter.'],
+      ['More browsers to import from', 'Import now brings over Safari, Opera, Opera GX, Arc and Dia, plus Beta, Dev, Canary and Nightly versions.'],
+    ],
+    fixed: [
+      ['Security', 'Ultima now runs on Chromium 152.0.7977.169, with its latest security fixes.'],
+    ],
+  },
+  {
     version: '0.6.0',
     date: '2026-11-06',
     highlights: [

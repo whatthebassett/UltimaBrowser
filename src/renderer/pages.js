@@ -132,7 +132,36 @@ const BROWSER_BADGE = {
   vivaldi: ['V', 'linear-gradient(135deg,#ef3939,#b81d1d)'],
   firefox: ['F', 'linear-gradient(135deg,#ff980e,#e3205f)'],
   zen: ['Z', 'linear-gradient(135deg,#f4a261,#e76f51 60%,#9d4edd)'],
+  opera: ['O', 'linear-gradient(135deg,#ff1b2d,#a70014)'],
+  arc: ['A', 'linear-gradient(135deg,#fc5c65,#7b61ff 55%,#3dd5f3)'],
+  dia: ['D', 'linear-gradient(135deg,#7aa2ff,#b388ff)'],
+  safari: ['S', 'linear-gradient(135deg,#19d7ff,#1e64f0)'],
 };
+// Chrome's logo, for a Chrome whose profile is still here after the browser itself was removed
+const CHROME_LOGO = `<svg viewBox="0 0 96 96" aria-hidden="true">
+  <path fill="#ea4335" d="M7.62 22.06A48 48 0 0 1 90.66 26H48A22 22 0 0 0 28.95 59Z"/>
+  <path fill="#fbbc04" d="M90.66 26A48 48 0 0 1 45.72 95.95L67.05 59A22 22 0 0 0 48 26Z"/>
+  <path fill="#34a853" d="M45.72 95.95A48 48 0 0 1 7.62 22.06L28.95 59A22 22 0 0 0 67.05 59Z"/>
+  <circle cx="48" cy="48" r="22" fill="#fff"/><circle cx="48" cy="48" r="18" fill="#1a73e8"/></svg>`;
+
+// A browser's tile: empty at first (data-badge), then its app icon from where it's installed (browsericons.js), else
+// a drawn logo or its letter. Icons are found in main, which takes a moment the first time.
+const browserBadge = (cls, browser) => `<span class="${cls}" data-badge="${esc(browser)}"></span>`;
+async function fillBrowserBadges(root, sources) {
+  const icons = await window.ultima.browserIcons([...new Set(sources.map((s) => s.browser))]).catch(() => ({}));
+  for (const el of root.querySelectorAll('[data-badge]')) {
+    const b = el.dataset.badge;
+    const family = b.split('-')[0]; // a Beta or Nightly is drawn as its browser (chrome-beta → chrome)
+    if (icons[b] || family === 'chrome') {
+      el.classList.add('app-icon');
+      el.innerHTML = icons[b] ? `<img src="${esc(icons[b])}" alt="" draggable="false">` : CHROME_LOGO;
+    } else {
+      const [letter, bg] = BROWSER_BADGE[family] || ['?', 'var(--accent)'];
+      el.style.background = bg;
+      el.textContent = letter;
+    }
+  }
+}
 
 function describeResult(r) {
   const parts = [];
@@ -164,14 +193,16 @@ async function pageImport(root) {
       <ol class="steps">
         <li><b>Chrome / Brave / Vivaldi:</b> Settings → Passwords (Google Password Manager) → Settings → Export passwords</li>
         <li><b>Edge:</b> Settings → Passwords → ⋯ → Export passwords</li>
+        <li><b>Opera / Opera GX / Arc / Dia:</b> Settings → Passwords → ⋯ → Export passwords</li>
         <li><b>Firefox / Zen:</b> open <code>about:logins</code> → ⋯ → Export Passwords</li>
+        <li><b>Safari:</b> File → Export → Passwords</li>
       </ol>
       <span class="result" style="color:var(--text-3)">Passwords are encrypted with your OS account key. Delete the CSV afterward — it is plain text.</span></div>
       <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end"><button class="btn primary" id="imp-csv">${icon('key')} Choose CSV file…</button><span class="result" id="imp-csv-res"></span></div>
     </div></div>
     <h3>Other browsers</h3>
     <div class="card" style="display:flex;align-items:center;gap:16px;flex-wrap:wrap"><div style="flex:1;min-width:260px"><b>Bookmarks HTML file</b>
-      <div class="result">Works with Safari, Opera, Arc and any browser that can “Export bookmarks to HTML”.</div></div>
+      <div class="result">Works with any browser that can “Export bookmarks to HTML”.</div></div>
       <span class="result" id="imp-html-res"></span><button class="btn" id="imp-html">${icon('bookmark')} Choose HTML file…</button></div>
   </div>`;
 
@@ -200,16 +231,16 @@ async function pageImport(root) {
     ? `Found ${sources.length} browser profile${sources.length > 1 ? 's' : ''} on this computer. Close a browser before importing if it reports a locked file.`
     : 'No supported browsers found on this computer.';
   grid.innerHTML = sources.map((s, i) => {
-    const [letter, bg] = BROWSER_BADGE[s.browser] || ['?', 'var(--accent)'];
     const opt = (key, label, on = true) => (s.has[key] ? `<label><input type="checkbox" data-k="${key}" ${on ? 'checked' : ''}>${label}</label>` : '');
     return `<div class="card browser-card" data-i="${i}">
-      <div class="head"><span class="badge" style="background:${bg}">${letter}</span>
+      <div class="head">${browserBadge('badge', s.browser)}
         <div style="flex:1;min-width:0"><div class="name">${esc(s.label)}</div><div class="prof">${esc(s.profile)}</div></div>
         <button class="btn" data-act="go">Import</button></div>
       <div class="checks">${opt('bookmarks', 'Bookmarks')}${opt('history', 'History')}${opt('tabs', 'Open &amp; pinned tabs')}${opt('cookies', 'Cookies (stay signed in)')}</div>
       ${s.kind === 'chromium' ? '<div class="result" style="color:var(--text-3)">Saved logins: use the CSV import below — this browser encrypts them for itself.</div>' : ''}
       <div class="result" data-res></div></div>`;
   }).join('');
+  fillBrowserBadges(grid, sources);
   $('#imp-all').disabled = !sources.length;
 
   const runOne = async (card) => {

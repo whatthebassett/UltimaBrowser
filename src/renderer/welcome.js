@@ -400,11 +400,11 @@ async function loadBringStep() {
   if (!WC.el || WELCOME_STEPS[WC.step] !== 'bring') return;
   const sources = WC.sources.filter((s) => s.has.bookmarks || s.has.history);
   box.innerHTML = sources.length ? sources.slice(0, 4).map((s, i) => {
-    const [letter, bg] = BROWSER_BADGE[s.browser] || ['?', 'var(--wc-violet)'];
-    return `<div class="wc-browser" data-src="${i}"><span class="wc-badge" style="background:${bg}">${letter}</span>
+    return `<div class="wc-browser" data-src="${i}">${browserBadge('wc-badge', s.browser)}
       <span class="wc-browser-text"><b>${esc(s.label)}</b><span data-res>${esc(s.profile)}</span></span>
       <button class="wc-ghost small" data-import="${esc(s.id)}">Import</button></div>`;
   }).join('') : '<div class="wc-loading">No other browsers here. Import from a file later in Settings → Import.</div>';
+  fillBrowserBadges(box, sources.slice(0, 4));
   const d = await window.ultima.defaultBrowserStatus().catch(() => null);
   if (d?.isDefault && WC.el) {
     wc$('[data-default-ctl]').innerHTML = `<span class="wc-ok">${icon('check', 14)} Done</span>`;

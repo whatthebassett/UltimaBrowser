@@ -86,6 +86,7 @@ contextBridge.exposeInMainWorld('ultima', {
   removeBookmark: invoke('bookmarks:remove'),
 
   detectBrowsers: invoke('import:detect'),
+  browserIcons: invoke('import:icons'),
   runImport: invoke('import:run'),
   importPasswordsCsv: invoke('import:passwords-csv'),
   importBookmarksHtml: invoke('import:bookmarks-html'),
@@ -151,9 +152,10 @@ contextBridge.exposeInMainWorld('ultima', {
   playerDrag: (px, py) => ipcRenderer.send('player:drag', Number(px), Number(py)),
   playerZone: (zone) => ipcRenderer.send('player:zone', zone),
   windowDrag: (phase) => ipcRenderer.send('window:drag', phase === 'start' ? 'start' : 'end'),
+  sidebarArea: (r) => ipcRenderer.send('window:sidebar-area', r ? { x: Number(r.x), y: Number(r.y), width: Number(r.width), height: Number(r.height) } : null),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'download', 'window-fullscreen', 'window-state', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'safety-changed', 'download-blocked', 'site-unsafe', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
+    const allowed = ['show-contents', 'command', 'open-url', 'jump-to-tab', 'download', 'window-fullscreen', 'window-state', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'safety-changed', 'download-blocked', 'site-unsafe', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

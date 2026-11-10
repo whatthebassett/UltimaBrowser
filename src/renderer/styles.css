@@ -111,10 +111,31 @@ body.mac .sb-head { padding-left: 76px; }
 /* in the sidebar, the top buttons stretch across it, sharing its width (dividers stay thin) */
 .sb-head .nav > :not(.sb-div) { flex: 1 1 0; min-width: 28px; }
 /* The row of top buttons is title bar too: Windows moves the window from the gaps between the buttons, the dividers
-   and greyed-out buttons (which get no clicks at all), and initTopButtonDrag (app.js) from the buttons themselves.
+   and greyed-out buttons (which get no clicks at all), and initWindowDrag (app.js) from the buttons themselves.
    Not while the sidebar is being edited (its buttons and spaces are moved around then) or is hidden. */
 #sidebar .sb-head .nav, #sidebar .sb-head .nav button:disabled { -webkit-app-region: drag; }
 body.sb-editing #sidebar .sb-head .nav, body.sb-editing #sidebar .sb-head .nav *, body.sb-hidden #sidebar .sb-head .nav, body.sb-hidden #sidebar .sb-head .nav * { -webkit-app-region: no-drag; }
+/* So is the rest of the sidebar's blank space: the gaps between its parts, around the orbits and the bottom buttons,
+   and the room under the tabs. A right-click there still opens the sidebar's menu (main.js: sidebarMenuOnBlank).
+   Everything in it you use stays clear of it, and so does the tab list itself, for its scrollbar and the wheel: only
+   the room left under its tabs (::after, which shrinks away once they fill the list) moves the window.
+   Not with horizontal tabs (the tab strip has its own), nor while the sidebar is hidden or being edited, or a tab is
+   being dragged (a drag area would take the drop). */
+body:not(.htabs) #tabs::after { content: ""; flex: 1 0 0; align-self: stretch; margin: -2px -4px 0; }
+body:not(.htabs) #sidebar,
+body:not(.htabs) #sidebar > :is(.zone-sep, #space-bar, .sb-foot),
+body:not(.htabs) .sb-foot > :is(.sb-cells, .spacer),
+body:not(.htabs) .sb-cells > :is(.sb-space, .sb-div),
+body:not(.htabs) #tabs::after { -webkit-app-region: drag; }
+body:not(.htabs) #sidebar > :not(.sb-head, .zone-sep, #space-bar, .sb-foot),
+body:not(.htabs) #space-bar > *,
+body:not(.htabs) .sb-foot > :not(.sb-cells, .spacer),
+body:not(.htabs) .sb-cells > :not(.sb-space, .sb-div) { -webkit-app-region: no-drag; }
+body:is(.sb-hidden, .sb-editing, .tab-dragging, .card-dragging):not(.htabs) :is(#sidebar, #sidebar *),
+body:is(.sb-hidden, .sb-editing, .tab-dragging, .card-dragging):not(.htabs) #tabs::after { -webkit-app-region: no-drag !important; }
+/* A drag area takes the pointer from whatever is drawn over it, so nothing floating over the window (menus, dialogs,
+   the palette, pop-ups and the like, all kept outside #app) is one, unless it says so (the welcome's top strip). */
+:where(body > :not(#app, #win-glyphs), body > :not(#app, #win-glyphs) *) { -webkit-app-region: no-drag; }
 /* a divider: a short upright line between two buttons, in a narrow cell of its own (flat, in the compact sidebar's
    single column) */
 .sb-div { flex: none; width: 9px; height: 30px; display: grid; place-items: center; }
@@ -700,6 +721,9 @@ button.bmc:hover { background: var(--hover); color: var(--text); }
 .browser-card { display: flex; flex-direction: column; gap: 12px; }
 .browser-card .head { display: flex; align-items: center; gap: 12px; }
 .badge { width: 38px; height: 38px; border-radius: 11px; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; flex: none; }
+/* a browser's own app icon (pages.js fillBrowserBadges), drawn as it is */
+.badge.app-icon, .wc-badge.app-icon { border-radius: 0; }
+.badge.app-icon > img, .badge.app-icon > svg, .wc-badge.app-icon > img, .wc-badge.app-icon > svg { width: 100%; height: 100%; object-fit: contain; }
 .browser-card .name { font-weight: 600; }
 .browser-card .prof { color: var(--text-3); font-size: 12px; }
 .checks { display: flex; flex-wrap: wrap; gap: 6px 14px; }
@@ -897,9 +921,9 @@ body.a11y-contrast .toast { background: var(--surface-2); -webkit-backdrop-filte
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--border); animation: fade 0.1s ease; overflow-wrap: anywhere;
 }
 
-/* optional film grain from the space theme. The top bar's is ::before: it inherits the bar's window-drag region, and
-   as ::after (last in the bar) Windows would treat the toolbar buttons under it as title bar, so clicks never land */
-#sidebar::after, #topbar::before {
+/* optional film grain from the space theme. It's ::before: it inherits the bar's (or sidebar's) window-drag region,
+   and as ::after (last in it) Windows would treat the buttons under it as title bar, so clicks never land */
+#sidebar::before, #topbar::before {
   content: ""; position: absolute; inset: 0; pointer-events: none; opacity: var(--space-grain, 0); mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }

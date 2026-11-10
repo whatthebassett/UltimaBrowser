@@ -283,10 +283,26 @@ function closeFind() {
   activeTab()?.webview?.focus();
 }
 
-// The sidebar's top buttons (Back, Forward, Reload…) move the window too: press one and drag, and the window follows
-// (main.js: window:drag); press and let go without moving, and it's an ordinary click.
-function initTopButtonDrag() {
-  const row = $('#sidebar .sb-head');
+// The sidebar moves the window, like a title bar. Its blank space is a window drag area (styles.css), so Windows moves
+// it from there as from a title bar (snapping it to the screen's edges, maximizing it on a double-click). Its top
+// buttons (Back, Forward, Reload…) move it too: press one and drag, and main.js (window:drag) hands the move to
+// Windows as if the title bar were pressed there (elsewhere, the window follows the pointer); press and let go
+// without moving, and it's an ordinary click.
+function initWindowDrag() {
+  const side = $('#sidebar');
+  // A right-click on a drag area opens Windows' window menu; in the sidebar, its own menu opens instead, as anywhere
+  // else in it. main.js is told where the sidebar is (it has to decide that before the page hears of the click).
+  let area = '';
+  const reportArea = () => {
+    const r = side.getBoundingClientRect();
+    const now = tabsAcross() || document.body.classList.contains('sb-hidden') ? null : { x: r.left, y: r.top, width: r.width, height: r.height };
+    if (JSON.stringify(now) === area) return;
+    area = JSON.stringify(now);
+    window.ultima.sidebarArea(now);
+  };
+  new ResizeObserver(reportArea).observe(side);
+  new MutationObserver(reportArea).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
   let press = null;
   const stop = () => {
     if (!press) return;
@@ -299,19 +315,19 @@ function initTopButtonDrag() {
     }
     press = null;
   };
-  row.addEventListener('pointerdown', (e) => {
-    const btn = e.target.closest('.nav button');
+  side.addEventListener('pointerdown', (e) => {
+    const btn = e.target.closest('.sb-head .nav button');
     if (e.button !== 0 || !btn || tabsAcross() || document.body.classList.contains('sb-hidden') || document.body.classList.contains('sb-editing')) return;
     press = { x: e.screenX, y: e.screenY, id: e.pointerId, btn, dragging: false };
   });
-  row.addEventListener('pointermove', (e) => {
+  side.addEventListener('pointermove', (e) => {
     if (!press || e.pointerId !== press.id || press.dragging) return;
     if (Math.hypot(e.screenX - press.x, e.screenY - press.y) < 5) return;
     press.dragging = true;
     press.btn.setPointerCapture(e.pointerId);
     window.ultima.windowDrag('start');
   });
-  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) row.addEventListener(type, stop);
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) side.addEventListener(type, stop);
   window.addEventListener('blur', stop);
 }
 
@@ -587,7 +603,7 @@ async function boot() {
   $('#btn-url-menu').innerHTML = icon('sliders', 16);
   initExtensionsUi();
   initUpdates();
-  initTopButtonDrag();
+  initWindowDrag();
   initReader();
   initTranslate();
   initSiteSettings();
@@ -636,6 +652,13 @@ async function boot() {
       return;
     }
     createTab({ url: target, activate: !background, opener: activeTab() || undefined, private: priv });
+  });
+  // a tab chosen in the taskbar's right-click menu: its place among this window's regular tabs as last saved
+  // (saveSessionNow), and its address in case it has moved since
+  window.ultima.on('jump-to-tab', ({ index, url }) => {
+    const own = B.tabs.filter((t) => t.zone === 'normal' && !t.private);
+    const tab = own[index]?.url === url ? own[index] : own.find((t) => t.url === url);
+    if (tab) activateTab(tab.id);
   });
   window.ultima.on('page-menu', onPageMenu);
   window.ultima.on('ask', onAsk);

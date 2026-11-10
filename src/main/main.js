@@ -8,6 +8,7 @@ const {
 const { JsonStore } = require('./store');
 const { BrowserData, hostOf } = require('./data');
 const importer = require('./importer');
+const { browserIcons } = require('./browsericons');
 const { ExtensionManager } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
 const taskManager = require('./taskmanager');
@@ -750,9 +751,66 @@ ipcMain.on('player:move', (e, x, y, px, py) => {
   dragOverDock(screenPoint(px, py));
 });
 
-// A window dragged by one of the sidebar's top buttons (app.js: they move the window as well as click): it follows the
-// pointer until the button is let go. A maximized window comes down to its normal size first, under the pointer at
-// the same place across it, as Windows does when you drag a maximized window's title bar.
+// The sidebar's blank space moves the window like a title bar (styles.css), so a right-click there would open Windows'
+// window menu. In the sidebar it doesn't: Electron then hands the right-click to the page, which opens the sidebar's
+// own menu (app.js: onUiContextMenu). The page says where its sidebar is, in its own pixels, or null when it has none
+// (app.js: initWindowDrag); this has to be decided before Windows goes on to its menu.
+const sidebarAreas = new Map(); // webContents id → { x, y, width, height }
+ipcMain.on('window:sidebar-area', (e, r) => {
+  if (r && [r.x, r.y, r.width, r.height].every(Number.isFinite)) sidebarAreas.set(e.sender.id, r);
+  else sidebarAreas.delete(e.sender.id);
+});
+function sidebarMenuOnBlank(win) {
+  const wc = win.webContents;
+  const id = wc.id;
+  win.on('system-context-menu', (e, point) => {
+    const r = sidebarAreas.get(id);
+    if (!r || wc.isDestroyed()) return;
+    // (in the window's own pixels on Windows: screen pixels, from its top-left corner)
+    const scale = (process.platform === 'win32' ? screen.getDisplayMatching(win.getBounds()).scaleFactor : 1) * (wc.getZoomFactor() || 1);
+    const x = point.x / scale;
+    const y = point.y / scale;
+    if (x >= r.x && y >= r.y && x < r.x + r.width && y < r.y + r.height) e.preventDefault();
+  });
+  wc.once('destroyed', () => sidebarAreas.delete(id));
+}
+
+// Windows' own window move, for a drag that starts on a button (koffi calls user32 for it): the page lets go of the
+// pointer and Windows is told the title bar was pressed there, so the window moves just as from the title bar,
+// snapping to the screen's edges. null where that isn't available (other systems, or koffi failed to load).
+let titleBarPress;
+function nativeTitleBarPress() {
+  if (titleBarPress !== undefined) return titleBarPress;
+  titleBarPress = null;
+  if (process.platform !== 'win32') return null;
+  try {
+    const koffi = require('koffi');
+    const user32 = koffi.load('user32.dll');
+    koffi.struct('ULTIMA_POINT', { x: 'long', y: 'long' });
+    const getCursorPos = user32.func('bool __stdcall GetCursorPos(_Out_ ULTIMA_POINT *point)');
+    const releaseCapture = user32.func('bool __stdcall ReleaseCapture()');
+    const postMessage = user32.func('bool __stdcall PostMessageW(uintptr_t hwnd, uint32_t msg, uintptr_t wParam, intptr_t lParam)');
+    // as Chromium starts the move when a tab is dragged out into a window of its own (RunMoveLoop): a title bar press
+    // posted as WM_NCLBUTTONDOWN never reaches Windows, Chromium takes it
+    const WM_SYSCOMMAND = 0x0112;
+    const SC_DRAGMOVE = 0xF012; // SC_MOVE | HTCAPTION: move with the mouse, as from the title bar
+    titleBarPress = (win) => {
+      const point = {};
+      if (!getCursorPos(point)) return false;
+      const h = win.getNativeWindowHandle();
+      const hwnd = h.length >= 8 ? Number(h.readBigUInt64LE()) : h.readUInt32LE();
+      releaseCapture();
+      return postMessage(hwnd, WM_SYSCOMMAND, SC_DRAGMOVE, (((point.y & 0xffff) << 16) | (point.x & 0xffff)) >>> 0);
+    };
+  } catch (err) {
+    console.warn('[window drag] Windows\' own window move is unavailable:', err.message);
+  }
+  return titleBarPress;
+}
+
+// A window dragged by one of the sidebar's top buttons (app.js: initWindowDrag). On Windows, Windows moves it as from
+// the title bar (above). Elsewhere it follows the pointer until the button is let go; a maximized window comes down
+// to its normal size first, under the pointer at the same place across it, as Windows does with a title bar.
 const windowDrags = new Map(); // window id → the timer moving it
 ipcMain.on('window:drag', (e, phase) => {
   const win = BrowserWindow.fromWebContents(e.sender);
@@ -760,6 +818,7 @@ ipcMain.on('window:drag', (e, phase) => {
   clearInterval(windowDrags.get(win.id));
   windowDrags.delete(win.id);
   if (phase !== 'start' || win.isFullScreen()) return;
+  if (nativeTitleBarPress()?.(win)) return;
   const p = screen.getCursorScreenPoint();
   let { x, y, width } = win.getBounds();
   let grab = { x: p.x - x, y: p.y - y };
@@ -2497,6 +2556,7 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
   windows.set(win.id, w);
   lastFocusedId = win.id;
   reportWindowState(win);
+  sidebarMenuOnBlank(win);
   // shown once its page has drawn with its settings and tabs (app.js says so: ui:ready), so it never shows Ultima's
   // default look first; maximized then if it should be (maximizing a hidden window shows it at once, still blank, and
   // it would then show a second time). Should the page not say, it shows a couple of seconds after it first drew.
@@ -2538,6 +2598,7 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     w.focusedAt = Date.now(); // (where windows overlap, the one used last is taken to be on top: tearoff.js)
     dispatchExtEvent('windows.onFocusChanged', [priv ? -1 : 0]);
     if (!priv) announceActiveTab(w); // to extensions, the window you're in is "the" window, so its tab is the active one
+    if (!priv) updateJumpList(); // the taskbar menu lists its tabs first
   });
   win.on('blur', () => dispatchExtEvent('windows.onFocusChanged', [-1]));
   // a player docked in its sidebar floats while it's minimized
@@ -2577,6 +2638,7 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
     windows.delete(win.id);
     if (lastFocusedId === win.id) lastFocusedId = null;
     if (!priv && !quitting && liveWindows().some((x) => !x.private)) forgetWindow(w.key);
+    if (!priv && !quitting) updateJumpList();
     PLAYER.wants.delete(win.id);
     PLAYER.zones.delete(win.id);
     updatePlayer();
@@ -2856,12 +2918,13 @@ function registerIpc() {
       broadcast('sidebar-changed', s.sidebar, { except: w, normalOnly: true });
     }
     sessionStore.save(800);
+    updateJumpList(); // the taskbar menu's tabs
   });
   handle('app:quit', () => app.quit()); // every window is kept for next time (see before-quit)
   // Quits and starts again (a new hardware acceleration setting), with the same switches but not the link, file or new
   // window Ultima was opened for, which would open again. Every window's tabs come back, even with "Restore tabs" off.
   handle('app:relaunch', () => {
-    const args = process.argv.slice(1).filter((a) => ![RESTART_SWITCH, NEW_WINDOW, NEW_PRIVATE_WINDOW, '--single-argument'].includes(a) && !defaultBrowser.launchTarget(['', a]));
+    const args = process.argv.slice(1).filter((a) => ![RESTART_SWITCH, NEW_WINDOW, NEW_PRIVATE_WINDOW, '--single-argument'].includes(a) && !a.startsWith(JUMP_TAB) && !defaultBrowser.launchTarget(['', a]));
     app.relaunch({ args: [...args, RESTART_SWITCH] });
     app.quit();
   });
@@ -3233,6 +3296,8 @@ function registerIpc() {
   handle('ext:runtime-id',({ id, partition }) => extensions.runtimeIdFor(id, SPACE_PARTITION.test(partition || '') ? partition : PARTITION));
 
   handle('import:detect', () => importer.detect());
+  // their app icons, asked apart: finding them takes a moment the first time (browsericons.js)
+  handle('import:icons', (browsers) => browserIcons(Array.isArray(browsers) ? browsers.filter((b) => typeof b === 'string').slice(0, 20) : []));
   handle('import:run', async ({ sourceId, what, partition }) => {
     const src = importer.detect().find((s) => s.id === sourceId);
     if (!src) throw new Error('That browser profile is no longer available.');
@@ -3427,6 +3492,8 @@ async function widevineReady() {
 // Chrome; New private window opens a private one.
 app.on('second-instance', (_e, argv) => {
   if (!app.isReady()) return;
+  const jump = argv.find((a) => typeof a === 'string' && a.startsWith(JUMP_TAB)); // a tab chosen in the taskbar menu
+  if (jump) { jumpToTab(jump.slice(JUMP_TAB.length)); return; }
   const url = defaultBrowser.launchTarget(argv);
   if (argv.includes(NEW_PRIVATE_WINDOW)) { createWindow({ private: true, url }); return; }
   const w = currentWindow({ normal: true });
@@ -3436,15 +3503,88 @@ app.on('second-instance', (_e, argv) => {
   sendTo(w, 'open-url', { url, background: false });
 });
 
-// The taskbar's right-click menu on Windows: New window and New private window. Each starts Ultima again with its
-// switch, which the open Ultima hears (second-instance), or which the first window to open follows.
+// The taskbar's right-click menu on Windows (its Jump List): New window and New private window, and your open tabs,
+// the window you used last first (never private ones: private windows and tabs aren't in the session file,
+// which is where these come from). Each starts Ultima again with its switch, which the open Ultima hears
+// (second-instance), or which the first window to open follows.
 const NEW_WINDOW = '--new-window';
 const NEW_PRIVATE_WINDOW = '--new-private-window';
-function setTaskbarTasks() {
+// --jump-tab=<window key>:<tab's place among the window's regular tabs>:<its address, hashed>; the address picks the
+// tab out again if tabs moved since the list was made
+const JUMP_TAB = '--jump-tab=';
+const urlTag = (url) => require('crypto').createHash('sha1').update(String(url)).digest('hex').slice(0, 8);
+const JUMP = { timer: null, last: '', deniedAt: 0 };
+// Tabs change all the time and the Jump List is slow to write, so it's written a moment after they settle, and only
+// when what it shows has changed.
+function updateJumpList() {
+  if (process.platform !== 'win32' || quitting) return;
+  clearTimeout(JUMP.timer);
+  JUMP.timer = setTimeout(writeJumpList, 1500);
+}
+function jumpListTabs(item) {
+  const { minItems, removedItems } = app.getJumpListSettings();
+  const removed = new Set((removedItems || []).map((r) => r.args)); // ones you removed can't go back until the next write
+  const cap = Math.max(5, Math.min(minItems || 10, 20));
+  const short = (s, n) => { const t = String(s).replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
+  const last = currentWindow({ normal: true });
+  const wins = liveWindows().filter((w) => !w.private).sort((a, b) => (b === last) - (a === last) || (b.focusedAt || 0) - (a.focusedAt || 0));
+  const lists = wins.map((w) => {
+    const s = savedWindow(w.key);
+    const tabs = (s?.tabs || []).map((t, i) => ({ t, i })).filter(({ t }) => t.url && t.url !== 'ultima://newtab');
+    const on = tabs.findIndex(({ i }) => i === s?.active?.normal); // the tab showing comes first
+    if (on > 0) tabs.unshift(...tabs.splice(on, 1));
+    return tabs.map(({ t, i }) => item(short(t.name || t.title || t.url, 100), `${JUMP_TAB}${w.key}:${i}:${urlTag(t.url)}`, short(t.url, 250)))
+      .filter((it) => !removed.has(it.args));
+  }).filter((l) => l.length);
+  // the slots are shared out a tab at a time, so each window gets some
+  const take = lists.map(() => 0);
+  for (let n = 0, more = true; n < cap && more;) {
+    more = false;
+    lists.forEach((l, k) => { if (n < cap && take[k] < l.length) { take[k] += 1; n += 1; more = true; } });
+  }
+  return lists.map((l, k) => ({
+    name: lists.length === 1 ? 'Open tabs' : k === 0 ? 'Last used window' : k === 1 ? 'Another window' : `Another window (${k})`,
+    items: l.slice(0, take[k]),
+  }));
+}
+function writeJumpList({ tabs = true } = {}) {
+  clearTimeout(JUMP.timer);
+  JUMP.timer = null;
   if (process.platform !== 'win32') return;
   const before = app.isPackaged ? '' : `"${app.getAppPath()}" `; // (a development copy runs as electron.exe <folder>)
-  const task = (title, arg) => ({ program: process.execPath, arguments: `${before}${arg}`, iconPath: process.execPath, iconIndex: 0, title, description: title });
-  app.setUserTasks([task('New window', NEW_WINDOW), task('New private window', NEW_PRIVATE_WINDOW)]);
+  const item = (title, arg, description = title) => ({ type: 'task', program: process.execPath, args: `${before}${arg}`, iconPath: process.execPath, iconIndex: 0, title, description });
+  const newWindows = [item('New window', NEW_WINDOW), item('New private window', NEW_PRIVATE_WINDOW)];
+  let groups = [];
+  try { if (tabs) groups = jumpListTabs(item); } catch { /* no tabs this time */ }
+  // each window's tabs under a heading of their own; with "Show recently opened items in Jump Lists" off in Windows
+  // there are no headings to have, so they go under Tasks, after New window (headings are tried again now and then)
+  const withHeadings = [...groups.map((g) => ({ type: 'custom', ...g })), { type: 'tasks', items: newWindows }];
+  const underTasks = [{ type: 'tasks', items: [...newWindows, ...groups.flatMap((g) => [{ type: 'separator' }, ...g.items])] }];
+  let list = groups.length && Date.now() - JUMP.deniedAt > 60 * 1000 ? withHeadings : underTasks;
+  if (JSON.stringify(list) === JUMP.last) return;
+  let result = app.setJumpList(list);
+  if (result === 'customCategoryAccessDeniedError') {
+    JUMP.deniedAt = Date.now();
+    list = underTasks;
+    if (JSON.stringify(list) === JUMP.last) return;
+    result = app.setJumpList(list);
+  }
+  JUMP.last = result === 'ok' ? JSON.stringify(list) : ''; // (one that failed is tried again next time)
+}
+// A tab chosen there: its window comes forward and shows it. A window that has closed since leaves the last one you
+// used in front.
+function jumpToTab(spec) {
+  const [key, at, tag] = String(spec).split(':');
+  const w = liveWindows().find((x) => !x.private && x.key === key) || currentWindow({ normal: true });
+  if (!w) { createWindow(); return; }
+  if (w.win.isMinimized()) w.win.restore();
+  w.win.show();
+  w.win.focus();
+  if (w.key !== key) return;
+  const tabs = savedWindow(key)?.tabs || [];
+  let i = Number(at);
+  if (urlTag(tabs[i]?.url) !== tag) i = tabs.findIndex((t) => urlTag(t.url) === tag);
+  if (i >= 0) sendTo(w, 'jump-to-tab', { index: i, url: tabs[i].url });
 }
 
 // macOS hands links over as an event, also before the window exists
@@ -3541,7 +3681,7 @@ app.whenReady().then(() => {
   setTimeout(() => safety.load().then(() => broadcast('safety-changed')).then(() => setTimeout(refreshSafety, 15000)), 1500);
   setInterval(refreshSafety, 60 * 60 * 1000);
   // things that can wait until the windows are up
-  setTimeout(() => { setTaskbarTasks(); defaultBrowser.refreshRegistration(); }, 3000);
+  setTimeout(() => { writeJumpList(); defaultBrowser.refreshRegistration(); }, 3000);
   nativeTheme.on('updated', () => { broadcast('system-theme', nativeTheme.shouldUseDarkColors); toTaskWindow('system-theme', nativeTheme.shouldUseDarkColors); });
   // macOS: clicking the Dock icon with every window closed brings back the last one
   app.on('activate', () => { if (!liveWindows().length) createWindow({ restore: savedWindows()[0] }); });
@@ -3552,6 +3692,7 @@ app.on('session-end', () => { quitting = true; });
 
 app.on('before-quit', () => {
   quitting = true; // windows closing now are kept for next time
+  writeJumpList({ tabs: false }); // the taskbar menu doesn't keep offering tabs that are gone
   taskManager.stopGpu();
   data?.flush();
   for (const s of [settings, sessionStore]) if (s?.timer) s.flush();

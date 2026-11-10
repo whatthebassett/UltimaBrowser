@@ -1,47 +1,73 @@
 // Detects installed browsers and reads their bookmarks, history, open tabs and cookies.
-// Chromium family: Chrome, Edge, Brave, Vivaldi. Gecko family: Firefox, Zen.
+// Chromium family: Chrome, Edge, Brave, Vivaldi, Opera, Opera GX, Arc, Dia. Gecko family: Firefox, Zen. Their Beta, Dev,
+// Canary and Nightly too. And Safari.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
+const { parseBplist } = require('./plist');
 
 const HISTORY_IMPORT_LIMIT = 25000;
 const home = os.homedir();
 const env = (k, fallback) => process.env[k] || fallback;
 
+// Chromium browsers and their test channels, each a folder of its own: [id, name, Windows (in %LOCALAPPDATA%), macOS
+// (in Application Support), Linux (in ~/.config)]; null where it isn't made. A Windows folder can start with
+// %APPDATA% instead, or be found by a function (Arc, a Store app, keeps its folder under its package's name).
+const CHROMIUM = [
+  ['chrome', 'Google Chrome', 'Google/Chrome/User Data', 'Google/Chrome', 'google-chrome'],
+  ['chrome-beta', 'Google Chrome Beta', 'Google/Chrome Beta/User Data', 'Google/Chrome Beta', 'google-chrome-beta'],
+  ['chrome-dev', 'Google Chrome Dev', 'Google/Chrome Dev/User Data', 'Google/Chrome Dev', 'google-chrome-unstable'],
+  ['chrome-canary', 'Google Chrome Canary', 'Google/Chrome SxS/User Data', 'Google/Chrome Canary', 'google-chrome-canary'],
+  ['edge', 'Microsoft Edge', 'Microsoft/Edge/User Data', 'Microsoft Edge', 'microsoft-edge'],
+  ['edge-beta', 'Microsoft Edge Beta', 'Microsoft/Edge Beta/User Data', 'Microsoft Edge Beta', 'microsoft-edge-beta'],
+  ['edge-dev', 'Microsoft Edge Dev', 'Microsoft/Edge Dev/User Data', 'Microsoft Edge Dev', 'microsoft-edge-dev'],
+  ['edge-canary', 'Microsoft Edge Canary', 'Microsoft/Edge SxS/User Data', 'Microsoft Edge Canary', null],
+  ['brave', 'Brave', 'BraveSoftware/Brave-Browser/User Data', 'BraveSoftware/Brave-Browser', 'BraveSoftware/Brave-Browser'],
+  ['brave-beta', 'Brave Beta', 'BraveSoftware/Brave-Browser-Beta/User Data', 'BraveSoftware/Brave-Browser-Beta', 'BraveSoftware/Brave-Browser-Beta'],
+  ['brave-nightly', 'Brave Nightly', 'BraveSoftware/Brave-Browser-Nightly/User Data', 'BraveSoftware/Brave-Browser-Nightly', 'BraveSoftware/Brave-Browser-Nightly'],
+  ['vivaldi', 'Vivaldi', 'Vivaldi/User Data', 'Vivaldi', 'vivaldi'],
+  ['vivaldi-snapshot', 'Vivaldi Snapshot', 'Vivaldi Snapshot/User Data', 'Vivaldi Snapshot', 'vivaldi-snapshot'],
+  ['opera', 'Opera', '%APPDATA%/Opera Software/Opera Stable', 'com.operasoftware.Opera', 'opera'],
+  ['opera-gx', 'Opera GX', '%APPDATA%/Opera Software/Opera GX Stable', 'com.operasoftware.OperaGX', null],
+  ['arc', 'Arc', (local) => storeAppDir(local, 'TheBrowserCompany.Arc_', 'LocalCache/Local/Arc/User Data'), 'Arc/User Data', null],
+  ['dia', 'Dia', null, 'Dia/User Data', null],
+];
+// a Store app's own folder: %LOCALAPPDATA%\Packages\<name>_<publisher id>\…
+function storeAppDir(local, prefix, inside) {
+  try {
+    const pkg = fs.readdirSync(path.join(local, 'Packages')).find((d) => d.startsWith(prefix));
+    return pkg ? path.join(local, 'Packages', pkg, inside) : null;
+  } catch { return null; }
+}
+// Firefox and Zen: [id, name, Windows (in %APPDATA%), macOS (in Application Support), Linux (in ~)]. Their test channels
+// keep their profiles in the same folder, each under a name of its own, which tells them apart (geckoChannel).
+const GECKO = [
+  ['firefox', 'Firefox', 'Mozilla/Firefox', 'Firefox', '.mozilla/firefox'],
+  ['zen', 'Zen', 'zen', 'zen', '.zen'],
+];
+const GECKO_CHANNELS = {
+  firefox: [[/nightly/i, 'firefox-nightly', 'Firefox Nightly'], [/dev-edition/i, 'firefox-dev', 'Firefox Developer Edition']],
+  zen: [[/twilight/i, 'zen-twilight', 'Zen Twilight']],
+};
+const geckoChannel = (family, profile) => (GECKO_CHANNELS[family] || []).find(([re]) => re.test(profile || ''));
+
 function browserRoots() {
-  if (process.platform === 'win32') {
-    const local = env('LOCALAPPDATA', path.join(home, 'AppData', 'Local'));
-    const roaming = env('APPDATA', path.join(home, 'AppData', 'Roaming'));
-    return [
-      { browser: 'chrome', label: 'Google Chrome', kind: 'chromium', dir: path.join(local, 'Google', 'Chrome', 'User Data') },
-      { browser: 'edge', label: 'Microsoft Edge', kind: 'chromium', dir: path.join(local, 'Microsoft', 'Edge', 'User Data') },
-      { browser: 'brave', label: 'Brave', kind: 'chromium', dir: path.join(local, 'BraveSoftware', 'Brave-Browser', 'User Data') },
-      { browser: 'vivaldi', label: 'Vivaldi', kind: 'chromium', dir: path.join(local, 'Vivaldi', 'User Data') },
-      { browser: 'firefox', label: 'Firefox', kind: 'gecko', dir: path.join(roaming, 'Mozilla', 'Firefox') },
-      { browser: 'zen', label: 'Zen', kind: 'gecko', dir: path.join(roaming, 'zen') },
-    ];
-  }
-  if (process.platform === 'darwin') {
-    const support = path.join(home, 'Library', 'Application Support');
-    return [
-      { browser: 'chrome', label: 'Google Chrome', kind: 'chromium', dir: path.join(support, 'Google', 'Chrome') },
-      { browser: 'edge', label: 'Microsoft Edge', kind: 'chromium', dir: path.join(support, 'Microsoft Edge') },
-      { browser: 'brave', label: 'Brave', kind: 'chromium', dir: path.join(support, 'BraveSoftware', 'Brave-Browser') },
-      { browser: 'vivaldi', label: 'Vivaldi', kind: 'chromium', dir: path.join(support, 'Vivaldi') },
-      { browser: 'firefox', label: 'Firefox', kind: 'gecko', dir: path.join(support, 'Firefox') },
-      { browser: 'zen', label: 'Zen', kind: 'gecko', dir: path.join(support, 'zen') },
-    ];
-  }
-  const config = env('XDG_CONFIG_HOME', path.join(home, '.config'));
-  return [
-    { browser: 'chrome', label: 'Google Chrome', kind: 'chromium', dir: path.join(config, 'google-chrome') },
-    { browser: 'edge', label: 'Microsoft Edge', kind: 'chromium', dir: path.join(config, 'microsoft-edge') },
-    { browser: 'brave', label: 'Brave', kind: 'chromium', dir: path.join(config, 'BraveSoftware', 'Brave-Browser') },
-    { browser: 'vivaldi', label: 'Vivaldi', kind: 'chromium', dir: path.join(config, 'vivaldi') },
-    { browser: 'firefox', label: 'Firefox', kind: 'gecko', dir: path.join(home, '.mozilla', 'firefox') },
-    { browser: 'zen', label: 'Zen', kind: 'gecko', dir: path.join(home, '.zen') },
-  ];
+  const col = { win32: 2, darwin: 3 }[process.platform] || 4;
+  const support = path.join(home, 'Library', 'Application Support');
+  const local = env('LOCALAPPDATA', path.join(home, 'AppData', 'Local'));
+  const roaming = env('APPDATA', path.join(home, 'AppData', 'Roaming'));
+  const chromiumBase = { win32: local, darwin: support }[process.platform] || env('XDG_CONFIG_HOME', path.join(home, '.config'));
+  const geckoBase = { win32: roaming, darwin: support }[process.platform] || home;
+  const dirOf = (where, base) => {
+    if (typeof where === 'function') return where(base);
+    return where.startsWith('%APPDATA%/') ? path.join(roaming, where.slice(10)) : path.join(base, where);
+  };
+  const roots = (list, kind, base) => list.filter((b) => b[col]).map((b) => ({ browser: b[0], label: b[1], kind, dir: dirOf(b[col], base) }))
+    .filter((r) => r.dir);
+  // Safari (macOS): its bookmarks and history are in ~/Library/Safari, which only apps given Full Disk Access can read
+  const safari = process.platform === 'darwin' ? [{ browser: 'safari', label: 'Safari', kind: 'safari', dir: path.join(home, 'Library', 'Safari') }] : [];
+  return [...roots(CHROMIUM, 'chromium', chromiumBase), ...roots(GECKO, 'gecko', geckoBase), ...safari];
 }
 
 const exists = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
@@ -54,15 +80,19 @@ function chromiumProfiles(root) {
   } catch { /* no Local State: scan directories */ }
   let dirs = [];
   try { dirs = fs.readdirSync(root.dir).filter((d) => d === 'Default' || /^Profile \d+$/.test(d)); } catch { return []; }
+  const hasData = (p) => exists(path.join(p, 'Bookmarks')) || exists(path.join(p, 'History'));
+  // (Opera kept its one profile in the folder itself, before it had profiles: that one, when there are no others)
+  if (!dirs.some((d) => hasData(path.join(root.dir, d)))) dirs = [''];
   return dirs
     .map((d) => path.join(root.dir, d))
-    .filter((p) => exists(path.join(p, 'Bookmarks')) || exists(path.join(p, 'History')))
+    .filter(hasData)
     .map((p) => {
-      const dir = path.basename(p);
+      const dir = p === path.join(root.dir, '') ? 'Default' : path.basename(p);
+      const tabs = chromiumSessionFiles(p).length > 0 || (root.browser === 'arc' && exists(arcSidebarFile(root.dir)));
       return {
         profile: names[dir] || dir,
         path: p,
-        has: { bookmarks: exists(path.join(p, 'Bookmarks')), history: exists(path.join(p, 'History')), tabs: chromiumSessionFiles(p).length > 0, cookies: false },
+        has: { bookmarks: exists(path.join(p, 'Bookmarks')), history: exists(path.join(p, 'History')), tabs, cookies: false },
       };
     });
 }
@@ -99,12 +129,14 @@ function detect() {
   const sources = [];
   for (const root of browserRoots()) {
     if (!exists(root.dir)) continue;
-    const profiles = root.kind === 'chromium' ? chromiumProfiles(root) : geckoProfiles(root);
+    const profiles = { chromium: chromiumProfiles, gecko: geckoProfiles, safari: safariProfiles }[root.kind](root);
     for (const p of profiles) {
+      const [, browser, label] = (root.kind === 'gecko' && geckoChannel(root.browser, p.profile)) || [null, root.browser, root.label];
       sources.push({
         id: `${root.browser}:${p.path}`,
-        browser: root.browser,
-        label: root.label,
+        browser, // which browser or channel, e.g. chrome-beta (for its icon)
+        family: root.browser.split('-')[0], // e.g. chrome
+        label,
         kind: root.kind,
         ...p,
       });
@@ -122,7 +154,7 @@ function withDbCopy(file, fn) {
       fs.copyFileSync(file, target);
     } catch (err) {
       if (err.code === 'EBUSY' || err.code === 'EPERM') {
-        throw new Error(`${path.basename(file)} is locked — close that browser and try again.`);
+        throw Object.assign(new Error(`${path.basename(file)} is locked — close that browser and try again.`), { code: err.code });
       }
       throw err;
     }
@@ -369,6 +401,88 @@ async function importCookies(src, ses) {
   return added;
 }
 
+// ---- Arc ----
+// Arc keeps its sidebar (Favorites, and each space's pinned and other tabs) in StorableSidebar.json, beside its
+// profiles' folder: containers[…].items is a list of ids and items, each item a tab (data.tab) or a folder holding
+// others (childrenIds); topAppsContainerIDs names the Favorites' folders, and each space's containerIDs its pinned
+// and other tabs' ("pinned", id, "unpinned", id).
+const arcSidebarFile = (userDataDir) => path.join(userDataDir, '..', 'StorableSidebar.json');
+
+function arcTabs(src) {
+  let json;
+  try { json = JSON.parse(fs.readFileSync(arcSidebarFile(path.dirname(src.path)), 'utf8')); } catch { return chromiumTabs(src); }
+  const box = (json.sidebar?.containers || []).find((c) => c && Array.isArray(c.items));
+  if (!box) return chromiumTabs(src);
+  const items = new Map(box.items.filter((x) => x && typeof x === 'object' && x.id).map((x) => [x.id, x]));
+  const ids = (list) => (Array.isArray(list) ? list.filter((x) => typeof x === 'string') : []);
+  const out = [];
+  const seen = new Set();
+  const walk = (id, zone) => {
+    const item = items.get(id);
+    if (!item || seen.has(id)) return;
+    seen.add(id);
+    const tab = item.data?.tab;
+    if (typeof tab?.savedURL === 'string' && /^https?:/i.test(tab.savedURL)) {
+      out.push({ url: tab.savedURL, title: item.title || tab.savedTitle || tab.savedURL, favicon: '', zone });
+    }
+    for (const child of ids(item.childrenIds)) walk(child, zone);
+  };
+  for (const id of ids(box.topAppsContainerIDs)) walk(id, 'essential'); // Arc's Favorites are Ultima's Essentials
+  for (const space of (box.spaces || []).filter((s) => s && typeof s === 'object')) {
+    const c = space.containerIDs || [];
+    for (let i = 0; i < c.length - 1; i += 1) {
+      if (c[i] === 'pinned') walk(c[i + 1], 'pinned');
+      else if (c[i] === 'unpinned') walk(c[i + 1], 'normal');
+    }
+  }
+  return out.length ? out : chromiumTabs(src);
+}
+
+// ---- Safari (macOS) ----
+// Bookmarks in Bookmarks.plist (a binary property list: plist.js), history in History.db (times in seconds since 2001).
+// macOS lets only apps with Full Disk Access read them, so Safari is offered whenever it's there, and importing says
+// what to turn on when it can't read them.
+const SAFARI_FOLDERS = { BookmarksBar: 'Favorites', BookmarksMenu: 'Bookmarks menu', 'com.apple.ReadingList': 'Reading List' };
+const MAC_EPOCH = 978307200; // 2001-01-01, in seconds since 1970
+
+function safariProfiles(root) {
+  return [{ profile: 'Default', path: root.dir, has: { bookmarks: true, history: true, tabs: false, cookies: false } }];
+}
+
+function safariAccess(fn) {
+  try { return fn(); } catch (err) {
+    if (err.code === 'EPERM' || err.code === 'EACCES') throw new Error('Ultima needs Full Disk Access to read Safari. Turn it on in System Settings → Privacy & Security → Full Disk Access, then try again.');
+    throw err;
+  }
+}
+
+function safariBookmarks(src) {
+  return safariAccess(() => {
+    const top = parseBplist(fs.readFileSync(path.join(src.path, 'Bookmarks.plist')));
+    const out = [];
+    const visit = (node, folder) => {
+      for (const child of node?.Children || []) {
+        if (child?.WebBookmarkType === 'WebBookmarkTypeLeaf' && typeof child.URLString === 'string') {
+          const added = child.ReadingList?.DateAdded instanceof Date ? child.ReadingList.DateAdded.getTime() : Date.now();
+          out.push({ title: child.URIDictionary?.title || child.URLString, url: child.URLString, folder, added });
+        } else if (child?.WebBookmarkType === 'WebBookmarkTypeList') {
+          visit(child, `${folder}/${SAFARI_FOLDERS[child.Title] || child.Title || 'Folder'}`);
+        }
+      }
+    };
+    visit(top, src.label);
+    return out;
+  });
+}
+
+function safariHistory(src) {
+  return safariAccess(() => withDbCopy(path.join(src.path, 'History.db'), (db) => db
+    // (SQLite takes the title from the latest visit, the row MAX() picked)
+    .prepare('SELECT i.url, v.title, i.visit_count AS visits, MAX(v.visit_time) AS t FROM history_items i JOIN history_visits v ON v.history_item = i.id GROUP BY i.id ORDER BY t DESC LIMIT ?')
+    .all(HISTORY_IMPORT_LIMIT)
+    .map((r) => ({ url: r.url, title: r.title || '', visits: Number(r.visits) || 1, lastVisit: Math.round((Number(r.t) + MAC_EPOCH) * 1000) || Date.now() }))));
+}
+
 // ---- file-based imports ----
 function parseCsv(text) {
   const rows = [];
@@ -427,17 +541,24 @@ function bookmarksFromHtml(html, label) {
   return out;
 }
 
+// what each kind of browser can give, and how it's read (cookies: Firefox and Zen only; the others encrypt theirs)
+const READERS = {
+  chromium: { bookmarks: chromiumBookmarks, history: chromiumHistory, tabs: (src) => (src.family === 'arc' ? arcTabs(src) : chromiumTabs(src)) },
+  gecko: { bookmarks: geckoBookmarks, history: geckoHistory, tabs: geckoTabs, cookies: true },
+  safari: { bookmarks: safariBookmarks, history: safariHistory },
+};
+
 async function runImport(src, what, data, ses) {
   const result = { bookmarks: 0, history: 0, tabs: [], cookies: 0, errors: [] };
   const attempt = async (key, fn) => {
     try { await fn(); } catch (err) { result.errors.push(`${key}: ${err.message}`); }
   };
-  const chromium = src.kind === 'chromium';
-  what = Object.fromEntries(Object.entries(what).map(([k, v]) => [k, v && src.has[k]]));
-  if (what.bookmarks) await attempt('Bookmarks', () => { result.bookmarks = data.mergeBookmarks(chromium ? chromiumBookmarks(src) : geckoBookmarks(src)); });
-  if (what.history) await attempt('History', () => { result.history = data.mergeHistory(chromium ? chromiumHistory(src) : geckoHistory(src)); });
-  if (what.tabs) await attempt('Open tabs', () => { result.tabs = chromium ? chromiumTabs(src) : geckoTabs(src); });
-  if (what.cookies && !chromium) await attempt('Cookies', async () => { result.cookies = await importCookies(src, ses); });
+  const read = READERS[src.kind] || {};
+  what = Object.fromEntries(Object.entries(what).map(([k, v]) => [k, v && src.has[k] && Boolean(read[k])]));
+  if (what.bookmarks) await attempt('Bookmarks', () => { result.bookmarks = data.mergeBookmarks(read.bookmarks(src)); });
+  if (what.history) await attempt('History', () => { result.history = data.mergeHistory(read.history(src)); });
+  if (what.tabs) await attempt('Open tabs', () => { result.tabs = read.tabs(src); });
+  if (what.cookies) await attempt('Cookies', async () => { result.cookies = await importCookies(src, ses); });
   return result;
 }
 
@@ -455,4 +576,4 @@ function chromiumBookmarksBar(src) {
   return out;
 }
 
-module.exports = { detect, runImport, passwordsFromCsv, bookmarksFromHtml, decodeMozLz4, chromiumBookmarksBar, readSnss };
+module.exports = { detect, runImport, passwordsFromCsv, bookmarksFromHtml, decodeMozLz4, chromiumBookmarksBar, readSnss, safariBookmarks, safariHistory, arcTabs };

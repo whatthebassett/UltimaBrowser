@@ -196,7 +196,7 @@ async function bookmarkBarMenu(e) {
 // Copies the bookmarks bar of Chrome (or Edge, Brave… when there are several) onto Ultima's.
 async function importChromeBookmarkBar() {
   const sources = await window.ultima.bookmarkBarSources();
-  if (!sources.length) return toast('No Chrome, Edge, Brave or Vivaldi bookmarks were found on this computer');
+  if (!sources.length) return toast('No Chrome, Edge, Brave, Vivaldi, Opera or Arc bookmarks were found on this computer');
   let src = sources.find((s) => s.browser === 'chrome') || sources[0];
   if (sources.length > 1) {
     const r = $('#bookmark-bar').getBoundingClientRect();

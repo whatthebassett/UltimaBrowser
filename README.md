@@ -21,37 +21,30 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 <br>
 
-## What's new in 0.6.0
+## What's new in 0.6.1
 
-Phishing warnings, a much quicker start, and opt-in crash reports. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
+Your open tabs in the Windows taskbar, more browsers to import from, and the latest Chromium security fixes. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
 
-### Dangerous site warnings
+### Tabs in the taskbar
 
-Open a known phishing site and Ultima stops it before it loads, with a **Dangerous site ahead** page in its place. **Back to safety** or **Continue anyway**, your call.
+Right-click Ultima in the Windows taskbar and your open tabs are right there. Pick one and Ultima brings its window to the front and switches to it.
 
-- The check runs on your computer against [Phishing.Database](https://github.com/mitchellkrogza/Phishing.Database)'s list of active phishing domains, which Ultima keeps up to date in the background. Nothing you visit gets sent off to be looked up.
-- Downloads from those sites are blocked too.
-- Try it at `phishing-test.ultimabrowser.invalid`.
-- On by default; turn it off in Settings → Privacy.
+- Tabs from every window, the one you used last first.
+- The list keeps up as you open, close, rename and switch tabs.
+- Private tabs and windows are never listed.
+- Works even if Windows is set not to show recent items in Jump Lists.
 
-### Faster start
+### Import from more browsers
 
-Ultima opens about twice as fast. The window no longer waits on extensions or Widevine before it appears, the ad blocker loads from a saved copy instead of re-parsing its filter lists every launch, and a couple of slow startup checks are gone. In our testing the window's up in about half a second, and it opens with your theme and tabs already drawn.
-
-### Crash reports
-
-Ultima can send crash and error reports to help us fix things faster. Off unless you turn it on in Settings → Privacy. No IP addresses and no browsing history, though a crash dump can include bits of whatever was open at the time.
-
-### Mini player
-
-- Only opens when you send a video to it, not whenever a background tab starts playing.
-- Portrait videos resize properly and the player stays on screen.
-- Docked in the sidebar, it has a handle to set its height so your tabs stay visible.
+- Safari, Opera, Opera GX, Arc and Dia, plus the Beta, Dev, Canary and Nightly versions of Chrome, Edge, Brave, Vivaldi, Firefox and Zen.
+- Arc's Favorites come over as Essentials, and its pinned tabs stay pinned.
+- Each browser shows with its own app icon.
+- On a Mac, Safari needs Full Disk Access for Ultima (System Settings → Privacy & Security).
 
 ### Also new
 
-- Ultima's own icons for the minimize, maximize and close buttons, with snap layouts still working.
-- Fixed dragging the window from the row of buttons at the top of the sidebar.
+- Drag empty space in the sidebar to move or snap the window, or double-click it to maximize, as with a title bar.
+- Chromium 152.0.7977.169, with its latest security fixes.
 
 [Every release](https://github.com/whatthebassett/UltimaBrowser/releases)
 
