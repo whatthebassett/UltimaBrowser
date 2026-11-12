@@ -1,7 +1,8 @@
 // Dragging tabs like cards: the tab lifts off the sidebar as a card that follows the pointer (tilting with its
 // movement), the other tabs slide aside to open a gap where it will land, and on release it settles into the gap.
 // It can land among regular or pinned tabs, in Essentials, in a folder (in its gap, or on its header), or on the
-// bookmarks bar (which bookmarks it). Esc (rebindable) or dropping anywhere else sends it back.
+// bookmarks bar (which bookmarks it), or on another orbit's button below the tabs (which moves it there). Esc
+// (rebindable) or dropping anywhere else sends it back.
 // A tab dragged out of the window, or onto the middle of the page, is torn off: the window it would become follows the
 // pointer (main/tearoff.js), and letting go opens it there. Over another Ultima window's tabs, it shows up there as a
 // card with its gap instead, and letting go moves it in (a torn-off tab can also go back from its menu). A pinned tab
@@ -155,6 +156,14 @@ function aimCard() {
   const tear = Boolean(d.canTear) && wantsTear(d, at);
   tearAim(d, tear);
   if (tear) return;
+  // another orbit's button: the tab moves to that orbit
+  const orbit = !d.incoming && at?.closest('#space-bar [data-space]');
+  if (orbit && orbit.dataset.space !== B.activeSpaceId && !B.private) {
+    orbit.classList.add('drop-target');
+    d.target = { kind: 'space', id: orbit.dataset.space };
+    moveSlot(d.home.parent, d.home.next);
+    return;
+  }
   // the bookmarks bar: bookmark the tab at that spot
   if (at?.closest('#bookmark-bar') && !isInternal(d.tab.url)) {
     const t = bmDropTarget({ target: at, clientX: d.x });
@@ -557,7 +566,7 @@ function dropCard() {
   const d = TD.drag;
   if (d.target.kind === 'window' && d.torn) { tearOffCard(); return; }
   if (d.target.kind === 'list' && d.slot.closest('#essentials, #pinned-list, #tabs')) settleCard('slot');
-  else if (d.target.kind === 'folder' || d.target.kind === 'bar' || d.target.kind === 'split') settleCard(d.target.kind);
+  else if (['folder', 'bar', 'split', 'space'].includes(d.target.kind)) settleCard(d.target.kind);
   else settleCard('back');
 }
 
@@ -570,6 +579,7 @@ function settleCard(how) {
   if (d.canTear) { window.ultima.tearCancel().catch(() => {}); d.card.classList.remove('torn'); }
   if (how === 'back') moveSlot(d.home.parent, d.home.next);
   const where = how === 'folder' ? $(`[data-folder-head="${d.target.id}"]`) : how === 'bar' ? $('#bookmark-bar') : how === 'split' ? $('#viewport .split-drop')
+    : how === 'space' ? $(`#space-bar [data-space="${d.target.id}"]`) || d.slot
     : how === 'copy' ? copyRow(d) || $('#sidebar') : d.slot;
   clearCardMarks();
   const r = where.getBoundingClientRect();
@@ -623,7 +633,8 @@ function finishCardDrag(how) {
   if (folderMove) moveFolder(d.folderId, folderMove.zone, folderMove.before);
   if (arrange) arrangeSplit(arrange.id, arrange.order);
   const tab = d.folderId ? null : tabById(d.id);
-  if (tab && d.group) dropGroup(d, how, move);
+  if (tab && how === 'space') { if (d.group) moveTabsToSpace(d.group.filter((t) => B.tabs.includes(t)), d.target.id); else moveTabToSpace(tab, d.target.id); }
+  else if (tab && d.group) dropGroup(d, how, move);
   else if (tab && move) {
     tab.folderId = move.zone !== 'essential' ? move.folder : undefined;
     tab.splitId = move.split;

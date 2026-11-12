@@ -102,6 +102,38 @@ install(
       return undefined;
     };
 
+    // ---- activeTab (see main.js) ----
+    // An extension that asks for activeTab is loaded with every site added to its manifest (listed under ADDED_HOSTS),
+    // because Electron can't let it into one tab at a time. Here it sees its manifest as written, and asks Ultima
+    // before it puts scripts or styles in a page, so it gets in only where Chrome would let it.
+    const ADDED_HOSTS = 'ultima_added_hosts';
+    const ownManifest = chrome.runtime?.getManifest?.() || {};
+    const widened = Array.isArray(ownManifest[ADDED_HOSTS]);
+    const asWritten = (m) => {
+      if (!m || !Array.isArray(m[ADDED_HOSTS])) return m;
+      const added = new Set(m[ADDED_HOSTS]);
+      const copy = { ...m };
+      delete copy[ADDED_HOSTS];
+      if (Array.isArray(copy.host_permissions)) copy.host_permissions = copy.host_permissions.filter((h) => !added.has(h));
+      if (Array.isArray(copy.permissions) && copy.manifest_version < 3) copy.permissions = copy.permissions.filter((h) => !added.has(h));
+      return copy;
+    };
+    const namedHosts = (() => {
+      const m = asWritten(ownManifest);
+      return m.manifest_version >= 3 ? m.host_permissions || [] : (m.permissions || []).filter((p) => p === '<all_urls>' || String(p).includes('://'));
+    })();
+    const cleanError = (err) => new Error(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, ''));
+    // the target as it may go ahead (frames on other sites left out), or Chrome's error
+    const pageTarget = (target) => (host?.call
+      ? host.call('activeTab', 'check', [target ?? null]).catch((err) => { throw cleanError(err); })
+      : Promise.resolve(target));
+    // resolves, or calls back with chrome.runtime.lastError set if it failed
+    const settleWith = (cb, promise) => {
+      if (!cb) return promise;
+      promise.then((v) => cb(v), (err) => withLastError(err.message, () => cb()));
+      return undefined;
+    };
+
     // Events Ultima really delivers (tabs.*, webNavigation.*, windows.onFocusChanged), keyed by "namespace.onName"
     const live = {};
     // Some events can arrive before the extension subscribes (runtime.onInstalled is sent as its background starts);
@@ -310,6 +342,18 @@ install(
           if (props.url) openTab(props.url);
           return done(a, { id: -1, index: 0, windowId: 1, active: props.active !== false, pinned: false, highlighted: true, incognito: false, url: props.url || '' });
         },
+        // the older way into a page (Manifest V2): asks Ultima first, as scripting does below (see activeTab)
+        ...Object.fromEntries((widened ? ['executeScript', 'insertCSS', 'removeCSS'] : []).filter((n) => typeof tabs[n] === 'function').map((n) => [n, (...a) => {
+          const cb = typeof a[a.length - 1] === 'function' ? a.pop() : null;
+          const tabId = typeof a[0] === 'number' ? a.shift() : null;
+          const details = a[0] && typeof a[0] === 'object' ? { ...a[0] } : {};
+          const real = tabs[n].bind(tabs);
+          const target = { tabId, allFrames: Boolean(details.allFrames), ...(details.frameId !== undefined ? { frameIds: [details.frameId] } : {}) };
+          return settleWith(cb, pageTarget(target).then((t) => {
+            if (details.allFrames && t && !t.allFrames) details.allFrames = false; // its other frames are other sites'
+            return tabId === null ? real(details) : real(tabId, details);
+          }));
+        }])),
       }));
     }
 
@@ -403,7 +447,9 @@ install(
         hasListener: (f) => externalListeners.has(f),
         hasListeners: () => externalListeners.size > 0,
       };
+      const realManifest = typeof chrome.runtime.getManifest === 'function' ? chrome.runtime.getManifest.bind(chrome.runtime) : null;
       define('runtime', patched(chrome.runtime, {
+        ...realManifest ? { getManifest: () => asWritten(realManifest()) } : {}, // without the sites Ultima added (see activeTab)
         onMessageExternal,
         // real answers from Ultima: which popups, tabs, offscreen documents and workers this extension has open
         onInstalled: liveEvent('runtime.onInstalled'), // Electron never fires it; Ultima does (see announceInstall)
@@ -439,20 +485,44 @@ install(
 
     // Scripts an extension registered survive its background restarting here, so registering them again fails with
     // "Duplicate script ID" (Bitwarden's passkey support does this). Replace the old registration instead.
-    if (chrome.scripting?.registerContentScripts) {
+    // An extension Ultima widened (see activeTab) asks before it puts scripts or styles in a page, and the scripts it
+    // registers run only on sites it names itself.
+    if (chrome.scripting) {
       const scripting = chrome.scripting;
-      const register = scripting.registerContentScripts.bind(scripting);
-      define('scripting', patched(scripting, {
-        registerContentScripts: async (scripts, ...a) => {
+      const extras = {};
+      const named = (scripts) => (!widened || !Array.isArray(scripts) ? scripts : scripts
+        .map((s) => ({ ...s, matches: (s.matches || []).filter((m) => namedHosts.includes(m)) }))
+        .filter((s) => s.matches.length));
+      if (scripting.registerContentScripts) {
+        const register = scripting.registerContentScripts.bind(scripting);
+        extras.registerContentScripts = async (scripts, ...a) => {
+          const list = named(scripts);
+          if (!list.length) return done(a);
           try {
-            return done(a, await register(scripts));
+            return done(a, await register(list));
           } catch (err) {
             if (!/Duplicate script ID/i.test(String(err?.message))) throw err;
-            await scripting.unregisterContentScripts({ ids: scripts.map((s) => s.id) }).catch(() => {});
-            return done(a, await register(scripts));
+            await scripting.unregisterContentScripts({ ids: list.map((s) => s.id) }).catch(() => {});
+            return done(a, await register(list));
           }
-        },
-      }));
+        };
+      }
+      if (widened && scripting.updateContentScripts) {
+        const update = scripting.updateContentScripts.bind(scripting);
+        extras.updateContentScripts = async (scripts, ...a) => {
+          const list = Array.isArray(scripts) ? scripts.map((s) => (s.matches ? { ...s, matches: s.matches.filter((m) => namedHosts.includes(m)) } : s)) : scripts;
+          return done(a, await update(list));
+        };
+      }
+      for (const name of widened ? ['executeScript', 'insertCSS', 'removeCSS'] : []) {
+        if (typeof scripting[name] !== 'function') continue;
+        const real = scripting[name].bind(scripting);
+        extras[name] = (injection, ...a) => {
+          const cb = typeof a[a.length - 1] === 'function' ? a.pop() : null;
+          return settleWith(cb, pageTarget(injection?.target).then((target) => real({ ...injection, target })));
+        };
+      }
+      define('scripting', patched(scripting, extras));
     }
 
     // ---- alarms ----
@@ -480,6 +550,8 @@ install(
     // ---- permissions Electron doesn't know ----
     // e.g. Bitwarden asks for "privacy" to switch off the browser's own password saving. Ultima has none, so
     // permissions for APIs Ultima stands in for count as granted instead of failing.
+    // (a widened extension has only the sites it names: the rest it reaches through activeTab, as in Chrome)
+    const unnamedSite = (q) => widened && (q?.origins || []).some((o) => !namedHosts.includes(o));
     if (chrome.permissions) {
       const STAND_IN = new Set(['privacy']);
       const perms = chrome.permissions;
@@ -487,20 +559,26 @@ install(
       const onlyStandIns = (q) => !known(q).permissions.length && !(q?.origins || []).length;
       const wrap = (fn) => (q, ...a) => {
         const [cb] = typeof a[a.length - 1] === 'function' ? [a.pop()] : [null];
-        const result = onlyStandIns(q) ? Promise.resolve(true) : perms[fn](known(q));
+        const result = fn !== 'remove' && unnamedSite(q) ? Promise.resolve(false)
+          : onlyStandIns(q) ? Promise.resolve(true) : perms[fn](known(q));
         if (!cb) return result;
         result.then((v) => cb(v), () => cb(false));
         return undefined;
       };
-      define('permissions', patched(perms, { contains: wrap('contains'), request: wrap('request'), remove: wrap('remove') }));
+      const added = new Set(ownManifest[ADDED_HOSTS] || []);
+      const getAll = (...a) => {
+        const [cb] = typeof a[a.length - 1] === 'function' ? [a.pop()] : [null];
+        return settleWith(cb, perms.getAll().then((all) => ({ ...all, origins: (all.origins || []).filter((o) => !added.has(o)) })));
+      };
+      define('permissions', patched(perms, { contains: wrap('contains'), request: wrap('request'), remove: wrap('remove'), ...(widened && perms.getAll ? { getAll } : {}) }));
     } else {
       // Some Electron versions (44) leave chrome.permissions out of extension pages entirely, and Bitwarden's popup
       // then fails to start ("Cannot read properties of undefined (reading 'contains')"). Electron grants an
       // extension everything its manifest asks for when it loads, so answer as that: granted, nothing to remove.
       const declared = chrome.runtime?.getManifest?.() || {};
       define('permissions', missing({
-        contains: (q, ...a) => done(a, true),
-        request: (q, ...a) => done(a, true),
+        contains: (q, ...a) => done(a, !unnamedSite(q)),
+        request: (q, ...a) => done(a, !unnamedSite(q)),
         remove: (q, ...a) => done(a, false),
         getAll: (...a) => done(a, { permissions: [...(declared.permissions || [])], origins: [...(declared.host_permissions || [])] }),
       }));

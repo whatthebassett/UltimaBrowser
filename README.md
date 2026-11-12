@@ -21,30 +21,31 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 <br>
 
-## What's new in 0.6.1
+## What's new in 0.6.2
 
-Your open tabs in the Windows taskbar, more browsers to import from, and the latest Chromium security fixes. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
+A new password menu that fills logins on far more sites, plus a handful of extension and sidebar fixes. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
 
-### Tabs in the taskbar
+### A new password menu
 
-Right-click Ultima in the Windows taskbar and your open tabs are right there. Pick one and Ultima brings its window to the front and switches to it.
+The menu that offers your saved logins got a cleaner look, and it fills sign-in forms however they're built.
 
-- Tabs from every window, the one you used last first.
-- The list keeps up as you open, close, rename and switch tabs.
-- Private tabs and windows are never listed.
-- Works even if Windows is set not to show recent items in Jump Lists.
-
-### Import from more browsers
-
-- Safari, Opera, Opera GX, Arc and Dia, plus the Beta, Dev, Canary and Nightly versions of Chrome, Edge, Brave, Vivaldi, Firefox and Zen.
-- Arc's Favorites come over as Essentials, and its pinned tabs stay pinned.
-- Each browser shows with its own app icon.
-- On a Mac, Safari needs Full Disk Access for Ultima (System Settings → Privacy & Security).
+- Fills inside sign-in forms embedded from another site.
+- Two-step sign-ins: the login you picked for your username is ready on the password page.
+- Forms in pop-ups, forms that show up late, and fields inside web components all fill.
+- Arrow keys, Enter and Esc work without leaving the page.
+- A login only fills on its own site, never into another site's frame.
 
 ### Also new
 
-- Drag empty space in the sidebar to move or snap the window, or double-click it to maximize, as with a title bar.
-- Chromium 152.0.7977.169, with its latest security fixes.
+- Ctrl+Shift+A opens every folder in your orbit, or closes them all.
+- Update an extension right away from Settings → Extensions, no restart needed.
+- Click-to-use extensions like Google Translate now work on the page you use them on.
+
+### Fixed
+
+- Typing in an extension's text boxes no longer sets off Ultima's shortcuts.
+- Your mouse's back and forward buttons switch orbits again anywhere on the sidebar.
+- Dropping a tab on an orbit's button moves it to that orbit.
 
 [Every release](https://github.com/whatthebassett/UltimaBrowser/releases)
 
@@ -125,12 +126,12 @@ What's still to come, roughly in order.
 - [x] Bring over open tabs from Chrome and Edge.
 
 **Passwords and forms**
-- [ ] Fill logins inside embedded sign-in forms.
+- [x] Fill logins inside embedded sign-in forms.
 - [ ] Save and fill addresses and payment cards.
 
 **Extensions**
 - [ ] Userscript managers like Tampermonkey.
-- [ ] Extensions that act on the current tab when you click them (activeTab), like Google Translate.
+- [x] Extensions that act on the current tab when you click them (activeTab), like Google Translate.
 - [ ] Extension shortcuts that work when Ultima isn't in front.
 
 **Your stuff everywhere**

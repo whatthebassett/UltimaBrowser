@@ -368,6 +368,24 @@ class BrowserData {
       .map((x) => BrowserData.publicLogin(x.p));
   }
 
+  // The logins that may be filled into a frame at `url`: as passwordsFor, but a page loaded without https never gets a
+  // login saved for an https address, and a frame inside another site's page (`top` false) only gets logins saved for
+  // its own host, not its whole domain.
+  fillableFor(url, { top = true } = {}) {
+    const page = pageOf(url);
+    if (!page) return [];
+    const insecure = page.protocol === 'http:' && !/^(localhost|127\.0\.0\.1|\[::1\])$|\.localhost$/.test(page.hostname);
+    const score = (u) => {
+      const s = uriMatch(u, page);
+      if (!s || (insecure && !/^http:/i.test(u.uri)) || (!top && s < 2)) return 0;
+      return s;
+    };
+    return this.logins.map((p) => ({ p, score: Math.max(0, ...p.uris.map(score)) }))
+      .filter((x) => x.score > 0)
+      .sort((a, b) => b.score - a.score || (b.p.used || 0) - (a.p.used || 0) || String(a.p.name).localeCompare(b.p.name))
+      .map((x) => BrowserData.publicLogin(x.p));
+  }
+
   async getPassword(id) {
     const p = this.logins.find((x) => x.id === id);
     return p ? { username: p.username, password: await this.decrypt(p.secret) } : null;

@@ -25,11 +25,14 @@ function zoom(tab, delta) {
   updateChrome();
 }
 
+// the saved logins for a tab's page and the frames in it (a sign-in form embedded from another site)
+const pageLogins = (tab) => (ready(tab) ? window.ultima.passwordsForPage(tab.webview.getWebContentsId()) : window.ultima.passwordsFor(tab.url));
+
 // The key button: "Save password?" when a sign-in is waiting for an answer (pwfill.js), else the site's saved logins.
 async function fillLogin(tab) {
   if (!ready(tab)) return toast('Open a website first');
   if (tab.pwOffer) return PWF.offer ? closePasswordOffer() : openPasswordOffer(tab);
-  const logins = await window.ultima.passwordsFor(tab.url);
+  const logins = await pageLogins(tab);
   if (!logins.length) return toast(`No saved login for ${hostname(tab.url)}`);
   let id = logins[0].id;
   if (logins.length > 1) {
@@ -164,6 +167,7 @@ function runCommand(cmd) {
     case 'split-focus-prev': return focusNextPane(-1);
     case 'tab-folder-new': return newTabFolder(activeTab());
     case 'tab-folder-remove': return activeTab()?.folderId ? removeTabFromFolder(activeTab()) : toast('This tab isn’t in a folder');
+    case 'toggle-folders': sidebarShowForCommand(); return toggleAllFolders(); // tabfolders.js
     case 'clear-data': return openInternal('settings#privacy');
     case 'theme-dark': return applySettings({ theme: 'dark' });
     case 'theme-light': return applySettings({ theme: 'light' });
@@ -254,7 +258,7 @@ const updateChrome = debounce(async () => {
   $('#zoom-pill').hidden = !wv || tab.zoom === 0;
   $('#zoom-pill').textContent = `${zoomPct}%`;
   if (!internal) {
-    const [marked, logins] = await Promise.all([window.ultima.isBookmarked(tab.url), window.ultima.passwordsFor(tab.url)]);
+    const [marked, logins] = await Promise.all([window.ultima.isBookmarked(tab.url), pageLogins(tab)]);
     if (activeTab() !== tab) return;
     $('#btn-star').classList.toggle('on', marked);
     $('#btn-star').innerHTML = icon('star', 16).replace('fill="none"', marked ? 'fill="currentColor"' : 'fill="none"');
@@ -575,13 +579,17 @@ async function boot() {
   document.body.classList.toggle('mac', state.platform === 'darwin');
   // the mouse's back and forward buttons over Ultima itself (a built-in page) act on the tab in front; over the
   // vertical sidebar they switch to the previous or next space. Web pages pass theirs on themselves (webview-preload.js)
+  const mouseNav = (back, at) => {
+    if (at?.closest?.('#sidebar') && !tabsAcross() && !B.private && B.spaces.length > 1) runCommand(back ? 'prev-space' : 'next-space');
+    else runCommand(back ? 'back' : 'forward');
+  };
   window.addEventListener('mouseup', (e) => {
     if (e.button !== 3 && e.button !== 4) return;
     e.preventDefault();
-    const back = e.button === 3;
-    if (e.target.closest?.('#sidebar') && !tabsAcross() && !B.private && B.spaces.length > 1) runCommand(back ? 'prev-space' : 'next-space');
-    else runCommand(back ? 'back' : 'forward');
+    mouseNav(e.button === 3, e.target);
   });
+  // over the sidebar's blank space and the top bar (title bar to Windows) the buttons come from main.js instead
+  window.ultima.on('mouse-nav', ({ back, x, y }) => mouseNav(back, document.elementFromPoint(x, y)));
   document.body.classList.toggle('glass', state.glass);
   applyTheme();
 

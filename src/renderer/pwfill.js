@@ -32,16 +32,22 @@ function initPasswordFill() {
 }
 
 // ---------- the menu at a login field ----------
+// A frosted card under the field: the site's saved logins, then (on sign-up and new-password fields) a strong password.
+// It never takes the focus: the page keeps typing, and passes the arrow keys, Enter and Esc on while it's open.
 function onLoginField(d) {
   if (d.close) { if (PWF.menu?.page.webContentsId === d.webContentsId) closeLoginMenu(); return; }
   const wv = pwPage(d.webContentsId);
   // only for the page you're looking at (a background tab's autofocus opens nothing)
   if (!wv || !wv.getClientRects().length || wv.closest('[hidden]')) return;
   closeLoginMenu();
+  const tab = B.tabs.find((t) => ready(t) && t.webview === wv);
   const el = h('<div class="pwf-menu" role="listbox" aria-label="Saved logins"></div>');
   PWF.menu = {
     el, wv, page: { webContentsId: d.webContentsId, frame: d.frame }, kind: d.kind, site: d.site, logins: d.logins, rect: d.rect,
-    typed: d.typed || '', sel: -1, items: [], suggestion: d.kind === 'new-password' ? PWGEN.generate(pwGenOptions()) : '',
+    typed: d.typed || '', items: [], favicon: tab?.favicon || '', tabHost: tab ? hostname(tab.url) : '',
+    // the password step of a two-step sign-in: the login picked on the step before is ready for Enter
+    sel: d.picked ? 0 : -1,
+    suggestion: d.kind === 'new-password' ? PWGEN.generate(pwGenOptions()) : '',
   };
   el.addEventListener('mousedown', (e) => {
     e.preventDefault(); // the page keeps the focus
@@ -50,7 +56,7 @@ function onLoginField(d) {
   el.addEventListener('mouseup', () => { if (PWF.menu) PWF.menu.pressing = false; });
   el.addEventListener('mousemove', (e) => {
     const i = Number(e.target.closest('[data-i]')?.dataset.i);
-    if (Number.isInteger(i) && i !== PWF.menu.sel) selectLoginItem(i);
+    if (Number.isInteger(i) && i !== PWF.menu.sel) selectLoginItem(i, false);
   });
   el.addEventListener('click', (e) => {
     const i = Number(e.target.closest('[data-i]')?.dataset.i);
@@ -60,23 +66,39 @@ function onLoginField(d) {
   drawLoginMenu();
 }
 
+// a login's icon: the tab's own favicon for the tab's site, else its letter
+function loginIcon(m, site) {
+  const same = m.tabHost && site && (m.tabHost === site || m.tabHost.endsWith(`.${site}`) || site.endsWith(`.${m.tabHost}`));
+  return favHtml(same ? m.favicon : '', `https://${site}`, site);
+}
+
 function drawLoginMenu() {
   const m = PWF.menu;
   if (!m) return;
   const typed = m.typed.toLowerCase();
-  // a username being typed narrows the list to the logins it starts
+  // a username being typed narrows the list to the logins it starts (and shows how much of each is typed)
   const logins = m.kind === 'username' && typed ? m.logins.filter((l) => l.username.toLowerCase().startsWith(typed)) : m.logins;
+  const name = (u) => (u ? (typed && m.kind === 'username' ? `<mark>${esc(u.slice(0, typed.length))}</mark>${esc(u.slice(typed.length))}` : esc(u)) : '<i>No username</i>');
+  const fill = '<span class="pwf-go">Fill<kbd>↵</kbd></span>';
   m.items = [
-    ...logins.map((l) => ({ act: 'fill', id: l.id, html: `<span class="pwf-ic">${favHtml('', `https://${l.site}`, l.site)}</span><span class="pwf-text"><b>${esc(l.username || '(no username)')}</b><span>${esc(l.name || l.site)}</span></span>` })),
-    ...(m.suggestion ? [{ act: 'suggest', html: `<span class="pwf-ic pwf-accent">${icon('sparkle', 16)}</span><span class="pwf-text"><b>Use a strong password</b><span class="pwf-mono">${esc(m.suggestion)}</span></span>` },
-      { act: 'generator', html: `<span class="pwf-ic">${icon('tune', 15)}</span><span class="pwf-text"><b>Password options…</b></span>` }] : []),
+    ...logins.map((l) => ({
+      act: 'fill', id: l.id,
+      html: `<span class="pwf-ic">${loginIcon(m, l.site)}</span><span class="pwf-text"><b>${name(l.username)}</b><span>${esc(l.name && l.name !== l.site ? `${l.name} · ${l.site}` : l.site)}</span></span>${fill}`,
+    })),
+    ...(m.suggestion ? [
+      { act: 'suggest', html: `<span class="pwf-ic pwf-accent">${icon('sparkle', 16)}</span><span class="pwf-text"><b>Use a strong password</b><span class="pwf-mono">${colorPassword(m.suggestion)}</span></span>${fill}` },
+      { act: 'generator', html: `<span class="pwf-ic">${icon('tune', 15)}</span><span class="pwf-text"><b>Password options</b><span>Length, symbols, passphrases</span></span>` },
+    ] : []),
   ];
   if (!m.items.length) { closeLoginMenu(); return; }
   m.sel = Math.min(m.sel, m.items.length - 1);
-  m.el.innerHTML = `${m.items.map((it, i) => `<div class="pwf-item ${i === m.sel ? 'sel' : ''}" data-i="${i}" role="option">${it.html}</div>`).join('')}
-    <div class="pwf-foot" data-i="${m.items.length}"><span>${icon('key', 13)} Ultima Passwords</span><span class="pwf-manage">Manage</span></div>`;
+  const count = logins.length;
+  m.el.innerHTML = `<div class="pwf-head"><span class="pwf-brand">${icon('key', 13)}${m.suggestion && !count ? 'New password' : count === 1 ? 'Saved login' : 'Saved logins'}</span><span class="pwf-site">${esc(m.site)}</span></div>
+    <div class="pwf-list">${m.items.map((it, i) => `<div class="pwf-item ${i === m.sel ? 'sel' : ''} ${it.act === 'suggest' && count ? 'pwf-split' : ''}" data-i="${i}" role="option" aria-selected="${i === m.sel}">${it.html}</div>`).join('')}</div>
+    <div class="pwf-foot"><span class="pwf-keys"><kbd>↑</kbd><kbd>↓</kbd>choose<kbd>↵</kbd>fill<kbd>esc</kbd>close</span><span class="pwf-manage ${m.sel === m.items.length ? 'sel' : ''}" data-i="${m.items.length}">Manage</span></div>`;
   m.items.push({ act: 'manage' });
   placeLoginMenu();
+  scrollLoginItem();
   tellLoginMenu();
 }
 
@@ -86,15 +108,16 @@ function placeLoginMenu() {
   if (!m) return;
   const page = m.wv.getBoundingClientRect();
   const f = m.rect;
-  const width = Math.max(260, Math.min(360, f.width));
-  m.el.style.width = `${width}px`;
-  const height = m.el.offsetHeight;
-  const below = page.top + f.y + f.height + 4;
-  const top = below + height > innerHeight - 6 && page.top + f.y - height - 4 > 6 ? page.top + f.y - height - 4 : below;
   // a field scrolled out of the page closes it
   if (f.y + f.height < 0 || f.y > page.height) { closeLoginMenu(); return; }
-  m.el.style.left = `${Math.max(6, Math.min(page.left + f.x, innerWidth - width - 6))}px`;
-  m.el.style.top = `${Math.max(6, top)}px`;
+  const width = Math.max(288, Math.min(380, f.width));
+  m.el.style.width = `${width}px`;
+  const height = m.el.offsetHeight;
+  const below = page.top + f.y + f.height + 6;
+  const up = below + height > innerHeight - 8 && page.top + f.y - height - 6 > 8;
+  m.el.classList.toggle('up', up);
+  m.el.style.left = `${Math.max(8, Math.min(page.left + f.x, innerWidth - width - 8))}px`;
+  m.el.style.top = `${Math.max(8, up ? page.top + f.y - height - 6 : below)}px`;
 }
 
 // the page passes on the arrow keys and Enter only while there's a menu, and Enter only once something is picked
@@ -103,10 +126,20 @@ function tellLoginMenu() {
   if (m) window.ultima.setLoginMenu({ ...m.page, open: true, selected: m.sel >= 0 });
 }
 
-function selectLoginItem(i) {
+function scrollLoginItem() {
+  const m = PWF.menu;
+  $(`.pwf-item[data-i="${m?.sel}"]`, m?.el)?.scrollIntoView({ block: 'nearest' });
+}
+
+function selectLoginItem(i, scroll = true) {
   const m = PWF.menu;
   m.sel = i;
-  $$('.pwf-item, .pwf-foot', m.el).forEach((x) => x.classList.toggle('sel', Number(x.dataset.i) === i));
+  $$('.pwf-item, .pwf-manage', m.el).forEach((x) => {
+    const on = Number(x.dataset.i) === i;
+    x.classList.toggle('sel', on);
+    x.setAttribute('aria-selected', on);
+  });
+  if (scroll) scrollLoginItem();
   tellLoginMenu();
 }
 
@@ -148,7 +181,9 @@ function closeLoginMenu() {
   const m = PWF.menu;
   if (!m) return;
   PWF.menu = null;
-  m.el.remove();
+  m.el.classList.add('out');
+  m.el.style.pointerEvents = 'none';
+  setTimeout(() => m.el.remove(), 110);
   window.ultima.setLoginMenu({ ...m.page, open: false, selected: false }).catch(() => {});
 }
 

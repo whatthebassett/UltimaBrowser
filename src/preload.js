@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld('ultima', {
 
   listPasswords: invoke('passwords:list'),
   passwordsFor: invoke('passwords:for'),
+  passwordsForPage: invoke('passwords:for-page'),
   copyPassword: invoke('passwords:copy'),
   fillPassword: invoke('passwords:fill'),
   deletePassword: invoke('passwords:delete'),
@@ -132,6 +133,7 @@ contextBridge.exposeInMainWorld('ultima', {
   popoutShown: (webContentsId) => ipcRenderer.send('ultima:popout-shown', Number(webContentsId)),
   sidePanelShown: (webContentsId, open, tabId) => ipcRenderer.send('ultima:side-panel', Number(webContentsId), Boolean(open), Number.isInteger(tabId) ? tabId : null),
   extensionAction: invoke('ext:action'),
+  extensionPopupOpened: invoke('ext:popup-opened'),
   checkExtensionUpdates: invoke('ext:check-updates'),
   updateExtension: invoke('ext:update-now'),
   updateState: invoke('update:state'),
@@ -156,7 +158,7 @@ contextBridge.exposeInMainWorld('ultima', {
   sidebarArea: (r) => ipcRenderer.send('window:sidebar-area', r ? { x: Number(r.x), y: Number(r.y), width: Number(r.width), height: Number(r.height) } : null),
 
   on(channel, cb) {
-    const allowed = ['show-contents', 'command', 'open-url', 'jump-to-tab', 'download', 'window-fullscreen', 'window-state', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'safety-changed', 'download-blocked', 'site-unsafe', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
+    const allowed = ['show-contents', 'command', 'open-url', 'jump-to-tab', 'download', 'window-fullscreen', 'window-state', 'system-theme', 'page-menu', 'ask', 'extensions-changed', 'ext-close-tabs', 'ext-worker-started', 'ext-open-popout', 'ext-close-popout', 'ext-side-panel', 'ext-command', 'bookmarks-changed', 'popup-blocked', 'settings-changed', 'sidebar-changed', 'blocked-count', 'blocker-changed', 'safety-changed', 'download-blocked', 'site-unsafe', 'glance', 'glance-escape', 'tasks-ended', 'dock', 'pw-field', 'pw-field-blur', 'pw-field-typed', 'pw-field-key', 'pw-field-move', 'pw-offer', 'pw-generate', 'mouse-nav', 'share-thumbs', 'popup-page', 'media-state', 'player-tab', 'player-state', 'player-signal', 'player-dock-hover', 'update-state'];
     if (!allowed.includes(channel)) throw new Error(`Unknown channel ${channel}`);
     ipcRenderer.on(channel, (_e, payload) => cb(payload));
   },

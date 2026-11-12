@@ -166,6 +166,33 @@ function toggleFolder(id) {
   else { renderTabs(); if (box()) slideFolderOpen(box(), was); }
 }
 
+// Every folder in this orbit at once (Ctrl+Shift+A): opens the closed ones, or closes them all when they're all open.
+function toggleAllFolders() {
+  const folders = B.folders.filter((f) => f.spaceId === B.activeSpaceId && folderTabs(f.id).length);
+  if (!folders.length) return toast('No folders in this orbit');
+  const opening = folders.some((f) => f.collapsed);
+  const targets = folders.filter((f) => f.collapsed === opening);
+  const box = (f) => $(`.tfolder[data-folder="${f.id}"] .tfolder-tabs`);
+  if (opening) {
+    const was = new Map(targets.map((f) => {
+      const before = box(f);
+      const closing = folderSlides.get(f.id);
+      folderSlides.delete(f.id);
+      return [f.id, { size: before ? sizeAcross(before) : 0, tabs: closing?.kept || new Set(before ? $$('.tab[data-tab]', before).map((el) => el.dataset.tab) : []) }];
+    }));
+    targets.forEach((f) => { f.collapsed = false; });
+    saveSession();
+    renderTabs();
+    targets.forEach((f) => { if (box(f)) slideFolderOpen(box(f), was.get(f.id)); });
+  } else {
+    const boxes = targets.map(box);
+    targets.forEach((f) => { f.collapsed = true; });
+    saveSession();
+    if (boxes.some((b) => !b)) renderTabs();
+    else targets.forEach((f, i) => slideFolderClosed(f, boxes[i]));
+  }
+}
+
 // Opening or closing a folder slides its tabs in or out instead of jumping: each tab that appears grows from nothing
 // and fades in, each that goes shrinks away (closing redraws the sidebar once they're gone). Down the sidebar they
 // grow taller; in the horizontal tab strip, wider, and the folder's underline with them.

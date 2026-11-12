@@ -7,11 +7,31 @@ const PATCH_NOTES = [
   {
     version: '0.6.2',
     date: '2026-11-12',
+    highlights: [
+      {
+        title: 'A new password menu',
+        icon: 'key',
+        text: 'The menu that offers your saved logins has a new, cleaner look, and it fills sign-in forms on far more sites, however they’re built.',
+        items: [
+          ['Embedded sign-ins', 'Logins fill inside sign-in forms embedded from another site.'],
+          ['Two-step sign-ins', 'The login you picked for your username is ready on the password page.'],
+          ['Modern sites', 'Forms in pop-ups, forms that appear later and fields inside web components all fill.'],
+          ['Keyboard', 'Use the arrow keys, Enter and Esc without leaving the page.'],
+          ['Safer', 'A login only fills on its own site, never into another site’s frame.'],
+        ],
+      },
+    ],
+    new: [
+      ['Open all folders', 'Ctrl+Shift+A opens every folder in your orbit, or closes them all.'],
+    ],
     improved: [
       ['Extension updates', 'You can update an extension right away, without restarting Ultima.'],
+      ['Click-to-use extensions', 'Extensions like Google Translate now work on the page you use them on.'],
     ],
     fixed: [
       ['Typing in extensions', 'Typing in an extension’s text boxes no longer sets off Ultima’s shortcuts.'],
+      ['Mouse side buttons', 'Your mouse’s back and forward buttons switch orbits again anywhere on the sidebar.'],
+      ['Tabs onto orbits', 'Dropping a tab on an orbit’s button moves it to that orbit.'],
     ],
   },
   {

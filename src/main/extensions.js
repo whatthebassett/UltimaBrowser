@@ -151,6 +151,29 @@ function readManifest(dir) {
   return JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8').replace(/^﻿/, ''));
 }
 
+// ---------- activeTab ----------
+// In Chrome, an extension that asks for "activeTab" may go into the tab you use it on (Google Translate's popup reads
+// the page you're on). Electron has no such grant: an extension reaches only the sites its manifest names. So a Web
+// Store extension that asks for activeTab, and names no sites wide enough, is loaded with every site added, listed
+// under ADDED_HOSTS in its manifest. main.js then holds it to what Chrome allows: into a tab only after you've used it
+// there, and reading other sites only where it could before (see "activeTab" in main.js). Not for extensions that
+// could do more with every site than reach pages: watch or change requests, or read cookies.
+const ADDED_HOSTS = 'ultima_added_hosts';
+const NOT_WIDENED = new Set(['webRequest', 'webRequestBlocking', 'webRequestAuthProvider', 'declarativeNetRequest',
+  'declarativeNetRequestWithHostAccess', 'declarativeNetRequestFeedback', 'cookies', 'proxy']);
+function widenForActiveTab(dir) {
+  const manifest = readManifest(dir);
+  if (manifest[ADDED_HOSTS]) return; // done already (an update brings a fresh manifest)
+  const perms = manifest.permissions || [];
+  if (!perms.includes('activeTab') || [...perms, ...(manifest.optional_permissions || [])].some((p) => NOT_WIDENED.has(p))) return;
+  const mv3 = manifest.manifest_version >= 3;
+  const hosts = mv3 ? manifest.host_permissions || [] : perms;
+  if (hosts.some((h) => h === '<all_urls>' || h === '*://*/*') || (hosts.includes('http://*/*') && hosts.includes('https://*/*'))) return;
+  if (mv3) manifest.host_permissions = [...hosts, '<all_urls>']; else manifest.permissions = [...perms, '<all_urls>'];
+  manifest[ADDED_HOSTS] = ['<all_urls>'];
+  fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+}
+
 // "__MSG_appName__" → the text from _locales/<lang>/messages.json
 function localize(dir, manifest, text) {
   const m = typeof text === 'string' && text.match(/^__MSG_(.+)__$/);
@@ -269,6 +292,8 @@ class ExtensionManager {
 
   async loadInto(ses, key, entry) {
     try {
+      // (a developer's unpacked folder is theirs: left as it is)
+      if (entry.source !== 'unpacked') { try { widenForActiveTab(entry.path); } catch { /* loads as it is */ } }
       const ext = await ses.extensions.loadExtension(entry.path, { allowFileAccess: false });
       this.loaded.set(`${key}|${entry.id}`, ext);
       entry.runtimeId = ext.id;
@@ -562,4 +587,4 @@ class ExtensionManager {
   }
 }
 
-module.exports = { ExtensionManager, STORE_DETAIL };
+module.exports = { ExtensionManager, STORE_DETAIL, ADDED_HOSTS };

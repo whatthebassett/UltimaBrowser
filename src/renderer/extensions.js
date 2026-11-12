@@ -97,6 +97,8 @@ async function openExtension(ext, anchor, popout = null) {
   }
   if (EXT.popup?.dataset.ext === ext.id && !popout) return closeExtensionPopup(); // second click closes it
   closeExtensionPopup();
+  // opened from its button (not a popout it asked for): it may go into the tab you're on, as in Chrome (activeTab)
+  if (!popout) window.ultima.extensionPopupOpened({ id: ext.id, tabId: ready(tab) ? tab.webview.getWebContentsId() : null }).catch(() => {});
   const page = (popout ? popout.path : ext.popup).replace(/^\//, '');
   const wrap = h(`<div class="ext-popup" data-ext="${esc(ext.id)}"><webview partition="${esc(partition)}"
       src="chrome-extension://${esc(runtimeId)}/${esc(page)}"></webview></div>`);

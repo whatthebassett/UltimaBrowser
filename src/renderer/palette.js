@@ -58,6 +58,7 @@ const COMMANDS = [
   { id: 'rename-tab', title: 'Rename tab', icon: 'edit', words: 'name label title tab custom' },
   { id: 'tab-folder-new', title: 'Add tab to a new folder', icon: 'folder', words: 'group tab group folder organize organize' },
   { id: 'tab-folder-remove', title: 'Remove tab from its folder', icon: 'folder', words: 'ungroup tab group folder' },
+  { id: 'toggle-folders', title: 'Open / close all folders', icon: 'folder', words: 'expand collapse folders tab groups fold unfold' },
   { id: 'import-bookmarks-bar', title: 'Import bookmarks bar (Chrome, Edge…)', icon: 'import', words: 'chrome edge brave vivaldi favorites favorites copy' },
   { id: 'toggle-bookmarks-bar', title: 'Show / hide Waypoints bar', icon: 'bookmark', words: 'bookmarks favorites toolbar bar' },
   { id: 'customize-sidebar', title: 'Edit sidebar', icon: 'sidebar', words: 'customize widgets toolbar add remove buttons edit layout divider' },

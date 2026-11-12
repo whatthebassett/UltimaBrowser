@@ -27,6 +27,7 @@
     { id: 'split-focus-prev', title: 'Previous pane', group: 'Tabs', keys: [] },
     { id: 'tab-folder-new', title: 'Add to new folder', group: 'Tabs', keys: [] },
     { id: 'tab-folder-remove', title: 'Remove from folder', group: 'Tabs', keys: [] },
+    { id: 'toggle-folders', title: 'Open / close all folders', group: 'Tabs', keys: ['Mod+Shift+A'] },
     { id: 'essential-tab', title: 'Add / remove Essential', group: 'Tabs', keys: [] },
     { id: 'unload-tab', title: 'Unload tab', group: 'Tabs', keys: [] },
     { id: 'reset-tab', title: 'Back to pinned link', group: 'Tabs', keys: [] },

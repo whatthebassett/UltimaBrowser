@@ -9,7 +9,7 @@ const { JsonStore } = require('./store');
 const { BrowserData, hostOf } = require('./data');
 const importer = require('./importer');
 const { browserIcons } = require('./browsericons');
-const { ExtensionManager } = require('./extensions');
+const { ExtensionManager, ADDED_HOSTS } = require('./extensions');
 const defaultBrowser = require('./defaultbrowser');
 const taskManager = require('./taskmanager');
 const tearoff = require('./tearoff');
@@ -360,7 +360,7 @@ function pageContextMenu(wc, p) {
     );
     // the logins for the site of the frame clicked in (a sign-in form in a frame is that frame's site's)
     const frame = p.frame && !p.frame.detached ? p.frame : wc.mainFrame;
-    const logins = /^https?:/i.test(frame.url) ? data.passwordsFor(frame.url) : [];
+    const logins = passwords.loginsAt(wc, frame);
     if (logins.length) {
       t.push({
         id: 'logins',
@@ -1406,16 +1406,89 @@ function releaseDebuggees(extId) {
   }
 }
 
-// tabs.captureVisibleTab: a picture of the tab you're looking at, for extensions allowed on it
+// ---- activeTab ----
+// In Chrome, an extension that asks for "activeTab" may go into the tab you're on when you use it (its toolbar button
+// or popup, a keyboard shortcut, one of its menu items) until that tab moves to another site. Electron has no such
+// grant, so extensions.js loads those extensions with every site added (ADDED_HOSTS in the manifest), and Ultima holds
+// them to what Chrome allows: scripts and styles go only into a page they were let into or a site they name
+// (activeTabCall, which extension-compat.js asks first), and their pages and background read other sites only where
+// they could before, or where the site allows it (extensionReadBlocked).
+const NO_PAGE_ACCESS = 'Cannot access contents of the page. Extension manifest must request permission to access the respective host.';
+const activeTabGrants = new Map(); // `${runtimeId}|${tabId}` → the site (origin) the tab was on
+function grantActiveTab(runtimeId, wc) {
+  if (!runtimeId || !wc || wc.isDestroyed() || wc.getType() !== 'webview' || isPrivate(wc) || isExtensionPopup(wc)) return;
+  if (!/^https?:/i.test(wc.getURL())) return;
+  activeTabGrants.set(`${runtimeId}|${wc.id}`, originOf(wc.getURL()));
+  if (wc.ultimaGrantsHooked) return;
+  wc.ultimaGrantsHooked = true;
+  const id = wc.id;
+  wc.once('destroyed', () => { for (const k of [...activeTabGrants.keys()]) if (k.endsWith(`|${id}`)) activeTabGrants.delete(k); });
+}
+// let into this tab, and it's still on the same site
+const granted = (extId, wc) => activeTabGrants.get(`${extId}|${wc.id}`) === originOf(wc.getURL());
+// Host permissions cover a whole site, whatever their path says
+const hostMatches = (pattern, url) => matchesPattern(pattern === '<all_urls>' ? pattern : pattern.replace(/^([^:]+:\/\/[^/]*)\/.*$/, '$1/*'), url);
+// the sites an extension names itself, not the ones Ultima added (with where its content scripts run: `scripts`)
+function namedHosts(manifest, { scripts = false } = {}) {
+  const added = new Set(manifest[ADDED_HOSTS] || []);
+  const hosts = manifest.manifest_version >= 3 ? manifest.host_permissions || [] : (manifest.permissions || []).filter((p) => p === '<all_urls>' || p.includes('://'));
+  const named = hosts.filter((h) => !added.has(h));
+  return scripts ? [...named, ...(manifest.content_scripts || []).flatMap((c) => c.matches || [])] : named;
+}
+const mayAccess = (ses, extId, wc) => namedHosts(manifestOf(ses, extId)).some((h) => hostMatches(h, wc.getURL())) || granted(extId, wc);
+
+// Asked before an extension Ultima widened puts scripts or styles in a page (scripting.executeScript / insertCSS /
+// removeCSS, tabs.executeScript…): the target as it may go ahead, or Chrome's error. A tab it was let into takes
+// them in its frames on the same site only, as in Chrome.
+async function activeTabCall(ses, extId, op, [target]) {
+  if (op !== 'check') throw new Error(`Unknown activeTab call ${op}`);
+  const manifest = manifestOf(ses, extId);
+  if (!manifest[ADDED_HOSTS]) return target; // Electron's own checks are the right ones
+  const t = target && typeof target === 'object' ? { ...target } : {};
+  let wc = null;
+  if (t.tabId === undefined || t.tabId === null) { // tabs.executeScript without a tab: the one you're on
+    const w = currentWindow({ normal: true });
+    wc = w?.activeTab ? webContents.fromId(w.activeTab) : null;
+  } else wc = webContents.fromId(Number(t.tabId));
+  if (!wc || wc.isDestroyed()) return target; // Electron says there's no such tab
+  if (namedHosts(manifest).some((h) => hostMatches(h, wc.getURL()))) return target;
+  if (!granted(extId, wc)) throw new Error(NO_PAGE_ACCESS);
+  const origin = originOf(wc.getURL());
+  const sameSite = [wc.mainFrame, ...wc.mainFrame.framesInSubtree.filter((f) => f !== wc.mainFrame)]
+    .filter((f) => originOf(f.url) === origin).map((f) => frameIdOf(wc, f));
+  if (t.allFrames) { delete t.allFrames; t.frameIds = sameSite; }
+  else if (Array.isArray(t.frameIds) && t.frameIds.some((id) => !sameSite.includes(Number(id)))) throw new Error(NO_PAGE_ACCESS);
+  return t;
+}
+
+// A request from a widened extension's page or background to another site: let through where it could read before
+// (a site it names, or where its content scripts run), a site it was let into, or a site that lets anyone read it.
+// Every site was added only so it can reach pages, not to read your other sites with your sign-ins.
+function extensionReadBlocked(ses, d) {
+  const from = d.initiatorOrigin || '';
+  if (!from.startsWith('chrome-extension://') || !/^https?:/i.test(d.url)) return false;
+  if (d.resourceType !== 'xhr' && d.resourceType !== 'other') return false; // what fetch and XMLHttpRequest send
+  const extId = from.slice('chrome-extension://'.length).split('/')[0];
+  const manifest = manifestOf(ses, extId);
+  if (!manifest[ADDED_HOSTS]) return false;
+  if (namedHosts(manifest, { scripts: true }).some((h) => hostMatches(h, d.url))) return false;
+  const origin = originOf(d.url);
+  for (const [key, site] of activeTabGrants) {
+    if (site !== origin || !key.startsWith(`${extId}|`)) continue;
+    const tab = webContents.fromId(Number(key.split('|')[1]));
+    if (tab && !tab.isDestroyed() && originOf(tab.getURL()) === origin) return false;
+  }
+  const allow = Object.entries(d.responseHeaders || {}).find(([k]) => k.toLowerCase() === 'access-control-allow-origin')?.[1]?.[0];
+  return allow !== '*' && allow !== from;
+}
+
+// tabs.captureVisibleTab: a picture of the tab you're looking at, for an extension allowed on it (a site it names, or
+// the tab it was used on)
 async function captureVisibleTab(ses, extId, op, [options]) {
   const w = currentWindow({ normal: true });
   const wc = w?.activeTab ? webContents.fromId(w.activeTab) : null;
   if (!wc || wc.isDestroyed() || isPrivate(wc)) throw new Error('No active tab.');
-  const manifest = manifestOf(ses, extId);
-  const hosts = [...(manifest.host_permissions || []), ...(manifest.permissions || [])];
-  if (!hosts.includes('activeTab') && !hosts.some((h) => matchesPattern(h, wc.getURL()))) {
-    throw new Error("Either the '<all_urls>' or 'activeTab' permission is required.");
-  }
+  if (!mayAccess(ses, extId, wc)) throw new Error("Either the '<all_urls>' or 'activeTab' permission is required.");
   const image = await wc.capturePage();
   if (options?.format === 'png') return image.toDataURL();
   const quality = Number.isFinite(Number(options?.quality)) ? Math.max(0, Math.min(100, Number(options.quality))) : 92;
@@ -1568,9 +1641,10 @@ ipcMain.on('ultima:side-panel', (e, id, open, tabId) => {
 function extensionActionClicked(id, tabWcId) {
   const entry = extensions?.list.find((e) => e.id === id);
   if (!entry?.runtimeId) return 'none';
+  const wc = Number.isInteger(tabWcId) ? webContents.fromId(tabWcId) : null;
+  grantActiveTab(entry.runtimeId, wc); // a click on its button lets it into the tab you're on (activeTab)
   if (entry.sidePanelOnClick && showSidePanel(entry.runtimeId)) return 'panel';
   if (!extensions.info(entry).hasWorker) return 'none';
-  const wc = Number.isInteger(tabWcId) ? webContents.fromId(tabWcId) : null;
   // Chrome always passes the tab (extensions read its id at once: Claude's crashed without one). On one of Ultima's own
   // pages, a sleeping tab or a private one, there's no page to name: a stand-in with Chrome's "no tab" id, -1, which
   // side panels take as the window's
@@ -1824,6 +1898,7 @@ function extensionMenuItems({ wc, params, onlyFor = null, item }) {
       }
       extensions.saveMenus();
       const tabWc = wc && !wc.isDestroyed() && !isExtensionPopup(wc) ? wc : null;
+      grantActiveTab(runtimeId, tabWc); // its menu item, used on a page, lets it into that tab (activeTab)
       const info = {
         menuItemId: it.id, editable: Boolean(params?.isEditable),
         ...(it.parentId !== undefined ? { parentMenuItemId: it.parentId } : {}),
@@ -1924,8 +1999,9 @@ function extensionShortcutFor(input, wc) {
 function runExtensionCommand({ id, runtimeId, name }, wc) {
   const w = windowOf(wc);
   if (!w || w.private || !runtimeId) return; // extensions don't run in private windows
-  if (EXECUTE_ACTION.has(name)) { sendTo(w, 'ext-command', { id }); return; }
   const tab = w.activeTab ? webContents.fromId(w.activeTab) : null;
+  grantActiveTab(runtimeId, tab); // its shortcut lets it into the tab you're on (activeTab)
+  if (EXECUTE_ACTION.has(name)) { sendTo(w, 'ext-command', { id }); return; }
   sendToExtension(runtimeId, 'commands.onCommand', [name, tab && !tab.isDestroyed() ? tabDetails(tab) : undefined], { wake: true });
 }
 function extensionCommands(ses, extId, op) {
@@ -1934,7 +2010,7 @@ function extensionCommands(ses, extId, op) {
   throw new Error(`Unknown commands call ${op}`);
 }
 
-const EXTENSION_CALLS = { debugger: extensionDebugger, capture: captureVisibleTab, tabGroups: extensionTabGroups, sidePanel: extensionSidePanel, native: extensionNative, menus: extensionMenus, commands: extensionCommands };
+const EXTENSION_CALLS = { debugger: extensionDebugger, capture: captureVisibleTab, tabGroups: extensionTabGroups, sidePanel: extensionSidePanel, native: extensionNative, menus: extensionMenus, commands: extensionCommands, activeTab: activeTabCall };
 // ctx: { reply(channel, ...args) to the caller, owner (who called), hold() to keep a background running }
 async function extensionCall(ses, extId, area, op, args, ctx) {
   const call = Object.hasOwn(EXTENSION_CALLS, area) ? EXTENSION_CALLS[area] : null;
@@ -2147,6 +2223,7 @@ function setupSession(ses) {
   });
   // blocked JavaScript or images (site settings), and no cookies set by other sites while third-party cookies are blocked
   ses.webRequest.onHeadersReceived((details, callback) => {
+    if (extensionReadBlocked(ses, details)) return callback({ cancel: true }); // see activeTab
     const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
     const frame = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
     const policy = frame ? siteContentPolicy(originOf(details.url)) : '';
@@ -2449,6 +2526,7 @@ function setAppMenu() {
       cmd('Split View', 'split-tab'),
       cmd('Leave Split View', 'unsplit-tab'),
       cmd('Add to New Folder', 'tab-folder-new'),
+      cmd('Open or Close All Folders', 'toggle-folders'),
       sep,
       cmd('Close Other Tabs', 'close-others'),
     ] },
@@ -2615,6 +2693,18 @@ function createWindow({ private: priv = false, restore = null, url = null, at = 
   win.on('minimize', () => { if (settings.data.miniPlayerDocked) updatePlayer(); });
   win.on('restore', () => { if (settings.data.miniPlayerDocked) updatePlayer(); });
   win.on('leave-full-screen', () => { w.immersive = false; sendTo(w, 'window-fullscreen', { on: false, immersive: false }); });
+  // The mouse's back and forward buttons over a title-bar area (the sidebar's blank space, the top bar) reach the window
+  // as non-client clicks, never the page: the window acts on them as it does on its own (renderer/app.js: mouseNav).
+  if (process.platform === 'win32') {
+    win.hookWindowMessage(0x00AC /* WM_NCXBUTTONUP */, (wParam, lParam) => {
+      const button = wParam.length >= 4 ? wParam.readUInt16LE(2) : 0; // XBUTTON1 (back) or XBUTTON2 (forward)
+      if ((button !== 1 && button !== 2) || lParam.length < 4) return;
+      // where it was pressed, in screen pixels
+      const p = screen.screenToDipPoint({ x: lParam.readInt16LE(0), y: lParam.readInt16LE(2) });
+      const b = win.getContentBounds();
+      sendTo(w, 'mouse-nav', { back: button === 1, x: p.x - b.x, y: p.y - b.y });
+    });
+  }
 
   // Lock down every <webview> the UI creates.
   win.webContents.on('will-attach-webview', (_e, prefs, params) => {
@@ -3286,6 +3376,11 @@ function registerIpc() {
   handle('ext:set-pinned', ({ id, pinned }) => extChanged(extensions.setPinned(id, pinned)));
   handle('ext:remove', (id) => { release(id); return extChanged(extensions.remove(id)); });
   handle('ext:action', ({ id, tabId }) => extensionActionClicked(id, tabId));
+  // its popup opened from its button lets it into the tab you're on (activeTab)
+  handle('ext:popup-opened', ({ id, tabId }) => {
+    const entry = extensions?.list.find((e) => e.id === id);
+    grantActiveTab(entry?.runtimeId, Number.isInteger(tabId) ? webContents.fromId(tabId) : null);
+  });
   handle('ext:check-updates', async () => extChanged(await extensions.checkForUpdates()));
   // a downloaded update put in place now, not at the next start (Settings → Extensions)
   handle('ext:update-now', async (id) => { release(String(id)); return extChanged(await extensions.updateNow(String(id))); });

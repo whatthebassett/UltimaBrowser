@@ -17,22 +17,35 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
     const frame = webFrameMain.fromId(Number(ids[0]), Number(ids[1]));
     return frame && !frame.detached && wc.mainFrame.framesInSubtree.includes(frame) ? frame : null;
   };
+  // a frame's address for matching logins: its own, or its page's for an about:blank or srcdoc frame written by it
+  const frameUrl = (frame) => {
+    if (!frame || frame.detached) return '';
+    if (/^https?:/i.test(frame.url)) return frame.url;
+    return /^https?:\/\//i.test(frame.origin || '') ? `${frame.origin}/` : '';
+  };
+  // the page itself, or a frame of the same site as the page (not another site's frame embedded in it)
+  const isTop = (wc, frame) => frame === wc.mainFrame || Boolean(frame.origin && frame.origin === wc.mainFrame.origin);
+  // the logins that may be filled into a frame (data.fillableFor: never another site's, never https ones over http)
+  const loginsAt = (wc, frame) => data.fillableFor(frameUrl(frame), { top: isTop(wc, frame) });
   // pages in Ultima's windows (tabs, split panes, glances) only
   const pageOf = (e) => {
     const wc = e.sender;
-    return !wc.isDestroyed() && wc.getType() === 'webview' && windowOf(wc) && /^https?:/i.test(e.senderFrame?.url || '') ? wc : null;
+    return !wc.isDestroyed() && wc.getType() === 'webview' && windowOf(wc) && frameUrl(e.senderFrame) ? wc : null;
   };
-  const siteMatches = (loginId, url) => data.passwordsFor(url).some((l) => l.id === loginId);
+  const siteMatches = (loginId, wc, frame) => loginsAt(wc, frame).some((l) => l.id === loginId);
+  const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
+  const usernames = new Map(); // webContents id → { username, site, at } (a two-step sign-in's first step, or the login filled)
 
   // ---- filling ----
   const fills = new Map(); // token → resolve(ok)
   let fillSeq = 0;
   ipcMain.on('ultima:pw-filled', (_e, d) => { fills.get(d?.token)?.(Boolean(d.ok)); fills.delete(d?.token); });
+  // the frame checks its origin is still the one matched here (it may have moved on since)
   const fillFrame = (frame, login) => new Promise((resolve) => {
     fillSeq += 1;
     const token = fillSeq;
     fills.set(token, resolve);
-    try { frame.send('ultima:pw-fill', { token, login }); } catch { fills.delete(token); resolve(false); return; }
+    try { frame.send('ultima:pw-fill', { token, login, origin: frame.origin, accent: settings.data.accent }); } catch { fills.delete(token); resolve(false); return; }
     setTimeout(() => { if (fills.delete(token)) resolve(false); }, 2000);
   });
 
@@ -41,10 +54,15 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
   async function fillLogin(wc, id, frame = null) {
     const cred = await data.getPassword(id);
     if (!cred || wc.isDestroyed()) return false;
-    const frames = (frame ? [frame] : wc.mainFrame.framesInSubtree).filter((f) => !f.detached && siteMatches(id, f.url));
+    const frames = (frame ? [frame] : wc.mainFrame.framesInSubtree).filter((f) => !f.detached && siteMatches(id, wc, f));
     let ok = false;
     for (const f of frames) if (await fillFrame(f, cred)) ok = true;
-    if (ok) data.markLoginUsed(id);
+    if (ok) {
+      data.markLoginUsed(id);
+      // on a two-step sign-in, the password step offers this login first
+      if (cred.username) usernames.set(wc.id, { username: cred.username, site: baseDomain(hostOf(frameUrl(frames[0]))), at: Date.now() });
+      watch(wc); // forgets it when the page closes
+    }
     return ok;
   }
 
@@ -56,13 +74,21 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
     const kind = ['username', 'password', 'new-password'].includes(d?.kind) ? d.kind : null;
     const r = d?.rect;
     if (!kind || !r || ![r.x, r.y, r.width, r.height].every(Number.isFinite)) return;
-    const logins = kind === 'new-password' ? [] : data.passwordsFor(e.senderFrame.url).map((l) => ({
+    const url = frameUrl(e.senderFrame);
+    let logins = kind === 'new-password' ? [] : loginsAt(wc, e.senderFrame).map((l) => ({
       id: l.id, name: l.name, username: l.username, site: hostOf(l.uris[0]?.uri.includes('://') ? l.uris[0].uri : `https://${l.uris[0]?.uri}`),
     }));
+    // the password step of a two-step sign-in: the login for the username given (or picked) on the step before first
+    const step = usernames.get(wc.id);
+    let picked = false;
+    if (kind === 'password' && d.alone && step && Date.now() - step.at < USERNAME_WAIT && step.site === baseDomain(hostOf(url))) {
+      const mine = logins.filter((l) => same(l.username, step.username));
+      if (mine.length) { logins = [...mine, ...logins.filter((l) => !mine.includes(l))]; picked = true; }
+    }
     const w = windowOf(wc);
     if (!logins.length && kind !== 'new-password') { sendTo(w, 'pw-field', { webContentsId: wc.id, close: true }); return; }
     sendTo(w, 'pw-field', menuFor(wc, e.senderFrame, {
-      kind, logins, site: hostOf(e.senderFrame.url), typed: String(d.typed || '').slice(0, 200),
+      kind, logins, picked, site: hostOf(url), typed: String(d.typed || '').slice(0, 200),
       rect: { x: r.x, y: r.y, width: r.width, height: r.height },
     }));
   });
@@ -77,7 +103,6 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
 
   // ---- noticing sign-ins, and offering to save or update them ----
   const pending = new Map(); // webContents id → { sent, url, frame: [pid, rid], at }
-  const usernames = new Map(); // webContents id → { username, site, at } (a two-step sign-in's first step)
   const watched = new WeakSet();
   const offers = new Map(); // token → { kind, url, id? }
   let offerSeq = 0;
@@ -86,8 +111,6 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
     const host = hostOf(url);
     return (settings.data.passwordsNeverSave || []).some((h) => h === host || h === baseDomain(host));
   };
-  const same = (a, b) => String(a || '').toLowerCase() === String(b || '').toLowerCase();
-
   // What to offer for a sign-in: save (a new login), update (a known one with a new password), or nothing.
   async function decide({ username, password, current }, url) {
     if (!password || settings.data.offerToSavePasswords === false || neverFor(url)) return null;
@@ -160,13 +183,13 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
     if (!wc || typeof d?.password !== 'string' || !d.password) return;
     pending.set(wc.id, {
       sent: { username: String(d.username || '').slice(0, 500), password: d.password.slice(0, 1000), current: String(d.current || '').slice(0, 1000) },
-      url: e.senderFrame.url, frame: [e.senderFrame.processId, e.senderFrame.routingId], at: Date.now(),
+      url: frameUrl(e.senderFrame), frame: [e.senderFrame.processId, e.senderFrame.routingId], at: Date.now(),
     });
     watch(wc);
   });
   ipcMain.on('ultima:pw-username', (e, username) => {
     const wc = pageOf(e);
-    if (wc && typeof username === 'string' && username) usernames.set(wc.id, { username: username.slice(0, 500), site: baseDomain(hostOf(e.senderFrame.url)), at: Date.now() });
+    if (wc && typeof username === 'string' && username) usernames.set(wc.id, { username: username.slice(0, 500), site: baseDomain(hostOf(frameUrl(e.senderFrame))), at: Date.now() });
   });
   ipcMain.on('ultima:pw-gone', (e) => { const wc = pageOf(e); if (wc && pending.has(wc.id)) offer(wc); });
 
@@ -208,8 +231,16 @@ function initPasswords({ data, settings, windowOf, sendTo, broadcast }) {
     const f = wc && frameIn(wc, frame);
     try { f?.send('ultima:pw-menu', { open: Boolean(open), selected: Boolean(selected) }); } catch { /* gone */ }
   });
+  // the logins for a page and every frame in it (a sign-in form embedded from another site), for the key button
+  ipcMain.handle('passwords:for-page', (e, webContentsId) => {
+    const wc = pageById(e.sender, webContentsId);
+    if (!wc) return [];
+    const seen = new Map();
+    for (const f of wc.mainFrame.framesInSubtree) if (!f.detached) for (const l of loginsAt(wc, f)) if (!seen.has(l.id)) seen.set(l.id, l);
+    return [...seen.values()];
+  });
 
-  return { fillLogin, strength: PWGEN.strength };
+  return { fillLogin, loginsAt, strength: PWGEN.strength };
 }
 
 module.exports = { initPasswords };
