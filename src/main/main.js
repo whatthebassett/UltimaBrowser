@@ -212,13 +212,23 @@ function rebuildKeymap() {
 // Single-key shortcuts (K, Shift+K…) only fire when this is false, so they never eat letters you type.
 const typingIn = new Map(); // webContents id -> boolean
 ipcMain.on('ultima:typing', (e, on) => typingIn.set(e.sender.id, Boolean(on)));
+// Focus inside a frame counts as typing too, as webview-preload.js treats it: that script runs in the top frame only,
+// can't see into frames, and isn't told when you click straight into one (Claude's side panel chats in a claude.ai
+// frame), so ask Chromium which frame has focus.
+function typing(input, wc) {
+  if (input.isComposing || typingIn.get(wc.id)) return true;
+  try {
+    const frame = wc.focusedFrame;
+    return Boolean(frame && frame.frameTreeNodeId !== wc.mainFrame.frameTreeNodeId);
+  } catch { return false; }
+}
 
 function shortcutFor(input, wc) {
   if (recordingKeys || input.type !== 'keyDown') return null;
   const combo = keymap.comboFromEvent(input);
   const cmd = combo && globalKeys.get(combo);
   if (!cmd) return null;
-  if (keymap.isTypingKey(combo) && (input.isComposing || typingIn.get(wc.id))) return null;
+  if (keymap.isTypingKey(combo) && typing(input, wc)) return null;
   return cmd;
 }
 
@@ -1908,7 +1918,7 @@ function extensionShortcutFor(input, wc) {
   if (recordingKeys || input.type !== 'keyDown' || !extensionKeys.size) return null;
   const combo = keymap.comboFromEvent(input);
   const hit = combo && extensionKeys.get(combo);
-  if (!hit || (keymap.isTypingKey(combo) && (input.isComposing || typingIn.get(wc.id)))) return null;
+  if (!hit || (keymap.isTypingKey(combo) && typing(input, wc))) return null;
   return hit;
 }
 function runExtensionCommand({ id, runtimeId, name }, wc) {
@@ -3277,6 +3287,8 @@ function registerIpc() {
   handle('ext:remove', (id) => { release(id); return extChanged(extensions.remove(id)); });
   handle('ext:action', ({ id, tabId }) => extensionActionClicked(id, tabId));
   handle('ext:check-updates', async () => extChanged(await extensions.checkForUpdates()));
+  // a downloaded update put in place now, not at the next start (Settings → Extensions)
+  handle('ext:update-now', async (id) => { release(String(id)); return extChanged(await extensions.updateNow(String(id))); });
   // Ultima's own updates (updater.js)
   handle('update:state', () => updater.state());
   handle('update:check', () => updater.check());

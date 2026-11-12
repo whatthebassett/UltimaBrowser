@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld('ultima', {
   sidePanelShown: (webContentsId, open, tabId) => ipcRenderer.send('ultima:side-panel', Number(webContentsId), Boolean(open), Number.isInteger(tabId) ? tabId : null),
   extensionAction: invoke('ext:action'),
   checkExtensionUpdates: invoke('ext:check-updates'),
+  updateExtension: invoke('ext:update-now'),
   updateState: invoke('update:state'),
   checkForUpdate: invoke('update:check'),
   restartToUpdate: invoke('update:restart'),

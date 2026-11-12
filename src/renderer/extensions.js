@@ -52,6 +52,25 @@ async function installFromStore(input) {
   }
 }
 
+// Downloaded updates put in place now, one extension after another (Settings → Extensions: Update, Update all)
+async function updateExtensions(ids, btn) {
+  if (!ids.length) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Updating…'; }
+  const done = [];
+  const failed = [];
+  for (const id of ids) {
+    const name = EXT.list.find((e) => e.id === id)?.name || id;
+    try {
+      const ext = await window.ultima.updateExtension(id);
+      if (ext?.error) failed.push(`${name} (${ext.error})`); else done.push(ext ? `${ext.name} ${ext.version}` : name);
+    } catch (err) {
+      failed.push(`${name} (${err.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')})`);
+    }
+  }
+  await refreshExtensions();
+  toast(failed.length ? `Couldn’t update ${failed.join(', ')}` : `Updated ${done.join(', ')}`);
+}
+
 // ---------- popups ----------
 // fromPage: a page took focus. A popout that has only just opened stays: it was opened from a click in the page
 // (Bitwarden's "Unlock account"), and that page may take focus back a moment later.

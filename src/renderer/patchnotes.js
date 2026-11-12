@@ -5,6 +5,16 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.6.2',
+    date: '2026-11-12',
+    improved: [
+      ['Extension updates', 'You can update an extension right away, without restarting Ultima.'],
+    ],
+    fixed: [
+      ['Typing in extensions', 'Typing in an extension’s text boxes no longer sets off Ultima’s shortcuts.'],
+    ],
+  },
+  {
     version: '0.6.1',
     date: '2026-11-10',
     highlights: [

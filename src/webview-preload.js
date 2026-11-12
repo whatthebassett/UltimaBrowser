@@ -10,6 +10,8 @@ const { ipcRenderer } = require('electron');
   if (window !== window.top) return;
 
   const NOT_TEXT = new Set(['button', 'checkbox', 'radio', 'submit', 'reset', 'range', 'file', 'image', 'hidden', 'color']);
+  const CONTROLS = new Set(['BUTTON', 'A', 'AREA', 'SUMMARY', 'VIDEO', 'AUDIO', 'IMG', 'DETAILS', 'DIALOG', 'LABEL', 'OPTION']);
+  const TEXT_ROLES = new Set(['textbox', 'searchbox', 'combobox', 'spinbutton']);
 
   function deepActive() {
     let el = document.activeElement;
@@ -27,7 +29,11 @@ const { ipcRenderer } = require('electron');
     if (tag === 'INPUT') return !NOT_TEXT.has((el.type || 'text').toLowerCase());
     // focus inside a frame or plugin: we can't see in, so assume typing rather than steal keys
     if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'EMBED' || tag === 'OBJECT') return true;
-    return el.getAttribute('role') === 'textbox' || el.getAttribute('role') === 'combobox';
+    if (TEXT_ROLES.has(el.getAttribute('role'))) return true;
+    // focus inside a closed shadow root (some extensions' and sites' own elements) shows only its host: ask the
+    // page's editor whether the caret is somewhere you can type
+    if (CONTROLS.has(tag)) return false;
+    try { return document.queryCommandEnabled('insertText'); } catch { return false; }
   }
 
   let last = null;
@@ -38,8 +44,11 @@ const { ipcRenderer } = require('electron');
     ipcRenderer.send('ultima:typing', now);
   }
 
-  window.addEventListener('focusin', report, true);
+  window.addEventListener('focusin', () => { report(); setTimeout(report, 0); }, true); // (the caret moves in just after)
   window.addEventListener('focusout', () => setTimeout(report, 0), true);
+  // A page that isn't focused yet gets no focus events when its script puts the cursor in a field (an extension's
+  // popup or side panel focusing its search box as it opens), but the caret still moves, and keys can reach it
+  document.addEventListener('selectionchange', report, true);
   window.addEventListener('DOMContentLoaded', report);
   document.addEventListener('readystatechange', report);
 

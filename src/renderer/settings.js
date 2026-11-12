@@ -355,9 +355,9 @@ const SETTINGS_TABS = [
     id: 'extensions', title: 'Extensions', icon: 'puzzle', desc: 'Chrome extensions, installed from the Chrome Web Store or a folder.',
     render: () => [
       sGroup('Installed', EXT.list.length ? EXT.list.map((e) => sRow(
-        `${extIcon(e, 20)}${esc(e.name)} <span class="s-badge s-badge-quiet">${esc(e.version)}</span>${e.source === 'unpacked' ? ' <span class="s-badge s-badge-quiet">Unpacked</span>' : ''}${e.updateReady ? ` <span class="s-badge" title="Version ${esc(e.updateReady)} starts when Ultima restarts">Update ready</span>` : ''}`,
+        `${extIcon(e, 20)}${esc(e.name)} <span class="s-badge s-badge-quiet">${esc(e.version)}</span>${e.source === 'unpacked' ? ' <span class="s-badge s-badge-quiet">Unpacked</span>' : ''}${e.updateReady ? ` <span class="s-badge">Version ${esc(e.updateReady)} ready</span>` : ''}`,
         e.error ? `<span class="s-error">Couldn’t start: ${esc(e.error)}</span>` : `${esc(e.description || '')}${extPartly(e)}`,
-        `${e.optionsPage ? `<button class="btn" data-ext-options="${esc(e.id)}">Options</button>` : ''}
+        `${e.updateReady ? `<button class="btn primary" data-ext-update="${esc(e.id)}">Update</button>` : ''}${e.optionsPage ? `<button class="btn" data-ext-options="${esc(e.id)}">Options</button>` : ''}
          <button class="icon-btn ${e.pinned ? 'on' : ''}" data-ext-pin="${esc(e.id)}" title="${e.pinned ? 'Unpin from toolbar' : 'Pin to toolbar'}">${icon('pin', 15)}</button>
          <button class="icon-btn" data-ext-remove="${esc(e.id)}" title="Remove">${icon('trash', 15)}</button>
          <button class="switch ${e.enabled ? 'on' : ''}" data-ext-toggle="${esc(e.id)}" role="switch" title="${e.enabled ? 'Turn off' : 'Turn on'}"></button>`,
@@ -369,7 +369,8 @@ const SETTINGS_TABS = [
         sRow('Load unpacked', 'Load an extension from a folder, for developers.', '<button class="btn" data-ext-unpacked>Choose folder…</button>'),
       ]),
       sGroup('Updates', [
-        sRow('Keep extensions up to date', 'New versions download by themselves and start when Ultima restarts.', '<button class="btn" data-ext-updates>Check now</button>'),
+        sRow('Keep extensions up to date', 'New versions download by themselves and start when you update, or when Ultima restarts.',
+          `${EXT.list.some((e) => e.updateReady) ? '<button class="btn primary" data-ext-update-all>Update all</button>' : ''}<button class="btn" data-ext-updates>Check now</button>`),
       ]),
       sGroup('Troubleshooting', [
         sRow('Extension log', 'Errors and warnings from your extensions.', '<button class="btn" data-ext-log>Open log</button>'),
@@ -552,6 +553,8 @@ function pageSettings(root, tab) {
     else if (d.run) { runCommand(d.run); return; }
     else if (d.extToggle) { const ext = EXT.list.find((x) => x.id === d.extToggle); await window.ultima.setExtensionEnabled({ id: ext.id, enabled: !ext.enabled }); return; }
     else if (d.extPin) { const ext = EXT.list.find((x) => x.id === d.extPin); await window.ultima.setExtensionPinned({ id: ext.id, pinned: !ext.pinned }); return; }
+    else if (d.extUpdate) { await updateExtensions([d.extUpdate], t); return; }
+    else if (t.hasAttribute('data-ext-update-all')) { await updateExtensions(EXT.list.filter((x) => x.updateReady).map((x) => x.id), t); return; }
     else if (d.extOptions) { openExtensionOptions(EXT.list.find((x) => x.id === d.extOptions)); return; }
     else if (d.extRemove) {
       const ext = EXT.list.find((x) => x.id === d.extRemove);
@@ -566,7 +569,7 @@ function pageSettings(root, tab) {
       t.disabled = true;
       try {
         const ready = await window.ultima.checkExtensionUpdates();
-        toast(ready.length ? `Updates ready for ${ready.join(', ')}. They start when Ultima restarts.` : 'Your extensions are up to date.');
+        toast(ready.length ? `Updates ready for ${ready.join(', ')}` : 'Your extensions are up to date');
       } catch { toast('Couldn’t check for updates. Try again later.'); }
       t.disabled = false;
       return;

@@ -443,6 +443,43 @@ class ExtensionManager {
     this.registry.flush();
   }
 
+  // An update you start yourself (Settings → Extensions): the downloaded version takes the old one's place now rather
+  // than at the next start. The extension stops and starts again on the way (what it had open, like an unlocked
+  // vault, closes), as when it's installed again: unloaded first, so no two versions of its worker ever run at once.
+  async updateNow(id) {
+    const entry = this.list.find((e) => e.id === id);
+    if (!entry?.updateReady) return entry ? this.describe(entry) : null;
+    const staging = path.join(this.dir, `${entry.id}.update`);
+    if (!fs.existsSync(staging)) { delete entry.updateReady; this.registry.flush(); return this.describe(entry); }
+    this.unloadEverywhere(entry);
+    const old = `${entry.path}.old`;
+    // Windows won't move a folder while something still has its files open (the extension just letting go of them, or
+    // an antivirus scanning the new ones), so try again for a few seconds
+    for (let tries = 0; ; tries += 1) {
+      try {
+        fs.rmSync(old, { recursive: true, force: true });
+        if (fs.existsSync(entry.path)) fs.renameSync(entry.path, old);
+        fs.renameSync(staging, entry.path);
+        break;
+      } catch (err) {
+        if (!fs.existsSync(entry.path) && fs.existsSync(old)) { try { fs.renameSync(old, entry.path); } catch { /* left for next start */ } }
+        if (tries >= 20 || !['EPERM', 'EACCES', 'EBUSY'].includes(err.code)) {
+          if (entry.enabled !== false) await this.loadEverywhere(entry); // the old version, back as it was
+          throw new Error('The update couldn’t be put in place. It will be tried again when Ultima restarts.');
+        }
+        await new Promise((r) => { setTimeout(r, 250); });
+      }
+    }
+    try { fs.rmSync(old, { recursive: true, force: true }); } catch { /* removed at the next update */ }
+    delete entry.updateReady;
+    entry.unsupported = []; // the new version may not need what the old one did
+    entry.menus = []; // and makes its own menu items
+    this.infoCache?.delete(entry.id);
+    if (entry.enabled !== false) await this.loadEverywhere(entry);
+    this.registry.flush();
+    return this.describe(entry);
+  }
+
   // A developer's unpacked extension stays where it is, so edits take effect on reload.
   async installUnpacked(dir) {
     const manifest = readManifest(dir);
