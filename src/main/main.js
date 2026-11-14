@@ -20,6 +20,7 @@ const {
 } = require('./pagetools');
 const { Blocker, ADS, TRACKERS, hostOf: urlHost, baseDomain, hostChain } = require('./blocker');
 const { Safety } = require('./safety');
+const { ClientHints, HIGH_ENTROPY } = require('./clienthints');
 const { startCrashReports, setCrashReports, crashReportsReady, reportError } = require('./crashreports');
 const keymap = require('../renderer/keymap');
 const SITE_PERMS = require('../renderer/sitepermissions');
@@ -55,6 +56,8 @@ app.userAgentFallback = app.userAgentFallback
   .replace(/\s?Electron\/\S+/, '')
   .replace(/\s?ultima-browser\/\S+/i, '')
   .replace(/\s?Ultima ?Browser\/\S+/i, ''); // written with or without the space, depending on the Electron version
+// and the Sec-CH-UA headers Chrome sends with it, which Electron leaves out (see clienthints.js)
+const clientHints = new ClientHints({ darkMode: () => nativeTheme.shouldUseDarkColors });
 
 if (!app.requestSingleInstanceLock()) app.quit();
 // Settings needed as Chromium starts, so read here, before anything else (first run or unreadable: the defaults).
@@ -2196,6 +2199,8 @@ function extensionCompatFile() {
 
 function setupSession(ses) {
   ses.setUserAgent(app.userAgentFallback);
+  // first, so the preloads below can make their page functions print as built-in ones (see native-preload.js)
+  ses.registerPreloadScript({ type: 'frame', id: 'ultima-natives', filePath: path.join(__dirname, '..', 'native-preload.js') });
   // fills gaps in Electron's extension APIs (storage.sync/managed) inside extension workers and pages
   for (const type of ['service-worker', 'frame']) {
     ses.registerPreloadScript({ type, id: `ultima-extension-compat-${type}`, filePath: extensionCompatFile() });
@@ -2208,15 +2213,17 @@ function setupSession(ses) {
   // saved logins at login fields, and "Save password?" after signing in (password-preload.js, passwords.js)
   ses.registerPreloadScript({ type: 'frame', id: 'ultima-passwords', filePath: path.join(__dirname, '..', 'password-preload.js') });
   applyGpcPreload(ses);
-  // Global Privacy Control, and no cookies sent to other sites than the page's while third-party cookies are blocked
+  // Chrome's client hints (clienthints.js), Global Privacy Control, and no cookies sent to other sites than the page's
+  // while third-party cookies are blocked
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     // no service worker for a site with JavaScript or images blocked (see dropServiceWorkers)
     const worker = Object.entries(details.requestHeaders).some(([k, v]) => k.toLowerCase() === 'service-worker' && v === 'script');
     if (worker && siteContentPolicy(originOf(details.url))) return callback({ cancel: true });
+    const hints = clientHints.forRequest(details.url, () => requestPages(details).topUrl);
     const gpc = settings.data.globalPrivacyControl;
     const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
-    if (!gpc && !noCookies) return callback({});
-    const headers = { ...details.requestHeaders };
+    if (!hints && !gpc && !noCookies) return callback({});
+    const headers = { ...details.requestHeaders, ...hints };
     if (gpc) headers['Sec-GPC'] = '1';
     if (noCookies) for (const k of Object.keys(headers)) if (k.toLowerCase() === 'cookie') delete headers[k];
     callback({ requestHeaders: headers });
@@ -2224,6 +2231,7 @@ function setupSession(ses) {
   // blocked JavaScript or images (site settings), and no cookies set by other sites while third-party cookies are blocked
   ses.webRequest.onHeadersReceived((details, callback) => {
     if (extensionReadBlocked(ses, details)) return callback({ cancel: true }); // see activeTab
+    clientHints.noteResponse(details);
     const noCookies = settings.data.blockThirdPartyCookies && thirdPartyRequest(details);
     const frame = details.resourceType === 'mainFrame' || details.resourceType === 'subFrame';
     const policy = frame ? siteContentPolicy(originOf(details.url)) : '';
@@ -3002,7 +3010,16 @@ function registerIpc() {
     reportError({ name: str(info.name, 80) || 'Error', message: str(info.message, 1000), stack: str(info.stack, 8000) }, 'window', { file: str(info.file, 500), line: Number(info.line) || 0, column: Number(info.column) || 0 });
   });
   // its page has drawn with its settings and tabs: the window can show (createWindow)
-  ipcMain.on('ui:ready', (e) => { const w = windowOf(e.sender); if (w && e.sender === w.win.webContents) w.uiReady?.(); });
+  ipcMain.on('ui:ready', (e) => {
+    const w = windowOf(e.sender);
+    if (!w || e.sender !== w.win.webContents) return;
+    w.uiReady?.();
+    // what pages read from navigator.userAgentData, for the client hint headers to match (clienthints.js)
+    if (!clientHints.high) {
+      e.sender.executeJavaScript(`navigator.userAgentData.getHighEntropyValues(${JSON.stringify(HIGH_ENTROPY)})`)
+        .then((v) => clientHints.setPageValues(v), () => { /* the computed brands stay */ });
+    }
+  });
   handleFrom('session:save', (e, s) => {
     const w = windowOf(e.sender);
     if (!w || w.private || !s || typeof s !== 'object') return;

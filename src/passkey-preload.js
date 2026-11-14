@@ -6,7 +6,7 @@
 // or is declined as if you'd closed the prompt. Without a manager, passkeys go to Windows as before.
 const { contextBridge } = require('electron');
 
-function guard() {
+function guard(token) {
   const proto = window.CredentialsContainer?.prototype;
   if (!proto?.get || !proto.create) return;
   const decline = (options) => {
@@ -28,14 +28,14 @@ function guard() {
         return real.call(this, options);
       },
     }[name];
-    // Chrome's own functions print as native code
-    Object.defineProperty(fn, 'toString', { value: () => `function ${name}() { [native code] }`, configurable: true, writable: true });
+    // printed as built-in, like Chrome's own (native-preload.js)
+    try { Function.prototype.toString.call(fn, token, `function ${name}() { [native code] }`); } catch { /* as it is */ }
     Object.defineProperty(proto, name, { value: fn, writable: true, configurable: true, enumerable: true });
   }
 }
 
 try {
   // offscreen documents run with isolation off: there this preload already shares the page's world
-  if (process.contextIsolated === false) guard();
-  else contextBridge.executeInMainWorld({ func: guard });
+  if (process.contextIsolated === false) guard(globalThis.__ultimaNativeToken);
+  else contextBridge.executeInMainWorld({ func: guard, args: [globalThis.__ultimaNativeToken] });
 } catch { /* passkeys go to Windows as before */ }

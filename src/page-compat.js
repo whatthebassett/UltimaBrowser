@@ -12,7 +12,7 @@ const externalIds = (() => {
 })();
 const sendExternal = (id, message) => ipcRenderer.invoke('ultima:ext-external-message', String(id), message);
 
-function installChromeObject(extensionIds = [], sendToExtension = null) {
+function installChromeObject(extensionIds = [], sendToExtension = null, token = null) {
   try {
     if (/^(chrome-extension|devtools):$/.test(location.protocol)) return;
     // the page's performance object and clock as they are now, before its scripts could replace them
@@ -23,11 +23,8 @@ function installChromeObject(extensionIds = [], sendToExtension = null) {
     const chrome = window.chrome && typeof window.chrome === 'object' ? window.chrome : {};
     if (chrome !== window.chrome) Object.defineProperty(window, 'chrome', { value: chrome, writable: true, configurable: true, enumerable: true });
 
-    // Chrome's own functions print as native code
-    const native = (fn) => {
-      Object.defineProperty(fn, 'toString', { value: () => 'function () { [native code] }', configurable: true, writable: true });
-      return fn;
-    };
+    // like Chrome's own functions: no prototype, and they print as built-in (native-preload.js)
+    const native = (fn, text = 'function () { [native code] }') => { try { Function.prototype.toString.call(fn, token, text); } catch { /* as it is */ } return fn; };
     const add = (name, value) => {
       if (!(name in chrome)) Object.defineProperty(chrome, name, { value, writable: true, configurable: true, enumerable: true });
     };
@@ -89,7 +86,7 @@ function installChromeObject(extensionIds = [], sendToExtension = null) {
       const ask = (id, message) => (extensionIds.includes(id)
         ? Promise.resolve(sendToExtension(id, message)).catch((err) => { throw plain(err); })
         : Promise.reject(new Error(NO_RECEIVER)));
-      const sendMessage = native(function sendMessage(id, message, ...rest) {
+      const sendMessage = native({ sendMessage(id, message, ...rest) {
         const callback = typeof rest[rest.length - 1] === 'function' ? rest.pop() : null;
         const answer = ask(id, message);
         if (!callback) return answer;
@@ -98,7 +95,7 @@ function installChromeObject(extensionIds = [], sendToExtension = null) {
           try { callback(); } finally { delete runtime.lastError; }
         });
         return undefined;
-      });
+      } }.sendMessage, 'function sendMessage() { [native code] }');
       Object.defineProperty(runtime, 'sendMessage', { value: sendMessage, writable: true, configurable: true, enumerable: true });
       add('runtime', runtime);
     }
@@ -107,5 +104,5 @@ function installChromeObject(extensionIds = [], sendToExtension = null) {
   }
 }
 
-if (process.contextIsolated) contextBridge.executeInMainWorld({ func: installChromeObject, args: [externalIds, sendExternal] });
-else installChromeObject(externalIds, sendExternal);
+if (process.contextIsolated) contextBridge.executeInMainWorld({ func: installChromeObject, args: [externalIds, sendExternal, globalThis.__ultimaNativeToken] });
+else installChromeObject(externalIds, sendExternal, globalThis.__ultimaNativeToken);

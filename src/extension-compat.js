@@ -53,6 +53,9 @@ const hostApi = {
 /* global EXTENSION_API */
 const api = typeof EXTENSION_API === 'undefined' ? null : EXTENSION_API;
 function install(compat) {
+  // Nothing for websites, which mustn't see the bridge either: no other browser has it, and Google's checks for bots
+  // count it against you. (A worker's preload context has no `location`; its scope is checked in main.)
+  if (typeof location !== 'undefined' && location.protocol !== 'chrome-extension:') return;
   if (process.contextIsolated === false) {
     globalThis.__ultimaExtHost = hostApi;
     compat(api);

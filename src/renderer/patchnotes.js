@@ -22,6 +22,9 @@ const PATCH_NOTES = [
         ],
       },
     ],
+    fixed: [
+      ['Fewer robot checks', 'Ultima tells sites which browser it is the way Chrome does, so Google asks less often whether you’re human.'],
+    ],
   },
   {
     version: '0.6.2',

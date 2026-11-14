@@ -17,14 +17,11 @@ ipcRenderer.on('ultima:media-control', (_e, action, arg) => {
   try { control?.(String(action), typeof arg === 'string' ? arg : Number(arg) || 0); } catch { /* page gone */ }
 });
 
-function installMedia(send, sendSignal, register) {
+function installMedia(send, sendSignal, register, token) {
   try {
     if (!window.HTMLMediaElement) return;
-    const native = (fn, name) => {
-      Object.defineProperty(fn, 'toString', { value: () => `function ${name}() { [native code] }`, configurable: true, writable: true });
-      Object.defineProperty(fn, 'name', { value: name, configurable: true });
-      return fn;
-    };
+    // like Chrome's own functions: no prototype (methods and accessors), and they print as built-in (native-preload.js)
+    const native = (fn, name) => { try { Function.prototype.toString.call(fn, token, `function ${name}() { [native code] }`); } catch { /* as it is */ } return fn; };
     const handlers = {};
     const watched = new WeakSet();
     let current = null;
@@ -101,14 +98,14 @@ function installMedia(send, sendSignal, register) {
     // and media that never joins the page (new Audio(), Spotify's player), from its play()
     const play = HTMLMediaElement.prototype.play;
     Object.defineProperty(HTMLMediaElement.prototype, 'play', {
-      value: native(function play_() { watch(this); return play.apply(this, arguments); }, 'play'),
+      value: native({ play() { watch(this); return play.apply(this, arguments); } }.play, 'play'),
       configurable: true, writable: true, enumerable: true,
     });
     // the page's picture-in-picture button opens the mini player instead of a second, different player; only from a
     // click or key press, as in Chrome, so a page can't open it by itself
     if (window.HTMLVideoElement && HTMLVideoElement.prototype.requestPictureInPicture) {
       Object.defineProperty(HTMLVideoElement.prototype, 'requestPictureInPicture', {
-        value: native(function requestPictureInPicture() {
+        value: native({ requestPictureInPicture() {
           if (navigator.userActivation && !navigator.userActivation.isActive) {
             return Promise.reject(new DOMException('Must be handling a user gesture if there isn\'t already an element in Picture-in-Picture.', 'NotAllowedError'));
           }
@@ -118,7 +115,7 @@ function installMedia(send, sendSignal, register) {
           last = '';
           queue();
           return Promise.resolve({ width: this.videoWidth, height: this.videoHeight, onresize: null, addEventListener() {}, removeEventListener() {} });
-        }, 'requestPictureInPicture'),
+        } }.requestPictureInPicture, 'requestPictureInPicture'),
         configurable: true, writable: true, enumerable: true,
       });
     }
@@ -128,13 +125,13 @@ function installMedia(send, sendSignal, register) {
       const proto = MediaSession.prototype;
       const setAction = proto.setActionHandler;
       Object.defineProperty(proto, 'setActionHandler', {
-        value: native(function setActionHandler(action, handler) {
+        value: native({ setActionHandler(action, handler) {
           const r = setAction.call(this, action, handler);
           session = this;
           handlers[action] = typeof handler === 'function' ? handler : null;
           queue();
           return r;
-        }, 'setActionHandler'),
+        } }.setActionHandler, 'setActionHandler'),
         configurable: true, writable: true, enumerable: true,
       });
       for (const prop of ['metadata', 'playbackState']) {
@@ -142,7 +139,7 @@ function installMedia(send, sendSignal, register) {
         if (!d || !d.set) continue;
         Object.defineProperty(proto, prop, {
           get: d.get,
-          set: native(function set(v) { d.set.call(this, v); session = this; queue(); }, `set ${prop}`),
+          set: native(Object.getOwnPropertyDescriptor({ set [prop](v) { d.set.call(this, v); session = this; queue(); } }, prop).set, `set ${prop}`),
           configurable: true, enumerable: d.enumerable,
         });
       }
