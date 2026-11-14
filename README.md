@@ -21,31 +21,24 @@ Windows 10 and 11 &nbsp;·&nbsp; macOS on Apple Silicon &nbsp;·&nbsp; Free
 
 <br>
 
-## What's new in 0.6.2
+## What's new in 0.6.3
 
-A new password menu that fills logins on far more sites, plus a handful of extension and sidebar fixes. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
+Ultima moves up to Chromium 156, and Google asks less often whether you're human. If you're already on Ultima, it updates itself next time you close it, or now from Settings → About.
 
-### A new password menu
+### Chromium 156
 
-The menu that offers your saved logins got a cleaner look, and it fills sign-in forms however they're built.
+Four Chromium versions newer, from 152 to 156, with all of their security fixes.
 
-- Fills inside sign-in forms embedded from another site.
-- Two-step sign-ins: the login you picked for your username is ready on the password page.
-- Forms in pop-ups, forms that show up late, and fields inside web components all fill.
-- Arrow keys, Enter and Esc work without leaving the page.
-- A login only fills on its own site, never into another site's frame.
-
-### Also new
-
-- Ctrl+Shift+A opens every folder in your orbit, or closes them all.
-- Update an extension right away from Settings → Extensions, no restart needed.
-- Click-to-use extensions like Google Translate now work on the page you use them on.
+- Pages can show JPEG XL, a newer image format that looks sharp at small file sizes.
+- Sites can stream immersive 3D sound in the open IAMF format.
+- Pop-up menus on sites no longer close when you scroll by touch or right-click.
+- A page that hits a network hiccup can try loading its missing parts again.
+- Data that sites save in your browser uses a new, more reliable engine.
+- SVG images and XML are now read by memory-safe code.
 
 ### Fixed
 
-- Typing in an extension's text boxes no longer sets off Ultima's shortcuts.
-- Your mouse's back and forward buttons switch orbits again anywhere on the sidebar.
-- Dropping a tab on an orbit's button moves it to that orbit.
+- Ultima tells sites which browser it is the way Chrome does, so Google shows fewer robot checks.
 
 [Every release](https://github.com/whatthebassett/UltimaBrowser/releases)
 
