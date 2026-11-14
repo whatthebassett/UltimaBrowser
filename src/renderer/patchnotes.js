@@ -5,6 +5,25 @@
 // sentences on what it is, items: [what, one short sentence] for its parts }.
 const PATCH_NOTES = [
   {
+    version: '0.6.3',
+    date: '2026-11-13',
+    highlights: [
+      {
+        title: 'Chromium 156',
+        icon: 'bolt',
+        text: 'Ultima moves up four Chromium versions, from 152 to 156, with all of their security fixes.',
+        items: [
+          ['JPEG XL images', 'Pages can show JPEG XL, a newer image format that looks sharp at small file sizes.'],
+          ['Spatial audio', 'Sites can stream immersive 3D sound in the open IAMF format.'],
+          ['Menus stay open', 'Pop-up menus on sites no longer close when you scroll by touch or right-click.'],
+          ['Fewer broken pages', 'A page that hits a network hiccup can try loading its missing parts again.'],
+          ['Sturdier site storage', 'Data that sites save in your browser uses a new, more reliable engine.'],
+          ['Safer pages and images', 'SVG images and XML are now read by memory-safe code.'],
+        ],
+      },
+    ],
+  },
+  {
     version: '0.6.2',
     date: '2026-11-12',
     highlights: [
